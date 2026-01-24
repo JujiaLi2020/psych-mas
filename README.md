@@ -15,5 +15,7 @@ For production use, please use LangSmith Deployment.
 
 
 uv sync
+pip install streamlit
 streamlit run ui.py
+
 
