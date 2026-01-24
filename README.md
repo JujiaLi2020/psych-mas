@@ -12,3 +12,5 @@ INFO:langgraph_api.cli:
 
 This in-memory server is designed for development and testing.
 For production use, please use LangSmith Deployment.
+
+streamlit run ui.py
