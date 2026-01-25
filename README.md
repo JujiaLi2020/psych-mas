@@ -14,8 +14,12 @@ This in-memory server is designed for development and testing.
 For production use, please use LangSmith Deployment.
 
 
-uv sync
-pip install streamlit
-streamlit run ui.py
+### uv sync
+### pip install streamlit
+### streamlit run ui.py
+
+
+### pip install matplotlib
+
 
 
