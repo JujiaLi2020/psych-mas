@@ -1,0 +1,6 @@
+{
+    "dependencies": ["."],
+    "graphs": {
+      "psych_workflow": "./graph.py:app"
+    }
+  }

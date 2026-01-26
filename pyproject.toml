@@ -1,7 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "psych-mas"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "langgraph",
+    "langgraph-cli[inmem]>=0.4.12",
+    "rpy2>=3.6.4",
+    "pandas",
+    "streamlit",
+    "matplotlib",
+    "python-dotenv",
+    "requests",
+]
+
+[tool.setuptools]
+py-modules = ["graph", "ui"]
+
+[tool.setuptools.packages.find]
+exclude = ["data", "R_Secmin"]
