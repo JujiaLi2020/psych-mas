@@ -46,11 +46,14 @@ Psych MAS prioritizes "single-page efficiency" for large datasets:
    pip install streamlit pandas matplotlib rpy2 langgraph python-dotenv requests
 
 
-
 Run the application:
 
-Bash
-streamlit run ui.py
+   ```Bash
+   uv sync
+   pip install streamlit
+   streamlit run ui.py
+
+
 Data Requirements
 The system expects two CSV files with matching dimensions:
 
@@ -86,12 +89,7 @@ This in-memory server is designed for development and testing.
 For production use, please use LangSmith Deployment.
 
 
-### uv sync
-### pip install streamlit
-### streamlit run ui.py
 
-
-### pip install matplotlib
 
 
 
