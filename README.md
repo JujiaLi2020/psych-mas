@@ -46,22 +46,22 @@ Psych MAS prioritizes "single-page efficiency" for large datasets:
    pip install streamlit pandas matplotlib rpy2 langgraph python-dotenv requests
 
 
-Run the application:
+### Run the application:
 
    ```Bash
    uv sync
    pip install streamlit
    streamlit run ui.py
+   ```
 
-
-Data Requirements
+## Data Requirements
 The system expects two CSV files with matching dimensions:
 
 Responses: Rows as persons, columns as items (Values: binary 0 or 1).
 
 Response-Times: Rows as persons, columns as items (Values: numeric latency data).
 
-🛠️ Tech Stack
+## 🛠️ Tech Stack
 Orchestration: LangGraph
 
 Frontend: Streamlit
@@ -73,7 +73,7 @@ LLM Integration: Google Gemini (Generative Language API)
 Data Processing: Pandas / NumPy
 
 
-INFO:langgraph_api.cli:
+## INFO:langgraph_api.cli:
 
         Welcome to
 
@@ -87,6 +87,7 @@ INFO:langgraph_api.cli:
 
 This in-memory server is designed for development and testing.
 For production use, please use LangSmith Deployment.
+
 
 
 
