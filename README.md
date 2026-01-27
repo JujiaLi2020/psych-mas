@@ -2,7 +2,7 @@
 
 **Psych MAS** is a specialized psychometric analysis platform designed to bridge the gap between complex Item Response Theory (IRT) modeling and actionable research insights. By utilizing a multi-agent graph architecture, the system coordinates specialized nodes for IRT parameter estimation, response-time (RT) latency analysis, and LLM-driven interpretation.
 
-## 🏮 Key Features
+## Key Features
 
 * **Intelligent Model Selection:** Uses an LLM-based "Interpreter" to map natural language descriptions (e.g., *"I suspect guessing behavior"*) to specific IRT models like **3PL** or **4PL**.
 * **Dual-Data Stream Analysis:** Processes both **Response Data** (binary 0/1) and **Response-Time (RT) Data** simultaneously to identify patterns like rapid guessing.
@@ -11,7 +11,7 @@
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 The project uses a **StateGraph** (via `langgraph`) to orchestrate the workflow:
 
@@ -22,7 +22,7 @@ The project uses a **StateGraph** (via `langgraph`) to orchestrate the workflow:
 
 ---
 
-## 📊 Visualizations
+## Visualizations
 
 Psych MAS prioritizes "single-page efficiency" for large datasets:
 * **Wright Maps:** Align person ability distributions with item difficulty thresholds on the same latent scale.
@@ -31,7 +31,7 @@ Psych MAS prioritizes "single-page efficiency" for large datasets:
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 * **Python 3.10+**
@@ -47,10 +47,13 @@ Psych MAS prioritizes "single-page efficiency" for large datasets:
 
 
 ### Run the application:
-
    ```Bash
    uv sync
+   ```
+   ```Bash
    pip install streamlit
+   ```
+   ```Bash
    streamlit run ui.py
    ```
 
@@ -61,7 +64,7 @@ Responses: Rows as persons, columns as items (Values: binary 0 or 1).
 
 Response-Times: Rows as persons, columns as items (Values: numeric latency data).
 
-## 🛠️ Tech Stack
+## Tech Stack
 Orchestration: LangGraph
 
 Frontend: Streamlit
@@ -87,6 +90,7 @@ Data Processing: Pandas / NumPy
 
 This in-memory server is designed for development and testing.
 For production use, please use LangSmith Deployment.
+
 
 
 
