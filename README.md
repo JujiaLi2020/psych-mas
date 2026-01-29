@@ -5,15 +5,18 @@ Psychometric analysis app: load response and response-time data, describe your I
 ## Run locally
 
 ```bash
-# Install dependencies (e.g. with uv or pip)
+# Install dependencies (with uv)
 uv sync
-# or: pip install -r requirements.txt
 
-# Run the Streamlit UI
-streamlit run ui.py
+# Run the Streamlit UI (uv uses the project env automatically)
+uv run streamlit run ui.py
 ```
 
-Optional: copy `.env.example` to `.env` and set `GOOGLE_API_KEY` (and `GEMINI_MODEL` if needed) for LLM features.
+If you don't use uv: `pip install -r requirements.txt` then `python -m streamlit run ui.py` (use your project venv's Python).
+
+Optional: copy `.env.example` to `.env` and set:
+- `GOOGLE_API_KEY` (and `GEMINI_MODEL` if needed) for Google Gemini.
+- `OPENROUTER_API_KEY` (optional) for OpenRouter free models; get a key at [openrouter.ai](https://openrouter.ai). You can use OpenRouter free models without a key for basic use.
 
 ## Publish online with Streamlit + GitHub (no Docker)
 

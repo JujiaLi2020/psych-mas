@@ -28,61 +28,214 @@ from langgraph.graph import StateGraph, END
 # rpy2 is in pyproject.toml; ensure R is on PATH.
 
 _GRAPH_DIR = Path(__file__).resolve().parent
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
-def analyze_prompt(prompt: str) -> dict:
+def _call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: int = 30) -> tuple[str | None, str | None]:
+    """Call OpenRouter chat completions. Return (text, None) on success or (None, error_message)."""
+    if not model_id or not messages:
+        return None, "No model or messages."
+    headers = {"Content-Type": "application/json"}
+    if api_key and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    try:
+        body = {"model": model_id, "messages": messages}
+        resp = requests.post(OPENROUTER_API_URL, headers=headers, json=body, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message", {})
+        text = msg.get("content") or ""
+        return (text.strip() or "No response from model.", None)
+    except requests.exceptions.HTTPError as e:
+        try:
+            err_body = e.response.json() if e.response is not None else {}
+            msg = err_body.get("error", {}).get("message", str(e))
+        except Exception:
+            msg = str(e)
+        code = e.response.status_code if e.response is not None else 0
+        if code == 402:
+            msg += " Add credits at openrouter.ai/credits (free models require a non-negative balance)."
+        return None, f"{code}: {msg}"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _get_llm_model_variants(api_key: str) -> list[str]:
+    """Return list of model names to try: discovered from API first, then hardcoded fallback."""
+    try:
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        resp = requests.get(list_url, timeout=15)
+        resp.raise_for_status()
+        models_data = resp.json().get("models", [])
+        candidates = []
+        for m in models_data:
+            methods = m.get("supportedGenerationMethods", [])
+            name = m.get("name", "")
+            if "generateContent" in methods and "gemini" in name.lower():
+                candidates.append(name)
+        # Prefer flash (faster), then pro
+        flash = [n for n in candidates if "flash" in n.lower()]
+        pro = [n for n in candidates if "pro" in n.lower() and n not in flash]
+        other = [n for n in candidates if n not in flash and n not in pro]
+        if flash or pro or other:
+            return list(dict.fromkeys(flash + pro + other))
+    except Exception:
+        pass
+    # Fallback: names that are commonly available (no gemini-pro or bare gemini-1.5-flash)
+    return [
+        "models/gemini-1.5-flash-latest",
+        "models/gemini-1.5-flash-002",
+        "models/gemini-1.5-flash-001",
+        "models/gemini-2.0-flash",
+        "models/gemini-2.5-flash",
+    ]
+
+
+def _llm_generate_text(api_key: str, prompt_text: str, model_variants: list) -> str | None:
+    """Call LLM once; return raw text (1–2 sentence response) or None on failure."""
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{
+                    "text": (
+                        "The user said: \"{}\"\n\n"
+                        "Reply in one or two short sentences only. "
+                        "If they ask about IRT models (1PL, 2PL, 3PL, 4PL), say what you recommend; "
+                        "if they ask something else (e.g. who are you, what is today), answer directly "
+                        "then add: 'This app is for psychometric analysis (IRT); I can help with models like 1PL, 2PL, 3PL, or 4PL.'"
+                    ).format(prompt_text.replace('"', '\\"'))
+                }]
+            }
+        ]
+    }
+    for model_variant in model_variants:
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model_variant}:generateContent"
+        try:
+            resp = requests.post(url, params={"key": api_key}, json=body, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            text = (
+                data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+            )
+            return text.strip() if text else None
+        except Exception:
+            continue
+    return None
+
+
+def analyze_prompt(
+    prompt: str,
+    *,
+    llm_provider: str = "google",
+    llm_model_id: str | None = None,
+    openrouter_api_key: str | None = None,
+    google_api_key: str | None = None,
+) -> dict:
     normalized = (prompt or "").strip()
     if not normalized:
         return {
             "itemtype": "2PL",
             "r_code": "model <- mirt(df, 1, itemtype='2PL')",
             "suggestion": "Defaulting to 2PL.",
-            "reason": "No model preference provided.",
             "feedback": "Please describe your goal (e.g., guessing behavior, Rasch/1PL, or asymmetric response patterns).",
+            "reason": "No model preference provided.",
             "source": "heuristic",
         }
 
     load_dotenv()
-    api_key = os.getenv("GOOGLE_API_KEY")
-    model = os.getenv("GEMINI_MODEL", "models/gemini-1.5-flash-latest")
+    use_openrouter = (llm_provider or "").strip().lower() == "openrouter" and openrouter_api_key and llm_model_id
+    api_key = google_api_key or os.getenv("GOOGLE_API_KEY")
+
+    if use_openrouter:
+        # Step 1: OpenRouter one- or two-sentence response
+        feedback_prompt = (
+            "The user said: \"{}\"\n\n"
+            "Reply in one or two short sentences only. "
+            "If they ask about IRT models (1PL, 2PL, 3PL, 4PL), say what you recommend; "
+            "if they ask something else (e.g. who are you, what is today), answer directly "
+            "then add: 'This app is for psychometric analysis (IRT); I can help with models like 1PL, 2PL, 3PL, or 4PL.'"
+        ).format(normalized.replace('"', '\\"'))
+        text, err = _call_openrouter(openrouter_api_key.strip(), llm_model_id, [{"role": "user", "content": feedback_prompt}], timeout=30)
+        feedback_text = text if text and not err else None
+        # Step 2: OpenRouter structured JSON
+        system = (
+            "You are a psychometrics assistant for an IRT app. Return ONLY valid JSON with keys: "
+            "itemtype (1PL/2PL/3PL/4PL), suggestion, reason, r_code. "
+            "Map 'basic'/'simple' model -> 1PL; guessing -> 3PL; asymmetry -> 4PL; Rasch/1PL -> 1PL. "
+            "If the prompt is not about IRT models, use itemtype='2PL' and empty suggestion and reason. "
+            "r_code must be: model <- mirt(df, 1, itemtype='XPL') with X = 1, 2, 3, or 4."
+        )
+        user = f"Prompt: {normalized}\n\nReturn JSON only (no other text): itemtype, suggestion, reason, r_code."
+        text2, err2 = _call_openrouter(openrouter_api_key.strip(), llm_model_id, [{"role": "user", "content": f"{system}\n\n{user}"}], timeout=30)
+        if text2 and not err2:
+            try:
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text2, re.DOTALL)
+                if json_match:
+                    text2 = json_match.group(1)
+                else:
+                    m = re.search(r'\{.*\}', text2, re.DOTALL)
+                    if m:
+                        text2 = m.group(0)
+                parsed = json.loads(text2)
+                itemtype = str(parsed.get("itemtype", "2PL")).upper()
+                if itemtype not in {"1PL", "2PL", "3PL", "4PL"}:
+                    itemtype = "2PL"
+                suggestion = parsed.get("suggestion", "")
+                reason = parsed.get("reason", "")
+                r_code = parsed.get("r_code", f"model <- mirt(df, 1, itemtype='{itemtype}')")
+                if "itemtype=" not in r_code and "itemtype'" not in r_code:
+                    r_code = f"model <- mirt(df, 1, itemtype='{itemtype}')"
+                feedback = feedback_text or parsed.get("feedback", "Here is a suggested model based on your prompt.")
+                return {
+                    "itemtype": itemtype,
+                    "r_code": r_code,
+                    "suggestion": suggestion,
+                    "reason": reason,
+                    "feedback": feedback,
+                    "note": parsed.get("note", ""),
+                    "source": "llm",
+                }
+            except (json.JSONDecodeError, Exception):
+                pass
+        if feedback_text:
+            out = _heuristic_prompt_mapping(prompt)
+            out["feedback"] = feedback_text
+            out["source"] = "llm"
+            return out
+        return _heuristic_prompt_mapping(prompt)
+
     if not api_key:
         return _heuristic_prompt_mapping(prompt)
 
+    # Prefer configured model, then discovered models, then fallback list
+    configured = os.getenv("GEMINI_MODEL", "").strip()
+    model_variants = _get_llm_model_variants(api_key)
+    if configured and configured not in model_variants:
+        model_variants = [configured] + model_variants
+
+    # Step 1: Use LLM to generate a one- or two-sentence response first (no JSON)
+    feedback_text = _llm_generate_text(api_key, normalized, model_variants)
+
+    # Step 2: Get structured response (itemtype, suggestion, reason, r_code) from LLM
     system = (
-        "You are a psychometrics assistant for an IRT analysis app. If the prompt "
-        "is about IRT models (1PL, 2PL, 3PL, 4PL), map it to an itemtype and provide "
-        "structured feedback with suggestion and reason. If the prompt is NOT related "
-        "to psychometrics/IRT, respond in TWO PARTS: (1) FIRST, answer their question "
-        "naturally and conversationally like a normal helpful assistant, (2) THEN add a "
-        "brief note that this app is designed for psychometric analysis and guide them back. "
-        "Always return JSON."
+        "You are a psychometrics assistant for an IRT app. Return ONLY valid JSON with keys: "
+        "itemtype (1PL/2PL/3PL/4PL), suggestion, reason, r_code. "
+        "Map 'basic'/'simple' model -> 1PL; guessing -> 3PL; asymmetry -> 4PL; Rasch/1PL -> 1PL. "
+        "If the prompt is not about IRT models, use itemtype='2PL' and empty suggestion and reason. "
+        "r_code must be: model <- mirt(df, 1, itemtype='XPL') with X = 1, 2, 3, or 4."
     )
-    user = (
-        f"Prompt: {normalized}\n"
-        "Return JSON with keys: itemtype, suggestion, reason, feedback, note, r_code.\n"
-        "If prompt is off-topic: set itemtype='2PL', set suggestion='' and reason=''. "
-        "In 'feedback', write a TWO-PART response: (1) First, answer their question naturally "
-        "like a normal LLM would, (2) Then add 'However, this app is designed for psychometric "
-        "analysis using Item Response Theory (IRT). I can help you analyze test data with models "
-        "like 1PL, 2PL, 3PL, or 4PL. Please describe your psychometric analysis needs.' "
-        "Use r_code format: model <- mirt(df, 1, itemtype='2PL')."
-    )
+    user = f"Prompt: {normalized}\n\nReturn JSON only (no other text): itemtype, suggestion, reason, r_code."
     body = {
         "contents": [
             {"role": "user", "parts": [{"text": f"{system}\n\n{user}"}]}
         ]
     }
 
-    # Try different model name variations if the first one fails
-    model_variants = [
-        model,  # Try the configured/default model first
-        "models/gemini-1.5-flash-latest",
-        "models/gemini-1.5-flash-002",
-        "models/gemini-1.5-flash-001",
-        "models/gemini-1.5-flash",
-        "models/gemini-pro",
-    ]
-    
     resp = None
     last_error = None
     for model_variant in model_variants:
@@ -90,26 +243,28 @@ def analyze_prompt(prompt: str) -> dict:
         try:
             resp = requests.post(url, params={"key": api_key}, json=body, timeout=30)
             resp.raise_for_status()
-            # If successful, update model for this call and break
-            model = model_variant
             break
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
                 last_error = e
                 resp = None
-                continue  # Try next variant
-            else:
-                raise  # Re-raise non-404 errors
+                continue
+            raise
         except Exception as e:
             last_error = e
             resp = None
             continue
-    
-    # If all variants failed, fall back to heuristic
+
     if resp is None or resp.status_code != 200:
+        # Structured call failed; if we have feedback from step 1, use it with heuristic for structure
+        if feedback_text:
+            out = _heuristic_prompt_mapping(prompt)
+            out["feedback"] = feedback_text
+            out["source"] = "llm"
+            return out
         print(f"All model variants failed. Last error: {last_error}")
         return _heuristic_prompt_mapping(prompt)
-    
+
     try:
         data = resp.json()
         text = (
@@ -119,48 +274,44 @@ def analyze_prompt(prompt: str) -> dict:
             .get("text", "")
         )
         if not text:
+            if feedback_text:
+                out = _heuristic_prompt_mapping(prompt)
+                out["feedback"] = feedback_text
+                out["source"] = "llm"
+                return out
             return _heuristic_prompt_mapping(prompt)
-        
-        # Try to extract JSON from text (might be wrapped in markdown code blocks)
+
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         if json_match:
             text = json_match.group(1)
         else:
-            # Try to find JSON object in text
             json_match = re.search(r'\{.*\}', text, re.DOTALL)
             if json_match:
                 text = json_match.group(0)
-        
+
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            # If JSON parsing fails, check if text looks like conversational feedback
-            # If it mentions psychometrics, use it as feedback
-            if "psychometric" in text.lower() or "irt" in text.lower() or "app" in text.lower():
-                return {
-                    "itemtype": "2PL",
-                    "r_code": "model <- mirt(df, 1, itemtype='2PL')",
-                    "suggestion": "",
-                    "reason": "",
-                    "feedback": text.strip(),
-                    "note": "",
-                    "source": "llm",
-                }
+            if feedback_text:
+                out = _heuristic_prompt_mapping(prompt)
+                out["feedback"] = feedback_text
+                out["source"] = "llm"
+                return out
             return _heuristic_prompt_mapping(prompt)
-        
+
         itemtype = str(parsed.get("itemtype", "2PL")).upper()
         if itemtype not in {"1PL", "2PL", "3PL", "4PL"}:
             itemtype = "2PL"
         suggestion = parsed.get("suggestion", "")
         reason = parsed.get("reason", "")
-        feedback = parsed.get("feedback", "Here is a suggested model based on your prompt.")
-        # If feedback mentions psychometrics app but suggestion/reason are empty, prioritize feedback
-        if not suggestion and not reason and feedback:
-            suggestion = ""
-            reason = ""
+        r_code = parsed.get("r_code", f"model <- mirt(df, 1, itemtype='{itemtype}')")
+        if "itemtype=" not in r_code and "itemtype'" not in r_code:
+            r_code = f"model <- mirt(df, 1, itemtype='{itemtype}')"
+        # Use the 1–2 sentence response from step 1 as feedback when we have it
+        feedback = feedback_text if feedback_text else parsed.get("feedback", "Here is a suggested model based on your prompt.")
         return {
             "itemtype": itemtype,
-            "r_code": f"model <- mirt(df, 1, itemtype='{itemtype}')",
+            "r_code": r_code,
             "suggestion": suggestion,
             "reason": reason,
             "feedback": feedback,
@@ -168,8 +319,12 @@ def analyze_prompt(prompt: str) -> dict:
             "source": "llm",
         }
     except Exception as e:
-        # Log the error for debugging but still fall back to heuristic
         print(f"LLM call failed: {type(e).__name__}: {e}")
+        if feedback_text:
+            out = _heuristic_prompt_mapping(prompt)
+            out["feedback"] = feedback_text
+            out["source"] = "llm"
+            return out
         return _heuristic_prompt_mapping(prompt)
 
 
@@ -205,34 +360,36 @@ def _heuristic_prompt_mapping(prompt: str) -> dict:
         suggestion = "Rasch/1PL requested; recommend 1PL."
         reason = "Prompt requests Rasch/1PL."
         feedback = "Rasch/1PL noted; using a single discrimination parameter."
+    elif "basic" in normalized or ("simple" in normalized and "model" in normalized):
+        itemtype = "1PL"
+        suggestion = "Basic/simple model requested; recommend 1PL (Rasch)."
+        reason = "In IRT, the basic or simplest model is 1PL (one parameter: difficulty)."
+        feedback = "Using 1PL (Rasch): the basic model with a single difficulty parameter per item."
     elif normalized and not is_greeting and not any(
-        token in normalized for token in ["1pl", "2pl", "3pl", "4pl", "rasch", "guess"]
+        token in normalized for token in ["1pl", "2pl", "3pl", "4pl", "rasch", "guess", "basic", "simple"]
     ):
-        # Check for common off-topic patterns
-        off_topic_keywords = ["weather", "time", "date", "news", "sport", "movie", "music", "food", "recipe", "translate", "calculate", "math", "python", "code", "programming"]
-        is_off_topic = any(keyword in normalized for keyword in off_topic_keywords)
-        
-        if is_off_topic:
-            suggestion = ""
-            reason = ""
-            feedback = (
-                "I understand your question, but this app is specifically designed for psychometric analysis "
-                "using Item Response Theory (IRT). I can help you analyze test data with models like 1PL, 2PL, 3PL, or 4PL. "
-                "Please describe your psychometric analysis needs, such as: 'I suspect guessing behavior, use 3PL' "
-                "or 'Use Rasch/1PL model'."
-            )
-            note = ""
+        psychometrics_reminder = (
+            "This app is designed for psychometric analysis using Item Response Theory (IRT). "
+            "I can help you analyze test data with models like 1PL, 2PL, 3PL, or 4PL—for example: "
+            "'I suspect guessing, use 3PL' or 'Use Rasch/1PL model'."
+        )
+        suggestion = ""
+        reason = ""
+        note = ""
+        # Answer identity questions directly, then remind
+        is_identity_question = any(
+            phrase in normalized
+            for phrase in ["who are you", "what are you", "who is this", "what is this", "who're you", "what're you"]
+        )
+        if is_identity_question:
+            feedback = f"I'm a psychometrics assistant for this app. {psychometrics_reminder}"
         else:
-            # For vague prompts that might be off-topic or just unclear
-            suggestion = ""
-            reason = ""
-            feedback = (
-                "I'm not sure how to help with that. This app is designed for psychometric analysis using "
-                "Item Response Theory (IRT). I can help you analyze test data with models like 1PL, 2PL, 3PL, or 4PL. "
-                "Please describe your psychometric analysis needs, such as: 'I suspect guessing behavior, use 3PL' "
-                "or 'Use Rasch/1PL model'."
-            )
-            note = ""
+            off_topic_keywords = ["weather", "time", "date", "today", "news", "sport", "movie", "music", "food", "recipe", "translate", "calculate", "math", "python", "code", "programming"]
+            is_off_topic = any(keyword in normalized for keyword in off_topic_keywords)
+            if is_off_topic:
+                feedback = f"That's outside what I can help with here. {psychometrics_reminder}"
+            else:
+                feedback = f"I'm not sure how to help with that. {psychometrics_reminder}"
     return {
         "itemtype": itemtype,
         "r_code": f"model <- mirt(df, 1, itemtype='{itemtype}')",
@@ -259,6 +416,7 @@ class State(TypedDict):
     item_params: NotRequired[list[dict]]
     person_params: NotRequired[list[dict]]
     item_fit: NotRequired[list[dict]]
+    model_fit: NotRequired[dict]  # M2 and related overall fit stats from mirt::M2
 
 
 def _dv_python(rt_df: pd.DataFrame, resp_df: pd.DataFrame, color: str = "lightgray") -> str:
@@ -415,11 +573,35 @@ def irt_agent(state):
                 item_fit <- as.data.frame(itemfit(model))
                 item_fit$item <- rownames(item_fit)
                 rownames(item_fit) <- NULL
+                model_fit_df <- tryCatch(M2(model), error = function(e) data.frame(M2 = NA_real_, df = NA_real_, p = NA_real_, RMSEA = NA_real_, SRMSR = NA_real_, TLI = NA_real_, CFI = NA_real_, stringsAsFactors = FALSE))
+                model_fit_list <- as.list(model_fit_df[1, ])
+                names(model_fit_list) <- colnames(model_fit_df)
                 """
             )
             item_pars = ro.conversion.rpy2py(ro.r("item_pars"))
             person_pars = ro.conversion.rpy2py(ro.r("person_pars"))
             item_fit = ro.conversion.rpy2py(ro.r("item_fit"))
+            model_fit = {}
+            try:
+                model_fit_df = ro.conversion.rpy2py(ro.r("model_fit_df"))
+                if hasattr(model_fit_df, "iloc") and len(model_fit_df) > 0:
+                    model_fit = model_fit_df.iloc[0].to_dict()
+            except Exception:
+                pass
+            if not model_fit:
+                try:
+                    model_fit_r = ro.r("model_fit_list")
+                    rnames = getattr(model_fit_r, "names", None)
+                    if rnames is not None and len(rnames) > 0:
+                        model_fit = {}
+                        for i, name in enumerate(rnames):
+                            try:
+                                val = model_fit_r[i]
+                                model_fit[str(name)] = ro.conversion.rpy2py(val)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
     except Exception as exc:
         message = (
             f"ICC skipped; R error ({type(exc).__name__}: {exc}). "
@@ -438,6 +620,7 @@ def irt_agent(state):
         "item_params": item_pars.to_dict(orient="records"),
         "person_params": person_pars.to_dict(orient="records"),
         "item_fit": item_fit.to_dict(orient="records"),
+        "model_fit": model_fit,
         "next_step": "analyze_timing",
     }
         
