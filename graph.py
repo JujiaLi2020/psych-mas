@@ -371,7 +371,10 @@ def irt_agent(state):
         import rpy2.robjects as ro
         from rpy2.robjects import pandas2ri
     except Exception as exc:
-        message = f"ICC skipped; rpy2/R not available ({type(exc).__name__}: {exc})"
+        message = (
+            f"ICC skipped; rpy2/R not available ({type(exc).__name__}: {exc}). "
+            "IRT, ICC, and Wright Map require R (mirt, WrightMap). Run the app locally with R installed for full analysis."
+        )
         print(message)
         return {"next_step": "analyze_timing", "icc_error": message}
 
@@ -418,7 +421,10 @@ def irt_agent(state):
             person_pars = ro.conversion.rpy2py(ro.r("person_pars"))
             item_fit = ro.conversion.rpy2py(ro.r("item_fit"))
     except Exception as exc:
-        message = f"ICC skipped; R error ({type(exc).__name__}: {exc})"
+        message = (
+            f"ICC skipped; R error ({type(exc).__name__}: {exc}). "
+            "Run the app locally with R and packages mirt, WrightMap for IRT analysis."
+        )
         print(message)
         return {"next_step": "analyze_timing", "icc_error": message}
 

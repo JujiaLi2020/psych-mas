@@ -849,8 +849,8 @@ if run:
 
     payload_json = json.dumps(
         {
-            "responses": responses,
-            "rt_data": rt_data,
+        "responses": responses,
+        "rt_data": rt_data,
             "model_settings": st.session_state.model_settings,
             "is_verified": st.session_state.is_verified,
         },

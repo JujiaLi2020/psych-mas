@@ -1,0 +1,7 @@
+streamlit
+pandas
+matplotlib
+rpy2
+langgraph
+python-dotenv
+requests
