@@ -41,6 +41,16 @@ Copy `.env.example` to `.env` (if present) or create a `.env` file in the projec
 
 The app reads these via `python-dotenv`; do **not** commit `.env` to Git.
 
+### LangSmith (optional — for seeing runs when using LangGraph)
+
+If you run `langgraph dev` and want to see traces/runs in **LangSmith** (LangChain’s tracing UI), add your LangSmith API key to `.env`:
+
+```bash
+LANGSMITH_API_KEY=your-langsmith-api-key
+```
+
+Get a key at [smith.langchain.com](https://smith.langchain.com) (sign up, then API keys in settings). Without `LANGSMITH_API_KEY`, the LangGraph server still runs; you just won’t see runs in LangSmith.
+
 ### 3. Use the workflow
 
 1. **Left column — Psych-MAS Assistant**
@@ -81,6 +91,7 @@ langgraph dev
 ```
 
 - **API base URL:** `http://127.0.0.1:2024` (or the URL shown in the terminal).
+- **LangSmith runs:** To see traces in LangSmith, add `LANGSMITH_API_KEY` to your `.env` (see [LangSmith (optional)](#langsmith-optional--for-seeing-runs-when-using-langgraph) above).
 - **LangGraph Studio:** If you use the LangGraph Studio app, connect it to this server to inspect and run the graph visually.
 
 ### Config
