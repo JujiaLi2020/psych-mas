@@ -446,8 +446,7 @@ def _psych_describe_responses(resp_df: pd.DataFrame) -> tuple[pd.DataFrame | Non
     try:
         with (ro.default_converter + pandas2ri.converter).context():
             ro.globalenv["resp_df"] = resp_df
-            ro.r("library(psych)")
-            desc = ro.r("describe(resp_df)")
+            desc = ro.r("psych::describe(resp_df)")
             desc_py = ro.conversion.rpy2py(desc)
             if isinstance(desc_py, pd.DataFrame):
                 return desc_py, None
