@@ -1,0 +1,5 @@
+# R packages (install in R: install.packages(readLines('r_packages.txt'), repos='https://cloud.r-project.org'))
+# Or: R -e "install.packages(c('mirt','WrightMap','psych'), repos='https://cloud.r-project.org')"
+mirt
+WrightMap
+psych
