@@ -5,6 +5,10 @@ psych_workflow graph.
 Data loading lives here—not in the Orchestrator. The Orchestrator only routes;
 the UI reads the two files and passes them as initial state into the graph.
 """
+import warnings
+
+# Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud/Streamlit)
+warnings.filterwarnings("ignore", category=warnings.UserWarning, module="rpy2")
 
 from pathlib import Path
 import io
@@ -12,7 +16,6 @@ import json
 import math
 import os
 import re
-import warnings
 import base64
 import pandas as pd
 import streamlit as st
@@ -22,9 +25,6 @@ import tempfile
 import time
 import requests
 from dotenv import load_dotenv
-
-# Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud/Streamlit)
-warnings.filterwarnings("ignore", message=".*main thread.*", module="rpy2.rinterface")
 
 from graph import analyze_prompt, psych_workflow
 
