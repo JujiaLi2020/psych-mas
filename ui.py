@@ -466,8 +466,13 @@ def _check_r_packages() -> tuple[bool, str | None]:
     try:
         for pkg in ("mirt", "WrightMap", "psych"):
             r_ok = ro.r(f'require("{pkg}", quietly=TRUE)')
-            # R returns logical vector of length 1; get scalar without relying on ro.conversion.rpy2py
-            ok = bool(r_ok[0]) if len(r_ok) else False
+            # R returns logical vector of length 1 (or None in some rpy2 envs); get scalar safely
+            if r_ok is None:
+                ok = False
+            elif len(r_ok):
+                ok = bool(r_ok[0])
+            else:
+                ok = False
             if not ok:
                 return False, (
                     f"R package '{pkg}' not installed. "
