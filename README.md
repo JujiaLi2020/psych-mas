@@ -191,9 +191,9 @@ You do **not** run this on your local computer. You add a **second service** in 
 4. **Override the start command** so this service runs the LangGraph server instead of Streamlit:
    - Open the new service → **Settings** → **Deploy** (or **Build & Deploy**).
    - Find **Custom start command** / **Start Command** (or **Override** for the run command).
-   - Set it to:  
-     `langgraph dev --port $PORT`  
-     (Railway sets `PORT`; the LangGraph server will listen on it.)
+   - Set it to (use a shell so `PORT` is expanded):  
+     `sh -c 'langgraph dev --port ${PORT:-2024}'`  
+     Railway sets `PORT`; the server will listen on it. Locally, port 2024 is used if `PORT` is unset.
 5. **Deploy** the service. After the build finishes, go to **Settings** → **Networking** → **Generate Domain**.
 6. The new service’s URL (e.g. `https://your-langgraph-api.up.railway.app`) is your **LangGraph API** base URL. Use it to invoke `psych_workflow` (e.g. `POST /runs` or the path shown in [LangGraph API docs](https://langchain-ai.github.io/langgraph/concepts/langgraph_api/)).
 

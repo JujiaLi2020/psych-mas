@@ -1756,7 +1756,7 @@ with col_input:
         )
         st.markdown(
             "**Optional:** From the project root, run `langgraph dev` to start the LangGraph server locally. "
-            "On **Railway**, you can add a second service with start command `langgraph dev --port $PORT` and generate a domain to get a public LangGraph API URL (see README §6). "
+            "On **Railway**, add a second service with start command `sh -c 'langgraph dev --port ${PORT:-2024}'` and generate a domain for the public LangGraph API URL (see README §6). "
             "The Streamlit UI works without the server (it uses the graph in-process)."
         )
         LANGGRAPH_API_URL = "https://langchain-ai.github.io/langgraph/concepts/langgraph_api/"
