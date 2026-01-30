@@ -16,7 +16,7 @@ import json
 import math
 import os
 import re
-import base64s
+import base64
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
