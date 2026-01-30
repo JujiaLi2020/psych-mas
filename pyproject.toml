@@ -17,6 +17,7 @@ dependencies = [
     "matplotlib",
     "python-dotenv",
     "requests",
+    "reportlab>=4.0.0",
 ]
 
 [tool.setuptools]
