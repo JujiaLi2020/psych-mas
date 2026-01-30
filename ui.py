@@ -457,6 +457,27 @@ def _psych_describe_responses(resp_df: pd.DataFrame) -> tuple[pd.DataFrame | Non
         return None, str(exc)
 
 
+def _check_r_packages() -> tuple[bool, str | None]:
+    """Check if R and required packages (mirt, WrightMap, psych) are available. Returns (ok, error_message)."""
+    try:
+        import rpy2.robjects as ro
+    except Exception as exc:
+        return False, f"R/rpy2 not available ({exc}). Install R and Python rpy2 for IRT analysis."
+    try:
+        for pkg in ("mirt", "WrightMap", "psych"):
+            r_ok = ro.r(f'require("{pkg}", quietly=TRUE)')
+            ok = bool(ro.conversion.rpy2py(r_ok))
+            if not ok:
+                return False, (
+                    f"R package '{pkg}' not installed. "
+                    "Run in terminal: Rscript install_r_packages.R  "
+                    "Or in R: install.packages(c('mirt','WrightMap','psych'), repos='https://cloud.r-project.org')"
+                )
+        return True, None
+    except Exception as exc:
+        return False, f"Could not check R packages: {exc}"
+
+
 def _plot_item_accuracy(resp_df: pd.DataFrame) -> str | None:
     """Plot proportion correct (accuracy) per item. Returns path to PNG or None."""
     if resp_df.empty or resp_df.shape[1] == 0:
@@ -1898,6 +1919,10 @@ if st.session_state.is_verified:
             rt_file.seek(0)
             rt_df = pd.read_csv(rt_file)
             st.dataframe(rt_df.head(10), width="stretch")
+
+    r_ok, r_msg = _check_r_packages()
+    if not r_ok and r_msg:
+        st.warning(r_msg)
 
     run = st.button("Run workflow")
 else:

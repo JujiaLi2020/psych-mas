@@ -4,8 +4,3 @@ r-base-dev
 libcurl4-openssl-dev
 libssl-dev
 libxml2-dev
-
-# R packages (install in R: install.packages(c('mirt','WrightMap','psych'), repos='https://cloud.r-project.org'))
-mirt
-WrightMap
-psych
