@@ -8,7 +8,7 @@ the UI reads the two files and passes them as initial state into the graph.
 import warnings
 
 # Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud/Streamlit)
-warnings.filterwarnings("ignore", category=UserWarning, module="rpy2")
+warnings.filterwarnings("ignore", message=".*main thread.*")
 
 from pathlib import Path
 import io
