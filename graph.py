@@ -667,3 +667,25 @@ workflow.add_edge("Analyze_node", END)
 
 # 7. Compile the Graph
 psych_workflow = app = workflow.compile()
+
+
+if __name__ == "__main__":
+    print("How to run the graph:")
+    print("  1. Streamlit UI (recommended):  uv run streamlit run ui.py")
+    print("     Then upload response + RT data and run the analysis.")
+    print("  2. LangGraph server/API:       uv run langgraph dev")
+    print("     Then POST to the API to invoke psych_workflow.")
+    print("")
+    print("Running a minimal test invoke (3 persons × 2 items)...")
+    sample_state: State = {
+        "responses": [{"0": 1, "1": 0}, {"0": 0, "1": 1}, {"0": 1, "1": 1}],
+        "rt_data": [{"0": 1.2, "1": 0.8}, {"0": 2.1, "1": 1.5}, {"0": 0.9, "1": 1.1}],
+        "theta": 0.0,
+        "latency_flags": [],
+        "next_step": "start",
+    }
+    try:
+        result = psych_workflow.invoke(sample_state)
+        print("Done. Keys in result:", list(result.keys()))
+    except Exception as e:
+        print(f"Test invoke failed (e.g. R/mirt not installed): {e}")

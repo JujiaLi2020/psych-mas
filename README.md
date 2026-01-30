@@ -181,6 +181,24 @@ docker run -p 8501:8501 -e PORT=8501 psych-mas
 
 Then open `http://localhost:8501`.
 
+### 6. Expose the LangGraph API on Railway (optional)
+
+You do **not** run this on your local computer. You add a **second service** in the same Railway project so the LangGraph API runs in the cloud next to your Streamlit app.
+
+1. In your Railway project (where the Streamlit app is already deployed), click **+ New** → **Empty Service** (or **Add service**).
+2. For the new service, choose **Deploy from GitHub repo** and select the **same** psych-mas repo (and branch).
+3. Railway will use the **same Dockerfile** and build the same image.
+4. **Override the start command** so this service runs the LangGraph server instead of Streamlit:
+   - Open the new service → **Settings** → **Deploy** (or **Build & Deploy**).
+   - Find **Custom start command** / **Start Command** (or **Override** for the run command).
+   - Set it to:  
+     `langgraph dev --port $PORT`  
+     (Railway sets `PORT`; the LangGraph server will listen on it.)
+5. **Deploy** the service. After the build finishes, go to **Settings** → **Networking** → **Generate Domain**.
+6. The new service’s URL (e.g. `https://your-langgraph-api.up.railway.app`) is your **LangGraph API** base URL. Use it to invoke `psych_workflow` (e.g. `POST /runs` or the path shown in [LangGraph API docs](https://langchain-ai.github.io/langgraph/concepts/langgraph_api/)).
+
+Your Streamlit app keeps its own URL; the LangGraph API has this separate public URL. No activation on your local machine—both run on Railway.
+
 ---
 
 ## Publishing for users without R

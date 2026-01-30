@@ -1709,15 +1709,15 @@ def _render_results(final: dict) -> None:
             else:
                 st.info("No RT plot available.")
 
-st.set_page_config(page_title="Psych MAS — IRT & RT", layout="centered")
-st.title("Psych MAS — IRT & RT")
+st.set_page_config(page_title="Psych MAS", layout="centered")
+st.title("Psych MAS")
 
 st.markdown(
-    "Upload **response** and **response-time** CSVs."
+    "Ver. 0.1.0 — From items to insights: IRT & RT in one workflow."
     #"workflow as initial state; the Orchestrator then dispatches to IRT, RT, and Analyze."
 )
 
-st.subheader("Input your psychometric analysis task")
+
 if "model_settings" not in st.session_state:
     st.session_state.model_settings = _interpret_prompt("")
 if "is_verified" not in st.session_state:
@@ -1731,7 +1731,7 @@ col_input, col_confirm = st.columns(2)
 
 with col_input:
     st.subheader("Psych-MAS Assistant")
-    tab_prompt, tab_model_engine = st.tabs(["Prompt", "Model engine"])
+    tab_prompt, tab_model_engine, tab_langgraph = st.tabs(["Prompt", "Model engine", "Langgraph"])
     with tab_prompt:
         with st.form("prompt_form"):
             prompt = st.text_input(
@@ -1747,6 +1747,24 @@ with col_input:
                 st.session_state.prompt_analyzed = True
                 st.session_state.last_prompt = prompt
                 st.session_state["confirm_itemtype"] = st.session_state.model_settings.get("itemtype", "2PL")
+    with tab_langgraph:
+        st.caption("How LangGraph is used in this app")
+        st.markdown(
+            "The **psychometric workflow** is implemented as a LangGraph in `graph.py`. "
+            "When you upload response/RT data and run the analysis, the app invokes **`psych_workflow.invoke(initial_state)`** directly. "
+            "The graph runs: **Orchestrator** → **IRT** and **RT** (in parallel) → **Analyze** → end."
+        )
+        st.markdown(
+            "**Optional:** From the project root, run `langgraph dev` to start the LangGraph server locally. "
+            "On **Railway**, you can add a second service with start command `langgraph dev --port $PORT` and generate a domain to get a public LangGraph API URL (see README §6). "
+            "The Streamlit UI works without the server (it uses the graph in-process)."
+        )
+        LANGGRAPH_API_URL = "https://langchain-ai.github.io/langgraph/concepts/langgraph_api/"
+        st.link_button("Open LangGraph API", url=LANGGRAPH_API_URL, type="primary", use_container_width=True)
+        st.markdown(
+            f'<a href="{LANGGRAPH_API_URL}" target="_blank" rel="noopener noreferrer">Open LangGraph API in new tab</a>',
+            unsafe_allow_html=True,
+        )
     with tab_model_engine:
         st.markdown(
             "<style>div[data-testid='stTabs'] div[data-testid='stVerticalBlock'] { font-size: 0.9rem !important; }</style>",
