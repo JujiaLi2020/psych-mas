@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import warnings
 import base64
 import pandas as pd
 import streamlit as st
@@ -22,9 +23,12 @@ import time
 import requests
 from dotenv import load_dotenv
 
+# Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud/Streamlit)
+warnings.filterwarnings("ignore", message=".*main thread.*", module="rpy2.rinterface")
+
 from graph import analyze_prompt, psych_workflow
 
-# Initialize R from main thread to avoid rpy2 "R is not initialized by the main thread" warning
+# Initialize R early so it is ready when needed
 try:
     import rpy2.robjects as _ro
     _ro.r("1+1")
