@@ -31,5 +31,8 @@ COPY .streamlit .streamlit
 
 EXPOSE 8501
 
+# Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud)
+ENV PYTHONWARNINGS="ignore::UserWarning:rpy2.rinterface"
+
 # Railway sets PORT; Streamlit must listen on 0.0.0.0 for external access
 CMD ["sh", "-c", "streamlit run ui.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true"]
