@@ -1688,14 +1688,6 @@ st.markdown(
     #"workflow as initial state; the Orchestrator then dispatches to IRT, RT, and Analyze."
 )
 
-# Notice for users without R (e.g. Streamlit Cloud): no install needed, list what works
-_r_ok, _ = _check_r_packages()
-if not _r_ok:
-    st.info(
-        "**Running without R.** You can use: prompt analysis, LLM summaries (set API key in Model engine), "
-        "response-time analysis, and APA report. IRT, ICC, and Wright Map are not available in this deployment."
-    )
-
 st.subheader("Input your psychometric analysis task")
 if "model_settings" not in st.session_state:
     st.session_state.model_settings = _interpret_prompt("")
