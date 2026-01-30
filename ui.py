@@ -976,6 +976,13 @@ def _llm_analyze_image_and_text(
                 continue
             if text:
                 return text
+        # OpenRouter free models often don't support images; fall back to text-only (table + figure description)
+        text_fallback = _llm_analyze_section_text(
+            section_name,
+            f"Figure: {figure_description}\n\nTable:\n{text_context}",
+        )
+        if text_fallback and not text_fallback.strip().startswith("LLM analysis") and "no model returned" not in text_fallback:
+            return text_fallback + "\n\n*Summary from table and figure description; the selected model does not support image input.*"
         return _format_llm_error("OpenRouter: no model returned a response. Some free models may not support images.")
     load_dotenv()
     api_key = os.getenv("GOOGLE_API_KEY")
