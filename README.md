@@ -108,8 +108,17 @@ Once `langgraph dev` is running, you can POST to the LangGraph API (e.g. invoke 
 ## Requirements
 
 - **Python:** 3.13+ (see `pyproject.toml`; adjust if you use an older version).
-- **Local (full IRT + Wright Map):** R on `PATH` with packages `mirt` and `WrightMap`; Python deps from `pyproject.toml` or `requirements.txt`.
-- **Streamlit Cloud:** No R; IRT fitting, ICC, and Wright Map are skipped with an explanatory message. LLM and RT features work; set secrets (see below).
+- **Local (full IRT + Wright Map):** R on `PATH` plus R packages `mirt`, `WrightMap`, `psych`. System deps: `packages.txt` (apt). R packages: run once `Rscript install_r_packages.R` (or see `r_packages.txt`).
+- **Streamlit Cloud:** No R; IRT fitting, ICC, and Wright Map are skipped. LLM and RT features work; set secrets (see below).
+
+### Local R setup (for IRT, ICC, Wright Map)
+
+1. **System packages (Debian/Ubuntu):**  
+   `sudo apt-get update && sudo apt-get install -y $(cat packages.txt)`
+
+2. **R packages (run once):**  
+   `Rscript install_r_packages.R`  
+   Or in R: `install.packages(c('mirt','WrightMap','psych'), repos='https://cloud.r-project.org')`
 
 ---
 
