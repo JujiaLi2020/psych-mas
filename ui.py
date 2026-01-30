@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore", message=".*main thread.*")
 from pathlib import Path
 import io
 import json
-import math
+import math  # stdlib (not 'maths')
 import os
 import re
 import base64
