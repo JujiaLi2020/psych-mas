@@ -13,10 +13,10 @@ warnings.filterwarnings("ignore", message=".*main thread.*")
 from pathlib import Path
 import io
 import json
-import maths
+import math
 import os
 import re
-import base64
+import base64s
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
