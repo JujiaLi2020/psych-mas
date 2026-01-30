@@ -138,12 +138,86 @@ OPENROUTER_API_KEY = "your-openrouter-api-key"
 
 ---
 
+## Deploy on Railway (Docker, full IRT)
+
+Use **Railway** when you want **full IRT** (mirt, WrightMap, psych) in the cloud with GitHub version control and no cold starts. The repo includes a `Dockerfile` that installs R, R packages, and Python/Streamlit.
+
+### 1. Prerequisites
+
+- GitHub repo with this project (including `Dockerfile`, `.dockerignore`, `ui.py`, `graph.py`, `install_r_packages.R`, etc.).
+- [Railway](https://railway.app) account (sign in with GitHub).
+
+### 2. Create a new project on Railway
+
+1. Go to [railway.app](https://railway.app) → **Start a New Project**.
+2. Choose **Deploy from GitHub repo**.
+3. Select your **psych-mas** repository (and branch, e.g. `main`).
+4. Railway will detect the **Dockerfile** and build the image (R + R packages + Python; first build can take several minutes).
+
+### 3. Configure the service
+
+1. In the service **Settings**:
+   - **Root Directory:** leave default (repo root).
+   - **Dockerfile Path:** `Dockerfile` (default).
+   - **Watch Paths:** leave default so pushes to the repo trigger redeploys.
+2. Under **Variables**, add your secrets (same as Streamlit Cloud):
+   - `GOOGLE_API_KEY` = your Google API key  
+   - `OPENROUTER_API_KEY` = your OpenRouter API key  
+
+Railway sets `PORT` automatically; the Dockerfile runs Streamlit on that port.
+
+### 4. Deploy and share
+
+1. Click **Deploy** (or push to GitHub to trigger a deploy).
+2. Once built, open **Settings** → **Networking** → **Generate Domain** to get a public URL.
+3. Share that URL; users get the full app including IRT, ICC, and Wright Map (no R install on their side).
+
+### 5. Local Docker test (optional)
+
+```bash
+docker build -t psych-mas .
+docker run -p 8501:8501 -e PORT=8501 psych-mas
+```
+
+Then open `http://localhost:8501`.
+
+---
+
+## Publishing for users without R
+
+If you are **creating and publishing** this app for users who do **not** have R installed:
+
+### Option 1: Streamlit Community Cloud (simplest)
+
+1. **Deploy** the app on [Streamlit Community Cloud](https://share.streamlit.io) (see **Deploy on Streamlit Community Cloud** above).
+2. **Share the app URL** with your users. They open it in a browser; no install, no R.
+3. **Set secrets** (Settings → Secrets) so LLM features work: `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`.
+
+**What users get without R:**
+
+- Upload response and response-time CSVs  
+- Prompt analysis (natural-language model settings)  
+- Psych-MAS summaries (descriptive, model fit, item fit, Wright Map, ICC, person parameters, RT) — requires API key in Model engine  
+- Response-time analysis (latency flags, RT histograms)  
+- APA report (PDF) — without IRT tables/figures when R is not available  
+- Advanced Analysis chat  
+
+**What is skipped without R:** IRT fitting, ICC plots, Wright Map, model fit (M2), item/person parameters. The app shows a short notice at the top and skips those steps with a clear message.
+
+### Option 2: Railway + Docker (full IRT, users still don’t install R)
+
+To give users **full IRT** (ICC, Wright Map, mirt) without each user installing R, deploy with **Railway** using the included **Dockerfile** (see **Deploy on Railway** above). The image installs R, mirt/WrightMap/psych, and Streamlit; users only need the app URL. You can also use the same Dockerfile on Render, Fly.io, or any host that runs Docker.
+
+---
+
 ## Project layout
 
 | Path              | Purpose |
 |-------------------|--------|
 | `ui.py`           | Streamlit UI, LLM calls, APA PDF builder |
 | `graph.py`        | LangGraph workflow (IRT, RT, prompt analysis) |
+| `Dockerfile`      | Docker image for Railway/Render (R + R packages + Streamlit) |
+| `.dockerignore`   | Excludes unneeded files from Docker build context |
 | `langgraph.json`  | LangGraph CLI config (`psych_workflow` → `graph.py:app`) |
 | `openrouter_models.py` | OpenRouter free model list for Model engine |
 | `pyproject.toml`  | Dependencies (langgraph, streamlit, rpy2, reportlab, etc.) |

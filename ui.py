@@ -462,7 +462,11 @@ def _check_r_packages() -> tuple[bool, str | None]:
     try:
         import rpy2.robjects as ro
     except Exception as exc:
-        return False, f"R/rpy2 not available ({exc}). Install R and Python rpy2 for IRT analysis."
+        return False, (
+            "R is not available in this environment (e.g. Streamlit Cloud). "
+            "IRT, ICC, and Wright Map are skipped. You can still use LLM summaries, RT analysis, and APA report. "
+            "For full IRT, run the app locally with R (see README)."
+        )
     try:
         for pkg in ("mirt", "WrightMap", "psych"):
             r_ok = ro.r(f'require("{pkg}", quietly=TRUE)')
@@ -477,11 +481,14 @@ def _check_r_packages() -> tuple[bool, str | None]:
                 return False, (
                     f"R package '{pkg}' not installed. "
                     "Run in terminal: Rscript install_r_packages.R  "
-                    "Or in R: install.packages(c('mirt','WrightMap','psych'), repos='https://cloud.r-project.org')"
+                    "Or in R: install.packages(c('mirt','WrightMap','psych'), repos='https://cloud.r-project.org').  "
+                    "On Streamlit Cloud, IRT is not available; run the app locally with R for full IRT."
                 )
         return True, None
     except Exception as exc:
-        return False, f"Could not check R packages: {exc}"
+        return False, (
+            "Could not check R packages. On Streamlit Cloud, IRT is not available; run locally with R for full IRT."
+        )
 
 
 def _plot_item_accuracy(resp_df: pd.DataFrame) -> str | None:
@@ -1669,6 +1676,14 @@ st.markdown(
     "Upload **response** and **response-time** CSVs."
     #"workflow as initial state; the Orchestrator then dispatches to IRT, RT, and Analyze."
 )
+
+# Notice for users without R (e.g. Streamlit Cloud): no install needed, list what works
+_r_ok, _ = _check_r_packages()
+if not _r_ok:
+    st.info(
+        "**Running without R.** You can use: prompt analysis, LLM summaries (set API key in Model engine), "
+        "response-time analysis, and APA report. IRT, ICC, and Wright Map are not available in this deployment."
+    )
 
 st.subheader("Input your psychometric analysis task")
 if "model_settings" not in st.session_state:
