@@ -24,6 +24,13 @@ from dotenv import load_dotenv
 
 from graph import analyze_prompt, psych_workflow
 
+# Initialize R from main thread to avoid rpy2 "R is not initialized by the main thread" warning
+try:
+    import rpy2.robjects as _ro
+    _ro.r("1+1")
+except Exception:
+    pass
+
 # Model engine options for Psych-MAS Summary (display label, API model name)
 GEMINI_MODEL_OPTIONS = [
     ("Gemini 1.5 Flash (latest)", "models/gemini-1.5-flash-latest"),
