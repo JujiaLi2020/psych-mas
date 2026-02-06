@@ -2,6 +2,7 @@
 
 **Psychometric Modeling Assistant System** — Load response and response-time data, describe your IRT model in natural language, confirm settings, then run the workflow. View item/person parameters, Wright Map, item fit, ICC plots, and RT histograms. Includes LLM-assisted prompt interpretation, Psych-MAS summaries, and APA report generation.
 
+The Test Port is: [psych-mas.up.railway.app](psych-mas.up.railway.app)
 ---
 
 ## Features
