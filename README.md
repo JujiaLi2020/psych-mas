@@ -4,7 +4,6 @@
 
 ## The Test Port is:
 [https://psych-mas.up.railway.app/](https://psych-mas.up.railway.app/)
-<a href="https://psych-mas.up.railway.app/" target="_blank">Open Test Port</a>
 ---
 
 ## Features
