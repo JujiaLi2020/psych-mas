@@ -1,6 +1,7 @@
 {
     "dependencies": ["."],
     "graphs": {
-      "psych_workflow": "./graph.py:app"
+      "psych_workflow": "./graph.py:app",
+      "forensic_workflow": "./graph.py:forensic_workflow"
     }
   }
