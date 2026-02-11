@@ -50,9 +50,39 @@ DEFAULT_GEMINI_MODEL_IDS = [api_id for _, api_id in GEMINI_MODEL_OPTIONS]
 from openrouter_models import OPENROUTER_FREE_MODEL_IDS, OPENROUTER_FREE_MODELS
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+BACKEND_URL = os.getenv("PSYMAS_BACKEND_URL", "http://localhost:8000")
 
 # Aberrance tab: function list and payload key (used when building workflow payload)
 ABERRANCE_FUNCTIONS = ["detect_rg", "detect_pm", "detect_ac", "detect_pk", "detect_as", "detect_nm", "detect_tt"]
+
+
+def _backend_status_summary() -> tuple[bool, str]:
+    """Check LangGraph backend reachability + last job status for compact UI badges."""
+    base_note = ""
+    ok = False
+    # Network/health check (very lightweight).
+    try:
+        resp = requests.get(f"{BACKEND_URL}/health", timeout=3)
+        resp.raise_for_status()
+        js = resp.json()
+        if js.get("status") == "ok":
+            ok = True
+        else:
+            base_note = "backend health error"
+    except Exception:
+        return False, "unreachable"
+
+    detect_status = st.session_state.get("detect_job_status", "pending")
+    if detect_status == "running":
+        note = "running"
+    elif detect_status == "done":
+        note = "idle (last run ok)"
+    elif detect_status == "error":
+        ok = False
+        note = "last run error"
+    else:
+        note = base_note or "idle"
+    return ok, note
 
 
 def _call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: int = 90) -> tuple[str | None, str | None]:
@@ -392,6 +422,19 @@ def _paginate_df(df: pd.DataFrame, label: str) -> None:
     start = (page - 1) * page_size
     end = start + page_size
     st.dataframe(filtered_df.iloc[start:end], width="stretch")
+
+
+def _json_safe(obj: object) -> object:
+    """Recursively replace NaN/inf with None so payloads are JSON-compliant."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 def _filter_and_sort_df(df: pd.DataFrame, label: str) -> pd.DataFrame:
@@ -2563,15 +2606,16 @@ if run_mode == "Command Center":
 
 with st.sidebar:
     st.title("PsyMAS-Aberrance")
-    st.caption("Ver. 0.2.0— Psychometric MAS for detecting aberrant test behavior.")
+    st.caption("Ver. 0.3.0— Psychometric MAS for detecting aberrant test behavior.")
     st.divider()
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))
     _has_psi = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
     _has_forensic = bool(st.session_state.get("forensic_result"))
+    _detect_status = st.session_state.get("detect_job_status", "pending")
     _nav_ready = {
         "Preparation": True,
-        "Detect Progress": False,
+        "Detect Progress": _detect_status == "done",
         "Data review": _has_resp,
         "Aberrance Summary": _has_forensic,
         "Student Profile": _has_forensic,
@@ -2593,7 +2637,16 @@ with st.sidebar:
             "Temporal Forensics": "⏳ Temporal Forensics",
         }.get(x, x)
         # Show a dot for every option (clearer readiness affordance)
-        return ("🟢 " if _nav_ready.get(x) else "⚪ ") + base
+        if x == "Detect Progress":
+            if _detect_status == "running":
+                dot = "🟡 "
+            elif _detect_status == "done" and _has_forensic:
+                dot = "🟢 "
+            else:
+                dot = "⚪ "
+        else:
+            dot = "🟢 " if _nav_ready.get(x) else "⚪ "
+        return dot + base
     sidebar_choice = st.radio(
         "Navigate",
         options=NAV_OPTIONS,
@@ -2607,62 +2660,39 @@ with st.sidebar:
     st.caption("Start on **Preparation** to upload data / generate ψ / test LLM.")
     st.divider()
 
-    st.markdown("**Data upload**")
-    sidebar_resp = st.file_uploader(
-        "Response (CSV)",
-        type=["csv"],
-        key="sidebar_resp",
-        help="Item responses 0/1, rows=persons, cols=items.",
-    )
-    sidebar_rt = st.file_uploader(
-        "RT (CSV, optional)",
-        type=["csv"],
-        key="sidebar_rt",
-        help="Same layout as response. Required for rapid guessing.",
-    )
-    if sidebar_resp is not None:
-        try:
-            sidebar_resp.seek(0)
-            _r = pd.read_csv(sidebar_resp)
-            _r = _drop_index_column(_r)
-            _r = _validate_binary_responses(_r)
-            st.session_state.last_uploaded_responses = _r.to_dict(orient="records")
-            _rt_list = []
-            if sidebar_rt is not None:
-                try:
-                    sidebar_rt.seek(0)
-                    _rt = pd.read_csv(sidebar_rt)
-                    _rt = _drop_index_column(_rt)
-                    _rt = _coerce_numeric(_rt, "RT")
-                    if _r.shape[1] == _rt.shape[1]:
-                        _rt = _align_rt_columns_to_response(_rt, _r)
-                        _rt_list = _rt.to_dict(orient="records")
-                except Exception:
-                    pass
-            st.session_state.last_uploaded_rt_data = _rt_list
-        except Exception as e:
-            st.warning(f"Response file: {e}")
-    # Allow RT upload even when Response wasn't re-uploaded in this rerun
-    elif sidebar_rt is not None and st.session_state.get("last_uploaded_responses"):
-        try:
-            sidebar_rt.seek(0)
-            _rt = pd.read_csv(sidebar_rt)
-            _rt = _drop_index_column(_rt)
-            _rt = _coerce_numeric(_rt, "RT")
-            _r_prev = pd.DataFrame(st.session_state.last_uploaded_responses)
-            if _r_prev.shape[1] == _rt.shape[1]:
-                _rt = _align_rt_columns_to_response(_rt, _r_prev)
-            # Store regardless of column match; downstream uses first N columns by position
-            st.session_state.last_uploaded_rt_data = _rt.to_dict(orient="records")
-        except Exception:
-            # Keep prior RT if parsing fails
-            pass
-    if st.session_state.get("last_uploaded_responses"):
-        n_r = len(st.session_state.last_uploaded_responses)
-        n_c = len(st.session_state.last_uploaded_responses[0]) if n_r else 0
-        st.caption(f"✓ Response: {n_r} rows × {n_c} items")
-        if st.session_state.get("last_uploaded_rt_data"):
-            st.caption("✓ RT: loaded")
+    # Compact session status overview in the sidebar (no upload widgets here)
+    st.markdown("**Session status**")
+    resp_loaded = bool(st.session_state.get("last_uploaded_responses"))
+    rt_loaded = bool(st.session_state.get("last_uploaded_rt_data"))
+    psi_loaded = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
+    comp_items = st.session_state.get("prep_compromised_items") or []
+    comp_ok = bool(comp_items)
+
+    provider_sb = st.session_state.get("llm_provider", "openrouter")
+    or_key_sb = os.getenv("OPENROUTER_API_KEY", "")
+    g_key_sb = os.getenv("GOOGLE_API_KEY", "")
+    llm_configured_sb = bool(or_key_sb.strip()) if provider_sb == "openrouter" else bool(g_key_sb and g_key_sb.strip())
+
+    def _sb_line(label: str, ok: bool, extra: str = "") -> str:
+        dot = "🟢" if ok else "⚪"
+        txt = f"{dot} {label}"
+        if extra:
+            txt += f" — {extra}"
+        return txt
+
+    n_r = len(st.session_state.get("last_uploaded_responses") or [])
+    n_c = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_r else 0
+    if resp_loaded:
+        data_extra = f"{n_r}×{n_c}" + (" + RT" if rt_loaded else "")
+    else:
+        data_extra = "not loaded"
+
+    st.caption(_sb_line("Data", resp_loaded, data_extra))
+    st.caption(_sb_line("ψ (item params)", psi_loaded, "ready" if psi_loaded else "not ready"))
+    st.caption(_sb_line("Compromised items", comp_ok, f"{len(comp_items)} set" if comp_ok else "none"))
+    st.caption(_sb_line(f"LLM ({provider_sb})", llm_configured_sb, "configured" if llm_configured_sb else "missing key"))
+    backend_ok, backend_note = _backend_status_summary()
+    st.caption(_sb_line("LangGraph Agents", backend_ok, backend_note))
     st.divider()
 
 # ----- Main content: module title only when not Preparation -----
@@ -3178,6 +3208,8 @@ if run_mode == "Preparation":
     _dot = lambda ok: f"<span class='psymas-dot {'psymas-dot-ready' if ok else 'psymas-dot-bad'}'></span>"
     _esc = lambda s: (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
+    backend_ok, backend_note = _backend_status_summary()
+
     # Detect button is always green; it is disabled until everything is ready.
     all_ready = bool(resp_loaded and rt_loaded and psi_loaded and llm_configured)
     _run_bg = "#00c853"
@@ -3212,6 +3244,7 @@ if run_mode == "Preparation":
           <span class="psymas-pill" title="{_esc('RT loaded' if rt_loaded else 'RT missing')}">{_dot(rt_loaded)}RT</span>
           <span class="psymas-pill" title="{_esc('Item parameters (ψ) ready' if psi_loaded else 'Item parameters (ψ) missing')}">{_dot(psi_loaded)}ψ</span>
           <span class="psymas-pill" title="{_esc('LLM configured' if llm_configured else 'LLM key missing for selected provider')}">{_dot(llm_configured)}LLM ({llm_short})</span>
+          <span class="psymas-pill" title="{_esc('LangGraph agents status')}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3407,44 +3440,68 @@ if run_mode == "Preparation":
         )
 
     if run_forensic:
-        # Start a dedicated progress page run (avoids doing heavy work on Preparation)
-        _payload = {
+        # Start a backend job instead of running LangGraph directly in Streamlit
+        raw_payload = {
+            "responses": st.session_state.get("last_uploaded_responses") or [],
+            "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
             "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
             "compromised_items": st.session_state.get("prep_compromised_items") or [],
+            "model_settings": st.session_state.get("model_settings") or {},
+            # Reuse ψ generated on Preparation to keep IRT parameters identical.
+            "psi_data": st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or [],
         }
-        st.session_state["detect_payload"] = _payload
-        st.session_state["detect_job_id"] = str(uuid.uuid4())
-        st.session_state["detect_job_status"] = "pending"
-        st.session_state["detect_job_started_at"] = time.time()
-        st.session_state["detect_job_error"] = None
-        st.session_state["_nav_request"] = "Detect Progress"
-        st.rerun()
+        payload = _json_safe(raw_payload)
+        try:
+            resp = requests.post(f"{BACKEND_URL}/detect", json=payload, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            run_id = data.get("run_id")
+            if not run_id:
+                st.error("Detection backend did not return a run_id.")
+            else:
+                st.session_state["detect_run_id"] = run_id
+                st.session_state["detect_job_status"] = "running"
+                st.session_state["detect_job_error"] = None
+                st.session_state["_nav_request"] = "Detect Progress"
+                st.rerun()
+        except Exception as e:
+            st.error(f"Failed to start detection backend: {e}")
 
 elif run_mode == "Detect Progress":
     load_dotenv()
     st.subheader("⏳ Detect Progress")
     st.caption("Running IRT (ψ) and 8 aberrance agents. Keep this page open until it finishes.")
 
-    # Green button styling (same color as Detect)
-    _run_bg = "#00c853"
-    _run_bg_hover = "#00b248"
-    st.markdown(
-        f"""
-        <style>
-          div[data-testid="stContainer"]:has(.psymas-goresults-marker) div[data-testid="stButton"] > button {{
-            background: {_run_bg} !important;
-            border: 1px solid rgba(255,255,255,0.18) !important;
-            color: white !important;
-            font-weight: 650 !important;
-          }}
-          div[data-testid="stContainer"]:has(.psymas-goresults-marker) div[data-testid="stButton"] > button:hover {{
-            background: {_run_bg_hover} !important;
-            border-color: rgba(255,255,255,0.28) !important;
-          }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Optional: force a fresh LangGraph rerun using current session data
+    with st.expander("Advanced controls", expanded=False):
+        st.caption("If a previous run stalled or you changed settings, you can force a fresh aberrance detection rerun.")
+        if st.button("Re-run Detect now", key="detect_force_rerun", use_container_width=True):
+            raw_payload = {
+                "responses": st.session_state.get("last_uploaded_responses") or [],
+                "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
+                "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
+                "compromised_items": st.session_state.get("prep_compromised_items") or [],
+                "model_settings": st.session_state.get("model_settings") or {},
+                "psi_data": st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or [],
+            }
+            payload = _json_safe(raw_payload)
+            try:
+                resp = requests.post(f"{BACKEND_URL}/detect", json=payload, timeout=20)
+                resp.raise_for_status()
+                data = resp.json()
+                run_id = data.get("run_id")
+                if not run_id:
+                    st.error("Detection backend did not return a run_id.")
+                else:
+                    st.session_state["detect_run_id"] = run_id
+                    st.session_state["detect_job_status"] = "running"
+                    st.session_state["detect_job_error"] = None
+                    # Clear previous forensic_result so summary reflects the new run
+                    st.session_state.pop("forensic_result", None)
+                    st.session_state["_nav_request"] = "Detect Progress"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to start detection backend: {e}")
 
     if not st.session_state.get("last_uploaded_responses"):
         st.error("No Response data in session. Go back to **Preparation** and upload Response (and RT).")
@@ -3462,51 +3519,48 @@ elif run_mode == "Detect Progress":
 
         _job_status = st.session_state.get("detect_job_status", "pending")
         if _job_status == "done" and st.session_state.get("forensic_result"):
-            st.success("Detection completed.")
-            with st.container():
-                st.markdown("<div class='psymas-goresults-marker'></div>", unsafe_allow_html=True)
-                if st.button("Go to Aberrance Summary", use_container_width=True, type="primary"):
-                    st.session_state["_nav_request"] = "Aberrance Summary"
-                    st.session_state.just_switched_module = "Aberrance Summary"
-                    st.rerun()
-        else:
-            # Run now (synchronous) with live UI updates.
+            st.success("Detection completed. Use the sidebar to open **Aberrance Summary**.")
+        elif _job_status == "error":
+            st.error(
+                "Detection failed: "
+                + (st.session_state.get("detect_job_error") or "Unknown error.")
+            )
+
+        # Poll backend job and visualize progress (also when re-opening after completion).
+        if _job_status not in ("done", "error"):
             st.session_state["detect_job_status"] = "running"
             st.session_state["detect_job_error"] = None
 
-            _prog = st.progress(0)
-            _status = st.empty()
-            st.session_state["_detect_prog_current"] = 0
+        _prog = st.progress(0)
+        _status = st.empty()
+        st.session_state["_detect_prog_current"] = 0
 
-            def _smooth_to(target: int, *, duration_s: float = 0.35) -> None:
-                target = max(0, min(100, int(target)))
-                try:
-                    start = int(st.session_state.get("_detect_prog_current", 0))
-                except Exception:
-                    start = 0
-                if target <= start:
-                    _prog.progress(target)
-                    st.session_state["_detect_prog_current"] = target
-                    return
-                steps = max(1, int(duration_s / 0.02))
-                for i in range(1, steps + 1):
-                    v = start + (target - start) * (i / steps)
-                    _prog.progress(int(v))
-                    time.sleep(0.02)
+        def _smooth_to(target: int, *, duration_s: float = 0.35) -> None:
+            target = max(0, min(100, int(target)))
+            try:
+                start = int(st.session_state.get("_detect_prog_current", 0))
+            except Exception:
+                start = 0
+            if target <= start:
                 _prog.progress(target)
                 st.session_state["_detect_prog_current"] = target
+                return
+            steps = max(1, int(duration_s / 0.02))
+            for i in range(1, steps + 1):
+                v = start + (target - start) * (i / steps)
+                _prog.progress(int(v))
+                time.sleep(0.02)
+            _prog.progress(target)
+            st.session_state["_detect_prog_current"] = target
 
-            responses = st.session_state["last_uploaded_responses"]
-            rt_data = st.session_state.get("last_uploaded_rt_data") or []
-            _payload = st.session_state.get("detect_payload") or {}
-            ci = _payload.get("compromised_items") or []
-            _prep_itemtype = _payload.get("itemtype") or st.session_state.get("main_irt_itemtype", "2PL")
+        responses = st.session_state["last_uploaded_responses"]
+        rt_data = st.session_state.get("last_uploaded_rt_data") or []
 
-            st.markdown("**Working status**")
-            # Placeholder for a LangGraph-style tree visualization (Graphviz), centered in the layout
-            _left_spacer, tree_col, _right_spacer = st.columns([2, 7, 2])
-            with tree_col:
-                graph_placeholder = st.empty()
+        st.markdown("**Working status**")
+        # Placeholder for a LangGraph-style tree visualization (Graphviz), centered in the layout
+        _left_spacer, tree_col, _right_spacer = st.columns([2, 7, 2])
+        with tree_col:
+            graph_placeholder = st.empty()
 
             # Define agents for LangGraph-style visualization (LangGraph-style tree).
             _agent_defs = [
@@ -3602,7 +3656,7 @@ elif run_mode == "Detect Progress":
             # Initial render so the tree appears immediately on entering Detect Progress.
             _render_agent_graph()
 
-            # IRT status (ψ generation) shown separately from the agent tree
+            # IRT / RT status shown separately from the agent tree (driven by backend state)
             left, right = st.columns(2, gap="small")
             with left:
                 irt_box = st.status("IRT (ψ generation)", state="running", expanded=False)
@@ -3610,185 +3664,66 @@ elif run_mode == "Detect Progress":
                 rt_box = st.status("Response Time data (RT)", state="complete" if rt_data else "error", expanded=False)
             _smooth_to(5, duration_s=0.15)
 
-            psi_data = []
-            try:
-                _status.markdown(f"**Step 1/2** — IRT (`{_prep_itemtype}`)")
-                _smooth_to(12, duration_s=0.20)
-                _cc_model_settings = {
-                    **(st.session_state.get("model_settings") or {}),
-                    "itemtype": _prep_itemtype,
-                }
-                irt_state = {
-                    "responses": responses,
-                    "rt_data": rt_data,
-                    "theta": 0.0,
-                    "latency_flags": [],
-                    "next_step": "start",
-                    "model_settings": _cc_model_settings,
-                    "is_verified": True,
-                }
-                irt_result = irt_agent(irt_state)
-                if irt_result.get("item_params"):
-                    psi_data = irt_result["item_params"]
-                    st.session_state["last_irt_item_params"] = psi_data
-                    st.session_state["item_params"] = psi_data
-                    if irt_result.get("person_params"):
-                        st.session_state["forensic_person_params"] = irt_result["person_params"]
-                    irt_box.update(state="complete", expanded=False)
-                else:
-                    irt_box.update(state="error", expanded=False)
-                    st.warning("IRT returned no item parameters. Agents requiring ψ (pm, ac, pk) will be limited.")
-                _smooth_to(35, duration_s=0.30)
-            except Exception as e:
-                irt_box.update(state="error", expanded=False)
-                st.warning(f"IRT estimation failed: {e}. Agents requiring ψ will be limited.")
-                _smooth_to(35, duration_s=0.20)
-
-            # Step 2: Forensic workflow (stream to update per-agent status)
-            _status.markdown("**Step 2/2** — Aberrance detection (8 agents)")
-            # Mark router as running once the aberrance phase starts and refresh the tree.
-            node_states["router"] = "running"
-            _render_agent_graph()
-            _smooth_to(45, duration_s=0.20)
-
-            _llm_provider_now = st.session_state.get("llm_provider", "openrouter")
-            _effective_model_now = _effective_llm_model()
-            _or_key = os.getenv("OPENROUTER_API_KEY", "")
-            _google_key = os.getenv("GOOGLE_API_KEY", "")
-            _chosen_provider = _llm_provider_now
-            _chosen_model = _effective_model_now
-            if _llm_provider_now == "openrouter" and _or_key:
-                _candidates = _model_variants_with_selected_first()
-                _picked = None
-                _picked_err = None
-                for _mid in _candidates:
-                    ok, err, _elapsed = _test_openrouter_model(_or_key, _mid, timeout=20)
-                    if ok:
-                        _picked = _mid
-                        break
-                    _picked_err = err
-                if _picked:
-                    _chosen_model = _picked
-                else:
-                    st.warning(f"OpenRouter test failed for selected models. Last error: {_picked_err}")
-            elif _llm_provider_now == "openrouter" and not _or_key and _google_key:
-                _chosen_provider = "google"
-
-            _forensic_model_settings = {
-                **(st.session_state.get("model_settings") or {}),
-                "llm_provider": _chosen_provider,
-                "openrouter_api_key": _or_key,
-                "google_api_key": _google_key,
-                "llm_model_id": _chosen_model,
-            }
-            forensic_state = {
-                "responses": responses,
-                "rt_data": rt_data,
-                "theta": 0.0,
-                "latency_flags": [],
-                "next_step": "start",
-                "model_settings": _forensic_model_settings,
-                "is_verified": True,
-                "psi_data": psi_data,
-                "compromised_items": ci,
-                "flags": {},
-                "final_report": "",
-            }
-
-            result = dict(forensic_state)
-            result.setdefault("flags", {})
-
-            def _merge_state_fragment(fragment: dict) -> None:
-                if not isinstance(fragment, dict):
-                    return
-                for kk, vv in fragment.items():
-                    if kk == "flags" and isinstance(vv, dict):
-                        result["flags"] = {**(result.get("flags") or {}), **vv}
-                    else:
-                        result[kk] = vv
-
-            done: set[str] = set()
-            expected = len(_agent_defs)
-
-            def _mark_done(node_name: str) -> None:
-                if node_name in done:
-                    return
-                done.add(node_name)
-                maybe_err = None
+            # Poll backend once for this rerun to update progress + agent statuses.
+            run_id = st.session_state.get("detect_run_id")
+            if not run_id:
+                st.info("No active detection run. Go back to **Preparation** and start Detect again.")
+            else:
                 try:
-                    if node_name not in ("router", "synthesizer"):
-                        maybe_err = (result.get("flags") or {}).get(node_name, {}).get("error")
-                except Exception:
-                    maybe_err = None
-                # Update node state for graph
-                if node_name in node_states:
-                    node_states[node_name] = "error" if maybe_err else "done"
-                _render_agent_graph()
-                # Progress advances with completions (after IRT we are ~35%).
-                p = 35 + int(60 * (len(done) / max(1, expected)))
-                _smooth_to(min(97, p), duration_s=0.10)
+                    status_resp = requests.get(f"{BACKEND_URL}/detect/{run_id}/status", timeout=20)
+                    status_resp.raise_for_status()
+                    js = status_resp.json()
+                except Exception as e:
+                    st.session_state["detect_job_status"] = "error"
+                    st.session_state["detect_job_error"] = str(e)
+                    st.error(f"Failed to contact detection backend: {e}")
+                else:
+                    backend_status = js.get("status", "pending")
+                    backend_progress = int(js.get("progress", 0))
+                    backend_nodes = js.get("node_states") or {}
+                    irt_status = js.get("irt_status", "pending")
 
-            try:
-                stream_ok = False
-                try:
-                    for chunk in forensic_workflow.stream(forensic_state, stream_mode="updates"):
-                        stream_ok = True
-                        if not isinstance(chunk, dict):
-                            continue
-                        if any(k in chunk for k in ("flags", "final_report")):
-                            _merge_state_fragment(chunk)
-                            continue
-                        for node_name, fragment in chunk.items():
-                            if isinstance(fragment, dict):
-                                _merge_state_fragment(fragment)
-                            _mark_done(node_name)
-                except TypeError:
-                    for chunk in forensic_workflow.stream(forensic_state):
-                        stream_ok = True
-                        if not isinstance(chunk, dict):
-                            continue
-                        if any(k in chunk for k in ("flags", "final_report")):
-                            _merge_state_fragment(chunk)
-                            continue
-                        for node_name, fragment in chunk.items():
-                            if isinstance(fragment, dict):
-                                _merge_state_fragment(fragment)
-                            _mark_done(node_name)
+                    # Update IRT / RT boxes
+                    irt_box.update(state="complete" if irt_status in ("done", "skipped") else "running", expanded=False)
+                    rt_box.update(state="complete" if rt_data else "error", expanded=False)
 
-                if not stream_ok:
-                    result = forensic_workflow.invoke(forensic_state)
-                    for node_name, _label in _agent_defs:
+                    # Update progress bar and tree colors
+                    _smooth_to(min(backend_progress, 97), duration_s=0.20)
+                    for node_name, state in backend_nodes.items():
                         if node_name in node_states:
-                            node_states[node_name] = "done"
+                            node_states[node_name] = state
                     _render_agent_graph()
 
-                # Ensure any not-emitted nodes are marked complete and mark synthesizer done
-                for node_name, _label in _agent_defs:
-                    if node_name not in done and node_name in node_states:
-                        node_states[node_name] = "done"
-                node_states["synthesizer"] = "done"
-                _render_agent_graph()
-                _smooth_to(100, duration_s=0.25)
+                    if backend_status == "error":
+                        err_msg = js.get("error") or "Backend reported an error."
+                        st.session_state["detect_job_status"] = "error"
+                        st.session_state["detect_job_error"] = err_msg
+                        if _job_status != "error":
+                            st.error(f"Detection failed: {err_msg}")
 
-                st.session_state["forensic_result"] = result
-                st.session_state["forensic_responses"] = responses
-                st.session_state["forensic_rt_data"] = rt_data
-                st.session_state["forensic_psi_data"] = psi_data
-                st.session_state["detect_job_status"] = "done"
-                st.success("Detection completed.")
-                with st.container():
-                    st.markdown("<div class='psymas-goresults-marker'></div>", unsafe_allow_html=True)
-                    if st.button("Go to Aberrance Summary", use_container_width=True, type="primary"):
-                        st.session_state.run_mode = "Aberrance Summary"
-                        st.session_state.just_switched_module = "Aberrance Summary"
-                        st.rerun()
-            except Exception as e:
-                st.session_state["detect_job_status"] = "error"
-                st.session_state["detect_job_error"] = str(e)
-                st.exception(e)
-                if st.button("Back to Preparation", use_container_width=True):
-                    st.session_state.run_mode = "Preparation"
-                    st.rerun()
+                    elif backend_status == "done":
+                        try:
+                            res_resp = requests.get(f"{BACKEND_URL}/detect/{run_id}/result", timeout=20)
+                            res_resp.raise_for_status()
+                            res_js = res_resp.json()
+                            result = res_js.get("result") or {}
+                        except Exception as e:
+                            st.session_state["detect_job_status"] = "error"
+                            st.session_state["detect_job_error"] = str(e)
+                            st.error(f"Failed to fetch final result: {e}")
+                        else:
+                            st.session_state["forensic_result"] = result
+                            st.session_state["forensic_responses"] = responses
+                            st.session_state["forensic_rt_data"] = rt_data
+                            st.session_state["forensic_psi_data"] = result.get("psi_data") or []
+                            st.session_state["detect_job_status"] = "done"
+                            _smooth_to(100, duration_s=0.25)
+                            st.success("Detection completed. Use the sidebar to open **Aberrance Summary**.")
+
+                    if backend_status in ("running", "pending"):
+                        _status.caption("Job still running. Click **Refresh status** below to update.")
+                        if st.button("Refresh status", key="detect_refresh_status", use_container_width=True):
+                            st.rerun()
 
 elif run_mode == "Data review":
     resp_data = st.session_state.get("last_uploaded_responses") or []
@@ -3897,7 +3832,7 @@ elif run_mode == "Aberrance Summary":
 
     # ── Dashboard (results) ──
     if not st.session_state.get("forensic_result"):
-        st.info("Click **RUN FORENSIC ANALYSIS** above to generate the dashboard.")
+        st.info("Run **Detect** on the Preparation page to generate the dashboard.")
     else:
         fr = st.session_state["forensic_result"]
         flags = fr.get("flags", {})
@@ -3905,16 +3840,49 @@ elif run_mode == "Aberrance Summary":
 
         # ── Top Section: Generative Report ──
         st.subheader("Forensic Verdict")
-        if final_report:
-            report_lower = final_report.lower()
-            if "critical" in report_lower:
-                st.markdown(f'<div class="threat-critical">{final_report}</div>', unsafe_allow_html=True)
-            elif "warning" in report_lower:
-                st.markdown(f'<div class="threat-warning">{final_report}</div>', unsafe_allow_html=True)
+        col_verdict, col_actions = st.columns([4, 1])
+        with col_verdict:
+            if final_report:
+                report_lower = final_report.lower()
+                if "critical" in report_lower:
+                    st.markdown(f'<div class="threat-critical">{final_report}</div>', unsafe_allow_html=True)
+                elif "warning" in report_lower:
+                    st.markdown(f'<div class="threat-warning">{final_report}</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(final_report)
             else:
-                st.markdown(final_report)
-        else:
-            st.info("No report generated (LLM may not be configured).")
+                st.info("No report generated (LLM may not be configured).")
+        with col_actions:
+            if st.button("Regenerate", key="regen_forensic_verdict", use_container_width=True):
+                try:
+                    from graph import manager_synthesizer
+                    # Use current sidebar/Preparation LLM selection for regeneration
+                    load_dotenv()
+                    _provider = st.session_state.get("llm_provider", "openrouter")
+                    _model_id = _effective_llm_model()
+                    _or_key = os.getenv("OPENROUTER_API_KEY", "")
+                    _google_key = os.getenv("GOOGLE_API_KEY", "")
+                    _regen_model_settings = {
+                        **(st.session_state.get("model_settings") or {}),
+                        "llm_provider": _provider,
+                        "llm_model_id": _model_id,
+                        "openrouter_api_key": _or_key,
+                        "google_api_key": _google_key,
+                    }
+                    regen_state = {
+                        "flags": flags,
+                        "model_settings": _regen_model_settings,
+                    }
+                    regen_result = manager_synthesizer(regen_state)
+                    new_report = regen_result.get("final_report")
+                    if new_report:
+                        st.session_state["forensic_result"]["final_report"] = new_report
+                        final_report = new_report
+                        st.success("Forensic verdict regenerated.")
+                    else:
+                        st.warning("LLM did not return a new report.")
+                except Exception as e:
+                    st.error(f"Could not regenerate forensic verdict: {e}")
         st.divider()
 
         # ── Middle Section: Visuals ──

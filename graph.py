@@ -1693,9 +1693,21 @@ def manager_synthesizer(state: State) -> dict:
 
     specialist_report = "\n\n".join(specialist_summary_parts) if specialist_summary_parts else "No specialist results available."
 
-    prompt = f"""You are a forensic psychometric analyst. Below are the results from 8 specialist detection agents that analyzed a test dataset for aberrant behavior.
+    prompt = f"""You are a test-security data forensics expert writing a short, professional report.
 
-## Specialist Results
+You are given the outputs from multiple aberrance detectors for a single exam administration:
+- Parametric misfit (detect_pm)
+- Nonparametric misfit / Guttman errors (detect_nm)
+- Answer copying (detect_ac)
+- Answer similarity / clusters (detect_as)
+- Rapid guessing and effort (detect_rg)
+- Change-point in behavior (detect_cp)
+- Tampering / erasures (detect_tt)
+- Preknowledge on compromised items (detect_pk)
+
+Below is a compact summary of the specialist agents' outputs and a ranking of high-risk examinees.
+
+## Specialist Results (raw summary)
 
 {specialist_report}
 
@@ -1705,13 +1717,45 @@ def manager_synthesizer(state: State) -> dict:
 
 ## Task
 
-Synthesize a **Forensic Verdict** in Markdown format. You MUST:
-1. Categorize detected threats into: **Collusion** (from ac_agent, as_agent), **Speed Anomalies** (from rg_agent, cp_agent), **Model Misfit** (from pm_agent, nm_agent), **Tampering/Preknowledge** (from tt_agent, pk_agent).
-2. For each threat category, state severity (Critical/Warning/Clear) and list affected students.
-3. Identify the **Top 5 High-Risk Students** with a brief explanation for each.
-4. Provide an overall threat assessment summary.
+Write a concise **Forensic Verdict** in Markdown format, following this structure EXACTLY:
 
-Be concise but thorough. Use Markdown headers and bullet points."""
+1. **Case Overview**  
+   - Briefly describe what was analyzed (generic exam description if unknown), what data were used (responses, response times, item parameters ψ, compromised items), and whether all eight detectors had usable data.
+
+2. **Global Risk Assessment**  
+   - Give an overall assessment of exam integrity using one of: **Low concern**, **Moderate concern**, or **High concern**.  
+   - Justify this in 2–3 sentences, referring to the relative strength and consistency of the statistical evidence across detectors.
+
+3. **Findings by Threat Dimension**  
+   For each dimension below, include a short paragraph. If a dimension has essentially no evidence, say that explicitly and keep it brief.
+
+   - **Model Misfit & Ability–Performance Anomalies** (detect_pm, detect_nm):  
+     Summarize how many examinees are flagged (approximate counts or percentages if available), and whether misfit is scattered or concentrated.
+
+   - **Collusion & Similarity** (detect_ac, detect_as):  
+     Summarize whether there are suspicious source–copier pairs or clusters, and whether they exceed typical p-value thresholds (e.g., p < .05). If no convincing evidence, say so clearly.
+
+   - **Speed / Effort Anomalies** (detect_rg, detect_cp):  
+     Describe the presence/absence of large groups of rapid guessers and any clear change-points where behavior shifts from normal effort to low effort or vice versa.
+
+   - **Tampering & Preknowledge** (detect_tt, detect_pk):  
+     Describe whether tampering indicators or preknowledge on compromised items are observed, and at what rough magnitude.
+
+4. **Watchlist (High-Risk Examinees)**  
+   - Provide a short bullet list of up to 5–10 highest-risk examinees.  
+   - Each bullet: “ID X: flagged by [detectors], brief 1-sentence rationale.”  
+   - Only include examinees where the statistical evidence is clearly non-trivial.
+
+5. **Interpretive Notes & Limitations**  
+   - Emphasize that these detectors provide **statistical indicators, not proof** of misconduct.  
+   - Mention any relevant limitations you can infer (e.g., no RT data, no compromised items specified, very few flags).
+
+STYLE REQUIREMENTS:
+- Use clear, neutral, professional language suitable for a psychometric / test-security audience.
+- Be concise: total length **no more than ~500 words**.
+- Do NOT invent exact numeric values that are not implied by the input. When necessary, use qualitative terms like “a small number”, “a moderate number”, or “a substantial number”.
+- Do NOT speculate about motivations; focus only on patterns in the data.
+- Use Markdown headers and bullet points, following the section titles above."""
 
     # Try LLM call
     report = None

@@ -32,6 +32,64 @@ Without uv: `pip install -r requirements.txt` (or `pip install -e .`), then `pyt
 
 The app opens in your browser (e.g. `http://localhost:8501`).
 
+---
+
+## Running with the LangGraph backend service (Detect Progress)
+
+For long **Detect** runs (IRT + 8 aberrance agents), you can run a separate LangGraph backend so progress continues even if users change pages.
+
+### 1. Start the backend service
+
+From the project root:
+
+```bash
+# Install deps if not already done
+uv sync
+
+# Run the backend service (FastAPI + LangGraph)
+uv run uvicorn backend_service:app --reload --port 8000
+```
+
+This service exposes:
+
+- `POST /detect` — start a new detection job in a background thread.
+- `GET /detect/{run_id}/status` — poll job status, progress, and per‑agent node states.
+- `GET /detect/{run_id}/result` — fetch the final LangGraph state (`flags`, `final_report`, ψ, etc.).
+
+### 2. Run the Streamlit UI
+
+In a second terminal:
+
+```bash
+uv run streamlit run ui.py
+```
+
+By default, the UI talks to the backend at:
+
+```text
+BACKEND_URL = "http://localhost:8000"
+```
+
+You can point it to a remote backend (e.g. in production) by setting:
+
+```bash
+export PSYMAS_BACKEND_URL="https://your-backend-host"
+```
+
+### 3. How Detect uses the backend
+
+- On the **Preparation** page, clicking **Detect** sends a single `POST /detect` to the backend with:
+  - responses, RT data, itemtype, compromised items, and model settings.
+  - The backend returns a `run_id`, which is stored in `st.session_state`.
+- On the **Detect Progress** page:
+  - The page polls `GET /detect/{run_id}/status` each rerun and:
+    - updates the main progress bar,
+    - colors the LangGraph‑style agent tree (router → 8 agents → manager),
+    - updates IRT/RT status.
+  - When status becomes `"done"`, it calls `GET /detect/{run_id}/result`, stores the result, and enables the **Go to Aberrance Summary** button.
+
+Because the job runs in the backend service, **navigating to other pages no longer stops Detect**; the progress view simply re‑attaches to the existing job when you return.
+
 ### 2. Set up API keys (optional, for LLM features)
 
 Copy `.env.example` to `.env` (if present) or create a `.env` file in the project root:
