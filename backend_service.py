@@ -21,8 +21,19 @@ class DetectRequest(BaseModel):
     psi_data: list[dict] | None = None
 
 
+class IrtRequest(BaseModel):
+    responses: list[dict]
+    rt_data: list[dict] = []
+    itemtype: str = "2PL"
+    model_settings: dict = {}
+
+
 # Job registry. When using subprocess (Windows R fix), JOBS is a Manager().dict()
 # and each job value is a Manager().dict() so the worker can update status/result.
+#
+# IMPORTANT: On Linux (Docker/Railway), rpy2/R is not fork-safe. We MUST use the
+# "spawn" start method for worker processes to avoid memory corruption / crashes.
+_mp_ctx = multiprocessing.get_context("spawn")
 _manager: Any = None
 JOBS: Dict[str, Dict[str, Any]] = {}
 # Track worker processes so we can detect crashes (e.g., R/rpy2 segfaults on Windows).
@@ -44,21 +55,31 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
         job = JOBS[job_id]
         job["status"] = "running"
         job["progress"] = 5
-        job["node_states"] = {
-            k: "pending"
-            for k in [
-                "router",
-                "pm_agent",
-                "nm_agent",
-                "ac_agent",
-                "as_agent",
-                "rg_agent",
-                "cp_agent",
-                "tt_agent",
-                "pk_agent",
-                "synthesizer",
-            ]
-        }
+        _initial_nodes = [
+            "router",
+            "pm_agent",
+            "nm_agent",
+            "ac_agent",
+            "as_agent",
+            "rg_agent",
+            "cp_agent",
+            "tt_agent",
+            "pk_agent",
+            "synthesizer",
+        ]
+
+        def _update_node_states(updates: dict) -> dict:
+            # IMPORTANT: job is a Manager().dict(); nested dicts don't propagate if mutated in-place.
+            # Always reassign job["node_states"] with a fresh dict copy.
+            ns = dict(job.get("node_states") or {})
+            ns.update(updates or {})
+            job["node_states"] = ns
+            return ns
+
+        def _set_node(name: str, state: str) -> None:
+            _update_node_states({name: state})
+
+        _update_node_states({k: "pending" for k in _initial_nodes})
 
         # Optional stub mode for local Windows development (skips R + LangGraph).
         use_stub = os.getenv("PSYMAS_STUB_LANGGRAPH", "").lower() in ("1", "true", "yes")
@@ -90,43 +111,32 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
             }
 
             # Mark all nodes as done so the UI graph turns green.
-            node_states = job["node_states"]
-            for node_name in node_states.keys():
-                node_states[node_name] = "done"
+            _update_node_states({k: "done" for k in _initial_nodes})
 
             job["status"] = "done"
             job["progress"] = 100
             job["result"] = result
             return
 
-        # ---- Real mode: IRT (ψ generation) + aberrance workflow ----
+        # ---- Real mode: Aberrance workflow (ψ must be provided by Preparation) ----
         # Import here so stub mode can avoid importing heavy R / LangGraph stack.
-        from graph import forensic_workflow, irt_agent
+        from graph import forensic_workflow
 
-        # Step 1: IRT (ψ generation)
-        # If ψ was already generated in Preparation, reuse it to keep parameters identical.
+        # We do NOT estimate IRT parameters in the backend.
+        # The UI is responsible for generating ψ in Preparation and passing it here.
         psi_data = req.psi_data or []
-        if psi_data:
-            job["psi_data"] = psi_data
-            job["irt_status"] = "skipped"
-            job["progress"] = 35
-        else:
-            irt_state = {
-                "responses": req.responses,
-                "rt_data": req.rt_data,
-                "theta": 0.0,
-                "latency_flags": [],
-                "next_step": "start",
-                "model_settings": {**req.model_settings, "itemtype": req.itemtype},
-                "is_verified": True,
-            }
-            irt_result = irt_agent(irt_state)
-            psi_data = irt_result.get("item_params") or []
-            job["psi_data"] = psi_data
-            job["irt_status"] = "done" if psi_data else "error"
-            job["progress"] = 35
+        if not psi_data:
+            job["irt_status"] = "missing"
+            job["status"] = "error"
+            job["error"] = "Missing psi_data. Generate item parameters (ψ) on Preparation page and retry."
+            job["progress"] = 0
+            return
 
-        # Step 2: Aberrance detection workflow
+        job["psi_data"] = psi_data
+        job["irt_status"] = "provided"
+        job["progress"] = 35
+
+        # Aberrance detection workflow (run SEQUENTIALLY to avoid concurrent rpy2/R calls)
         forensic_state = {
             "responses": req.responses,
             "rt_data": req.rt_data,
@@ -143,9 +153,6 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
 
         result: Dict[str, Any] = dict(forensic_state)
         result.setdefault("flags", {})
-        node_states = job["node_states"]
-        done: set[str] = set()
-        total_nodes = len(node_states)
 
         def _merge_fragment(fragment: dict) -> None:
             if not isinstance(fragment, dict):
@@ -156,52 +163,60 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                 else:
                     result[key] = value
 
-        def _mark_done(node_name: str) -> None:
-            if node_name in done:
-                return
-            done.add(node_name)
-            if node_name in node_states:
-                node_states[node_name] = "done"
-            job["progress"] = 35 + int(60 * len(done) / max(1, total_nodes))
+        # Mark router as done (we always run all agents in backend mode)
+        _set_node("router", "done")
+
+        # Import agent functions (avoid LangGraph fan-out concurrency).
+        from graph import (
+            ac_agent,
+            as_agent,
+            cp_agent,
+            manager_synthesizer,
+            nm_agent,
+            pk_agent,
+            pm_agent,
+            rg_agent,
+            tt_agent,
+        )
 
         try:
-            # Prefer streaming so we can update node states as they finish.
-            stream_ok = False
+            # Execute each agent sequentially. Each returns a partial state dict.
+            agent_steps = [
+                ("pm_agent", pm_agent),
+                ("nm_agent", nm_agent),
+                ("ac_agent", ac_agent),
+                ("as_agent", as_agent),
+                ("rg_agent", rg_agent),
+                ("cp_agent", cp_agent),
+                ("tt_agent", tt_agent),
+                ("pk_agent", pk_agent),
+            ]
+
+            for idx, (name, fn) in enumerate(agent_steps, start=1):
+                _set_node(name, "running")
+                job["progress"] = 35 + int(55 * (idx - 1) / max(1, len(agent_steps) + 1))
+                try:
+                    frag = fn(dict(result))
+                except Exception as e:
+                    _set_node(name, "error")
+                    job["status"] = "error"
+                    job["error"] = f"{name} failed: {e}"
+                    return
+                _merge_fragment(frag or {})
+                _set_node(name, "done")
+                job["progress"] = 35 + int(55 * idx / max(1, len(agent_steps) + 1))
+
+            # Synthesizer (LLM)
+            _set_node("synthesizer", "running")
             try:
-                for chunk in forensic_workflow.stream(forensic_state, stream_mode="updates"):
-                    stream_ok = True
-                    if not isinstance(chunk, dict):
-                        continue
-                    if any(k in chunk for k in ("flags", "final_report")):
-                        _merge_fragment(chunk)
-                        continue
-                    for node_name, fragment in chunk.items():
-                        if isinstance(fragment, dict):
-                            _merge_fragment(fragment)
-                        _mark_done(node_name)
-            except TypeError:
-                for chunk in forensic_workflow.stream(forensic_state):
-                    stream_ok = True
-                    if not isinstance(chunk, dict):
-                        continue
-                    if any(k in chunk for k in ("flags", "final_report")):
-                        _merge_fragment(chunk)
-                        continue
-                    for node_name, fragment in chunk.items():
-                        if isinstance(fragment, dict):
-                            _merge_fragment(fragment)
-                        _mark_done(node_name)
-
-            if not stream_ok:
-                # Fallback: no streaming, single invoke
-                result = forensic_workflow.invoke(forensic_state)
-                for node_name in node_states:
-                    node_states[node_name] = "done"
-
-            # Ensure any missing nodes are done
-            for node_name in node_states:
-                if node_name not in done:
-                    node_states[node_name] = "done"
+                synth = manager_synthesizer(dict(result))
+            except Exception as e:
+                _set_node("synthesizer", "error")
+                job["status"] = "error"
+                job["error"] = f"synthesizer failed: {e}"
+                return
+            _merge_fragment(synth or {})
+            _set_node("synthesizer", "done")
 
             job["status"] = "done"
             job["progress"] = 100
@@ -231,7 +246,7 @@ def _child_detect_entry(run_id: str, req_dict: dict, jobs_proxy: Any) -> None:
 @app.on_event("startup")
 def _startup_manager() -> None:
     global _manager, JOBS
-    _manager = multiprocessing.Manager()
+    _manager = _mp_ctx.Manager()
     JOBS = _manager.dict()
 
 
@@ -249,7 +264,7 @@ def start_detect(req: DetectRequest) -> dict:
         "error": None,
     })
     JOBS[run_id] = job_ref
-    p = multiprocessing.Process(
+    p = _mp_ctx.Process(
         target=_child_detect_entry,
         args=(run_id, req.model_dump(), JOBS),
         daemon=True,
@@ -258,6 +273,32 @@ def start_detect(req: DetectRequest) -> dict:
     # Remember the worker so /status can see if it crashed.
     PROCS[run_id] = p
     return {"run_id": run_id}
+
+
+@app.post("/irt")
+def run_irt(req: IrtRequest) -> dict:
+    """Run IRT in the backend (Docker/Linux) and return ψ item parameters.
+
+    This is used by the Streamlit Preparation page so Windows clients do not need
+    local R/rpy2 for ψ estimation.
+    """
+    load_dotenv()
+    from graph import irt_agent
+
+    irt_state = {
+        "responses": req.responses,
+        "rt_data": req.rt_data,
+        "theta": 0.0,
+        "latency_flags": [],
+        "next_step": "start",
+        "model_settings": {**(req.model_settings or {}), "itemtype": req.itemtype},
+        "is_verified": True,
+    }
+    result = irt_agent(irt_state) or {}
+    item_params = result.get("item_params") or []
+    if not item_params:
+        return {"status": "error", "error": result.get("icc_error") or "IRT returned no item parameters.", "result": result}
+    return {"status": "done", "result": result}
 
 
 @app.get("/detect/{run_id}/status")
@@ -279,7 +320,7 @@ def get_status(run_id: str) -> dict:
         "status": job.get("status", "pending"),
         "progress": job.get("progress", 0),
         "irt_status": job.get("irt_status", "pending"),
-        "node_states": job.get("node_states", {}),
+        "node_states": dict(job.get("node_states") or {}),
         "error": job.get("error"),
     }
 

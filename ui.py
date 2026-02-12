@@ -29,6 +29,9 @@ from dotenv import load_dotenv
 
 from graph import analyze_prompt, psych_workflow, forensic_workflow, irt_agent, rt_agent, aberrance_agent
 
+# Load .env early so os.getenv() (keys, BACKEND_URL) works everywhere.
+load_dotenv()
+
 # Initialize R early so it is ready when needed
 try:
     import rpy2.robjects as _ro
@@ -3114,6 +3117,123 @@ def _render_tool_rt() -> None:
     st.caption("Use the **sidebar** to switch to Main or another module.")
 
 
+def _render_backend_test() -> None:
+    """Debug UI: verify ψ in session and test backend endpoints directly."""
+    load_dotenv()
+    st.markdown("---")
+    st.subheader("Backend test")
+    st.caption("Verify ψ in session and test backend endpoints directly (health / IRT / Detect / status / result).")
+
+    st.markdown("**Backend URL**")
+    st.code(BACKEND_URL)
+
+    col_a, col_b = st.columns(2, gap="medium")
+    with col_a:
+        if st.button("GET /health", use_container_width=True):
+            try:
+                r = requests.get(f"{BACKEND_URL}/health", timeout=5)
+                st.write(r.status_code)
+                try:
+                    st.json(r.json())
+                except Exception:
+                    st.text(r.text)
+            except Exception as e:
+                st.error(f"/health failed: {e}")
+
+    responses = st.session_state.get("last_uploaded_responses") or []
+    rt_data = st.session_state.get("last_uploaded_rt_data") or []
+    psi_data = st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or []
+
+    st.markdown("**Session snapshot**")
+    st.caption(f"- Responses: **{len(responses)}** rows")
+    st.caption(f"- RT rows: **{len(rt_data)}**")
+    st.caption(f"- ψ item params: **{len(psi_data)}** items")
+    if psi_data and isinstance(psi_data, list) and isinstance(psi_data[0], dict):
+        st.caption(f"- ψ keys (first item): `{list(psi_data[0].keys())}`")
+
+    st.divider()
+    st.markdown("**Build Detect payload (what UI sends to backend)**")
+    raw_payload = {
+        "responses": responses,
+        "rt_data": rt_data,
+        "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
+        "compromised_items": st.session_state.get("prep_compromised_items") or [],
+        "model_settings": st.session_state.get("model_settings") or {},
+        "psi_data": psi_data,
+    }
+    payload = _json_safe(raw_payload)
+    st.caption(
+        "Payload sizes — "
+        f"responses: {len(payload.get('responses') or [])}, "
+        f"rt_data: {len(payload.get('rt_data') or [])}, "
+        f"psi_data: {len(payload.get('psi_data') or [])}"
+    )
+    with st.expander("Show payload (JSON)", expanded=False):
+        st.json(payload)
+
+    st.divider()
+    st.markdown("**Run IRT in backend (/irt) and store ψ into session**")
+    with col_b:
+        if st.button("POST /irt", use_container_width=True, disabled=not bool(responses)):
+            try:
+                irt_payload = _json_safe(
+                    {
+                        "responses": responses,
+                        "rt_data": rt_data,
+                        "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
+                        "model_settings": st.session_state.get("model_settings") or {},
+                    }
+                )
+                r = requests.post(f"{BACKEND_URL}/irt", json=irt_payload, timeout=240)
+                r.raise_for_status()
+                js = r.json()
+                st.json(js)
+                if js.get("status") == "done":
+                    res = js.get("result") or {}
+                    ip = res.get("item_params") or []
+                    if ip:
+                        st.session_state["last_irt_item_params"] = ip
+                        st.session_state["item_params"] = ip
+                        st.success(f"Stored ψ in session: {len(ip)} items.")
+            except Exception as e:
+                st.error(f"/irt failed: {e}")
+
+    st.divider()
+    st.markdown("**Start Detect (/detect) and poll status**")
+    if st.button("POST /detect", use_container_width=True, disabled=not bool(responses)):
+        try:
+            r = requests.post(f"{BACKEND_URL}/detect", json=payload, timeout=30)
+            r.raise_for_status()
+            js = r.json()
+            st.json(js)
+            run_id = js.get("run_id")
+            if run_id:
+                st.session_state["detect_run_id"] = run_id
+                st.session_state["detect_job_status"] = "running"
+                st.success(f"Started detect run_id: {run_id}")
+        except Exception as e:
+            st.error(f"/detect failed: {e}")
+
+    run_id = st.session_state.get("detect_run_id") or ""
+    if run_id:
+        st.markdown("**Latest run_id**")
+        st.code(run_id)
+        if st.button("GET /detect/{run_id}/status", use_container_width=True):
+            try:
+                r = requests.get(f"{BACKEND_URL}/detect/{run_id}/status", timeout=10)
+                r.raise_for_status()
+                st.json(r.json())
+            except Exception as e:
+                st.error(f"/status failed: {e}")
+        if st.button("GET /detect/{run_id}/result", use_container_width=True):
+            try:
+                r = requests.get(f"{BACKEND_URL}/detect/{run_id}/result", timeout=20)
+                r.raise_for_status()
+                st.json(r.json())
+            except Exception as e:
+                st.error(f"/result failed: {e}")
+
+
 if run_mode == "Preparation":
     load_dotenv()
 
@@ -3342,24 +3462,24 @@ if run_mode == "Preparation":
                     st.session_state["last_irt_error"] = "Upload Response first."
                     st.error(st.session_state["last_irt_error"])
                 else:
-                    # Use the same IRT state construction as Command Center
+                    # Run IRT in the backend (Docker/Linux) so Windows doesn't need local R/rpy2.
                     st.session_state["last_irt_error"] = None
                     with st.spinner(f"Running IRT ({itemtype}) to estimate item parameters…"):
                         try:
-                            _cc_model_settings = {
-                                **(st.session_state.get("model_settings") or {}),
-                                "itemtype": itemtype,
-                            }
-                            irt_state = {
-                                "responses": responses,
-                                "rt_data": rt_data,
-                                "theta": 0.0,
-                                "latency_flags": [],
-                                "next_step": "start",
-                                "model_settings": _cc_model_settings,
-                                "is_verified": True,
-                            }
-                            irt_result = irt_agent(irt_state)
+                            payload = _json_safe(
+                                {
+                                    "responses": responses,
+                                    "rt_data": rt_data,
+                                    "itemtype": itemtype,
+                                    "model_settings": st.session_state.get("model_settings") or {},
+                                }
+                            )
+                            r = requests.post(f"{BACKEND_URL}/irt", json=payload, timeout=180)
+                            r.raise_for_status()
+                            js = r.json()
+                            if js.get("status") != "done":
+                                raise RuntimeError(js.get("error") or "IRT backend failed.")
+                            irt_result = js.get("result") or {}
                         except Exception as e:
                             irt_result = {}
                             st.session_state["last_irt_error"] = f"IRT estimation failed: {e}"
@@ -3470,7 +3590,7 @@ if run_mode == "Preparation":
 elif run_mode == "Detect Progress":
     load_dotenv()
     st.subheader("⏳ Detect Progress")
-    st.caption("Running IRT (ψ) and 8 aberrance agents. Keep this page open until it finishes.")
+    st.caption("Running 8 aberrance agents (ψ provided from Preparation). Keep this page open until it finishes.")
 
     # Optional: force a fresh LangGraph rerun using current session data
     with st.expander("Advanced controls", expanded=False):
@@ -3659,7 +3779,7 @@ elif run_mode == "Detect Progress":
             # IRT / RT status shown separately from the agent tree (driven by backend state)
             left, right = st.columns(2, gap="small")
             with left:
-                irt_box = st.status("IRT (ψ generation)", state="running", expanded=False)
+                irt_box = st.status("IRT parameters (ψ)", state="running", expanded=False)
             with right:
                 rt_box = st.status("Response Time data (RT)", state="complete" if rt_data else "error", expanded=False)
             _smooth_to(5, duration_s=0.15)
@@ -3684,7 +3804,12 @@ elif run_mode == "Detect Progress":
                     irt_status = js.get("irt_status", "pending")
 
                     # Update IRT / RT boxes
-                    irt_box.update(state="complete" if irt_status in ("done", "skipped") else "running", expanded=False)
+                    if irt_status in ("done", "skipped", "provided"):
+                        irt_box.update(state="complete", expanded=False)
+                    elif irt_status in ("missing", "error"):
+                        irt_box.update(state="error", expanded=False)
+                    else:
+                        irt_box.update(state="running", expanded=False)
                     rt_box.update(state="complete" if rt_data else "error", expanded=False)
 
                     # Update progress bar and tree colors
@@ -3797,7 +3922,7 @@ elif run_mode == "Tools":
         st.session_state["tools_mode"] = "Aberrance"
     _tools_mode = st.radio(
         "Choose a tool",
-        options=["Aberrance", "IRT", "RT"],
+        options=["Aberrance", "IRT", "RT", "Backend test"],
         key="tools_mode",
         horizontal=True,
         label_visibility="collapsed",
@@ -3807,8 +3932,10 @@ elif run_mode == "Tools":
         _render_tool_aberrance()
     elif _tools_mode == "IRT":
         _render_tool_irt()
-    else:
+    elif _tools_mode == "RT":
         _render_tool_rt()
+    else:
+        _render_backend_test()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: Aberrance Summary (dashboard)

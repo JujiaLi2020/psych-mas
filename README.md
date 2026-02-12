@@ -52,7 +52,9 @@ uv run uvicorn backend_service:app --reload --port 8000
 
 This service exposes:
 
-- `POST /detect` — start a new detection job in a background thread.
+- `GET /health` — lightweight health check (used by the UI “LangGraph Agents” status).
+- `POST /irt` — run IRT in the backend and return ψ item parameters (`item_params`).
+- `POST /detect` — start a new detection job in a worker process.
 - `GET /detect/{run_id}/status` — poll job status, progress, and per‑agent node states.
 - `GET /detect/{run_id}/result` — fetch the final LangGraph state (`flags`, `final_report`, ψ, etc.).
 
@@ -80,6 +82,7 @@ export PSYMAS_BACKEND_URL="https://your-backend-host"
 
 - On the **Preparation** page, clicking **Detect** sends a single `POST /detect` to the backend with:
   - responses, RT data, itemtype, compromised items, and model settings.
+  - ψ item parameters (`psi_data`) generated on Preparation (backend does **not** re-estimate ψ).
   - The backend returns a `run_id`, which is stored in `st.session_state`.
 - On the **Detect Progress** page:
   - The page polls `GET /detect/{run_id}/status` each rerun and:
@@ -300,6 +303,37 @@ To give users **full IRT** (ICC, Wright Map, mirt) without each user installing 
 | `requirements.txt` | Pip-installable deps for Cloud / non-uv use |
 
 ---
+
+## Function summary
+
+### Backend (`backend_service.py`)
+
+- **`GET /health`**: Simple “is the service up?” check used by the Streamlit UI.
+- **`POST /irt`**: Runs `graph.irt_agent(...)` in the backend (Linux/Docker recommended) and returns:
+  - `result.item_params` (ψ item parameters)
+  - optionally `result.person_params`, plots, and other IRT artifacts.
+- **`POST /detect`**: Starts a detect job and returns `run_id`.
+  - Requires `psi_data` in the request (ψ is generated on the Preparation page; backend does not re-fit IRT for Detect).
+  - Runs aberrance agents **sequentially** (avoids concurrent rpy2/R calls).
+- **`GET /detect/{run_id}/status`**: Returns `{status, progress, irt_status, node_states, error}`.
+- **`GET /detect/{run_id}/result`**: Returns the final state including `flags` and `final_report`.
+
+### Workflow + agents (`graph.py`)
+
+- **`irt_agent(state)`**: Fits the IRT model (via R `mirt`) and produces ψ item parameters (`item_params`) and (optionally) person parameters.
+- **`rt_agent(state)`**: Response-time analysis (RT histograms / latency flags).
+- **Aberrance agents**:
+  - `pm_agent` (parametric misfit), `nm_agent` (nonparametric/Guttman),
+  - `ac_agent` (answer copying), `as_agent` (answer similarity),
+  - `rg_agent` (rapid guessing), `cp_agent` (change point),
+  - `tt_agent` (tampering stub), `pk_agent` (preknowledge).
+- **`manager_synthesizer(state)`**: Produces the “Forensic Verdict” narrative using the selected LLM provider/model.
+
+### Streamlit UI (`ui.py`)
+
+- **Preparation**: uploads data, runs backend IRT (`POST /irt`) to generate ψ, and starts Detect (`POST /detect`).
+- **Detect Progress**: polls backend `/status` and `/result`, and renders the agent tree + progress UI.
+- **Tools → Backend test**: debug utility to inspect session ψ/payload and call backend endpoints directly.
 
 ## License
 

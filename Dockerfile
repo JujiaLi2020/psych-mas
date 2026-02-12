@@ -3,7 +3,8 @@
 # Run UI locally:       docker run -p 8501:8501 -e PORT=8501 psych-mas
 # Run backend (example): docker run -p 8000:8000 psych-mas uvicorn backend_service:app --host 0.0.0.0 --port 8000
 
-FROM python:3.13-slim-bookworm
+# rpy2 + embedded R is much more stable on Python 3.11 than 3.13.
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
@@ -34,6 +35,8 @@ EXPOSE 8501
 
 # Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud)
 ENV PYTHONWARNINGS="ignore::UserWarning:rpy2.rinterface"
+# Avoid R JIT initialization issues in some container environments.
+ENV R_ENABLE_JIT=0
 
 # Railway sets PORT; Streamlit must listen on 0.0.0.0 for external access
 CMD ["sh", "-c", "streamlit run ui.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true"]
