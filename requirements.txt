@@ -1,8 +1,14 @@
 streamlit
 pandas
 matplotlib
+numpy
+networkx
+plotly
+pyvis
 rpy2>=3.4.5
 langgraph
 python-dotenv
 requests
 reportlab>=4.0.0
+fastapi
+uvicorn[standard]

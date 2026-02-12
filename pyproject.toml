@@ -7,17 +7,23 @@ name = "psych-mas"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "langgraph",
     "langgraph-cli[inmem]>=0.4.12",
     "rpy2>=3.6.4",
     "pandas",
+    "numpy",
+    "networkx",
+    "plotly",
+    "pyvis",
     "streamlit",
     "matplotlib",
     "python-dotenv",
     "requests",
     "reportlab>=4.0.0",
+    "fastapi",
+    "uvicorn[standard]",
 ]
 
 [tool.setuptools]
