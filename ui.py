@@ -2563,7 +2563,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
         st.markdown("---")
         with st.expander("**What the aberrance package can do**", expanded=False):
             st.markdown("""
-**Detection functions (aberrance v0.3.0, CRAN):**
+**Detection functions (aberrance v0.4.0, CRAN):**
 
 | Function | Purpose | Main inputs |
 |----------|---------|-------------|
@@ -2744,7 +2744,7 @@ if run_mode == "Command Center":
 
 with st.sidebar:
     st.title("PsyMAS-Aberrance")
-    st.caption("Ver. 0.3.0— Psychometric MAS for detecting aberrant test behavior.")
+    st.caption("Ver. 0.4.0— Psychometric MAS for detecting aberrant test behavior.")
     st.divider()
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))

@@ -1,6 +1,6 @@
-# PsyMAS-Aberrance (v0.3.x)
+# PsyMAS-Aberrance (v0.4.0)
 
-**PsyMAS-Aberrance** is a Streamlit app for **forensic psychometrics**: it fits an IRT model (to produce ψ item parameters) and runs **8 aberrance detection agents**, then produces a **Forensic Verdict** (LLM-assisted).
+**PsyMAS-Aberrance** is a Streamlit app for **forensic psychometrics**: it fits an IRT model (to produce ψ item parameters) and runs **aberrance detection agents**, then produces a **Forensic Verdict** (LLM-assisted).
 
 This repository is structured as a two-process system:
 
@@ -11,15 +11,27 @@ Why split it?
 
 - Windows+rpy2+R is unstable for long-running, multi-agent workflows.
 - Running the backend in Linux (Docker/Railway) makes Detect runs reliable.
-- Detect Progress can poll a backend job even if the user navigates between pages.
+- Detect Progress polls the backend and auto-refreshes until the job finishes.
+
+---
+
+## What’s new in 0.4.0
+
+- **Scenario**: Removed Scenario C (Online/Unproctored). Three presets: **A** (Low-Stakes), **B** (High-Stakes/Proctored), **D** (Custom).
+- **Preparation**: Page no longer jumps back to Scenario after uploading Response/RT or generating item parameters. Sidebar navigation stays in sync via `_nav_request`.
+- **Detect Progress**: Auto-refreshes every few seconds while running (no manual “Refresh status”). **Generate Report** opens **Aberrance Summary**.
+- **Aberrance Summary**: Agent-by-agent reports (counts, examples). Collusion Graph and Effort Matrix only show when data is available.
+- **Sidebar — Session status**: Shows Response, RT, ψ, Compromised items, Tampering file, LLM, and LangGraph Agents, with “(required)” / “(optional)” by selected agents. Detect button enabled only when required data is present.
+- **IRT estimation**: No longer causes a jump to Scenario; user stays on Preparation.
 
 ---
 
 ## Features
 
-- **Preparation**: upload Response + RT CSV, generate ψ, configure LLM, start Detect.
-- **Detect Progress**: progress bar + LangGraph-style agent tree with per-agent node statuses.
-- **Aberrance Summary**: dashboard of agent flags + narrative forensic report (“Forensic Verdict”).
+- **Scenario**: Choose preset A, B, or D (Custom); optional LLM suggestion from a short description.
+- **Preparation**: Upload Response + optional RT CSV, generate ψ, set compromised items / tampering when needed, select agents, start Detect. Readiness strip and Detect button reflect only what’s required for selected agents.
+- **Detect Progress**: Progress bar, flow diagram with per-agent status, auto-refresh until done; **Generate Report** opens Aberrance Summary.
+- **Aberrance Summary**: Forensic Verdict, Collusion Graph and Effort Matrix (when data exists), Watchlist, agent-by-agent reports.
 - **Tools**: Aberrance / IRT / RT utilities + **Tools → Backend test** for troubleshooting.
 
 ---
