@@ -5,6 +5,7 @@ Format: list of (display_label, model_id).
 """
 
 OPENROUTER_FREE_MODELS = [
+    ("Google Gemini 3 Flash ($0.50/M,$3/M)", "google/gemini-3-flash-preview"),
     ("Deepseek R1T2 Chimera (free)", "tngtech/deepseek-r1t2-chimera:free"),
     ("GLM-4.5 Air (free)", "z-ai/glm-4.5-air:free"),
     ("Deepseek R1T Chimera (free)", "tngtech/deepseek-r1t-chimera:free"),

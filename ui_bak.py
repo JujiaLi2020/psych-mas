@@ -160,20 +160,8 @@ def _test_openrouter_api_key(api_key: str, timeout: int = 15) -> tuple[bool, str
 
 
 def _llm_provider() -> str:
-    """Current LLM provider: 'google' or 'openrouter' (Google is default when GOOGLE_API_KEY is set)."""
-    # If the user has already chosen a provider this session, honor it.
-    if "llm_provider" in st.session_state:
-        return st.session_state.llm_provider
-    # Otherwise, auto-detect from environment: prefer Google when GOOGLE_API_KEY is present.
-    load_dotenv()
-    g_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    or_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if g_key:
-        return "google"
-    if or_key:
-        return "openrouter"
-    # Fallback default when no keys are configured.
-    return "google"
+    """Current LLM provider: 'openrouter' or 'google' (OpenRouter is default)."""
+    return st.session_state.get("llm_provider", "openrouter")
 
 
 def _current_model_ids() -> list[str]:
@@ -206,17 +194,6 @@ def _effective_llm_model() -> str:
     return selected
 
 
-def _model_settings_for_backend() -> dict:
-    """Merge session model_settings with LLM keys from env so the backend can generate the Forensic Verdict with LLM."""
-    load_dotenv()
-    base = dict(st.session_state.get("model_settings") or {})
-    base["llm_provider"] = _llm_provider()
-    base["llm_model_id"] = _effective_llm_model()
-    base["openrouter_api_key"] = os.getenv("OPENROUTER_API_KEY", "")
-    base["google_api_key"] = os.getenv("GOOGLE_API_KEY", "")
-    return base
-
-
 def _model_variants_with_selected_first() -> list[str]:
     """Return model list with effective (pinned or selected) model first (for Psych-MAS Summary)."""
     model_ids = _current_model_ids()
@@ -224,126 +201,6 @@ def _model_variants_with_selected_first() -> list[str]:
     if effective not in model_ids:
         effective = model_ids[0] if model_ids else (DEFAULT_GEMINI_MODEL_IDS[0] if _llm_provider() == "google" else OPENROUTER_FREE_MODEL_IDS[0])
     return [effective] + [m for m in model_ids if m != effective]
-
-
-def _render_llm_settings() -> None:
-    """Global LLM settings: provider, API keys test, model list, and lock/unlock."""
-    load_dotenv()
-    _api_key = os.getenv("GOOGLE_API_KEY")
-    _openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-    if "llm_provider" not in st.session_state:
-        st.session_state.llm_provider = _llm_provider()
-    st.radio(
-        "LLM provider",
-        options=["openrouter", "google"],
-        format_func=lambda x: "OpenRouter (free)" if x == "openrouter" else "Google (Gemini)",
-        key="llm_provider",
-        horizontal=True,
-        help="OpenRouter offers free models; optional OPENROUTER_API_KEY in .env (get one at openrouter.ai).",
-    )
-    if st.session_state.llm_provider == "google":
-        if "api_key_test_result" not in st.session_state:
-            st.session_state.api_key_test_result = None
-        if _api_key:
-            if st.button("Test API key", key="test_api_key"):
-                ok, msg = _test_api_key(_api_key)
-                st.session_state.api_key_test_result = (ok, msg)
-                st.rerun()
-            if st.session_state.api_key_test_result is not None:
-                ok, msg = st.session_state.api_key_test_result
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-        else:
-            st.warning("GOOGLE_API_KEY not set in .env. Add it to use Psych-MAS Summary with Google.")
-    else:
-        if "openrouter_api_key_test_result" not in st.session_state:
-            st.session_state.openrouter_api_key_test_result = None
-        if st.button("Test API key", key="test_openrouter_api_key"):
-            load_dotenv()
-            key = os.getenv("OPENROUTER_API_KEY", "")
-            ok, msg = _test_openrouter_api_key(key)
-            st.session_state.openrouter_api_key_test_result = (ok, msg)
-            st.rerun()
-        if st.session_state.openrouter_api_key_test_result is not None:
-            ok, msg = st.session_state.openrouter_api_key_test_result
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
-        st.caption("OpenRouter free models. Set OPENROUTER_API_KEY in .env for higher limits (get key at openrouter.ai).")
-    _model_options = _current_model_options()
-    _model_ids = _current_model_ids()
-    if "pinned_llm_model" not in st.session_state:
-        st.session_state.pinned_llm_model = None
-    if "pinned_llm_provider" not in st.session_state:
-        st.session_state.pinned_llm_provider = None
-    _pinned = st.session_state.pinned_llm_model if st.session_state.pinned_llm_provider == st.session_state.llm_provider else None
-    if "selected_gemini_model" not in st.session_state:
-        st.session_state.selected_gemini_model = (_pinned if _pinned and _pinned in _model_ids else None) or (_model_ids[0] if _model_ids else (DEFAULT_GEMINI_MODEL_IDS[0] if st.session_state.llm_provider == "google" else OPENROUTER_FREE_MODEL_IDS[0]))
-    if st.session_state.selected_gemini_model not in _model_ids:
-        st.session_state.selected_gemini_model = (_pinned if _pinned and _pinned in _model_ids else None) or (_model_ids[0] if _model_ids else (DEFAULT_GEMINI_MODEL_IDS[0] if st.session_state.llm_provider == "google" else OPENROUTER_FREE_MODEL_IDS[0]))
-    st.selectbox(
-        "LLM model for Psych-MAS Summary",
-        options=_model_ids,
-        format_func=lambda x: next((label for label, api_id in _model_options if api_id == x), _model_id_to_display_name(x) if "/" not in str(x) else str(x).split("/")[-1].replace("-", " ").title()),
-        key="selected_gemini_model",
-        help="Google: click 'Check model availability' to refresh from API. OpenRouter: free models, no key required for basic use.",
-    )
-    _pinned_now = st.session_state.pinned_llm_model if st.session_state.pinned_llm_provider == st.session_state.llm_provider else None
-    _lock_col, _unlock_col = st.columns(2)
-    with _lock_col:
-        if st.button("Lock current model for all analyses", key="lock_llm_model", help="Use this model for every LLM call (prompt + Psych-MAS Summary) until you unlock."):
-            st.session_state.pinned_llm_model = st.session_state.selected_gemini_model
-            st.session_state.pinned_llm_provider = st.session_state.llm_provider
-            st.rerun()
-    with _unlock_col:
-        if _pinned_now and st.button("Unlock model", key="unlock_llm_model", help="Stop using the locked model; selection will follow the dropdown again."):
-            st.session_state.pinned_llm_model = None
-            st.session_state.pinned_llm_provider = None
-            st.rerun()
-    if _pinned_now:
-        _locked_label = next((label for label, api_id in _model_options if api_id == _pinned_now), _pinned_now.split("/")[-1].replace("-", " ").title() if "/" in _pinned_now else _pinned_now)
-        st.caption(f"🔒 **Locked:** {_locked_label} — all LLM analyses use this model until you unlock.")
-    else:
-        st.caption("✓ The selected model is active. Use **Analyze prompt** or any **Psych-MAS Summary** button to run with this model — no extra step needed.")
-    if "model_availability" not in st.session_state:
-        st.session_state.model_availability = None
-    if "model_availability_errors" not in st.session_state:
-        st.session_state.model_availability_errors = {}
-    if "model_availability_times" not in st.session_state:
-        st.session_state.model_availability_times = {}
-    if st.session_state.llm_provider == "openrouter":
-        if st.button("Check model availability", key="check_model_availability"):
-            with st.spinner("Testing OpenRouter free models…"):
-                avail = {}
-                errs = {}
-                times = {}
-                for model_id in OPENROUTER_FREE_MODEL_IDS:
-                    ok, err, elapsed = _test_openrouter_model(_openrouter_key, model_id)
-                    avail[model_id] = ok
-                    if err:
-                        errs[model_id] = err
-                    times[model_id] = elapsed
-                st.session_state.model_availability = avail
-                st.session_state.model_availability_errors = errs
-                st.session_state.model_availability_times = times
-            st.rerun()
-        if st.session_state.model_availability is not None:
-            selected_id = st.session_state.get("selected_gemini_model", OPENROUTER_FREE_MODEL_IDS[0])
-            st.caption("Model status (🟢 available, 🔴 unavailable; **Selected** = current choice; response time in seconds)")
-            for label, api_id in OPENROUTER_FREE_MODELS:
-                status = st.session_state.model_availability.get(api_id, False)
-                err = st.session_state.model_availability_errors.get(api_id)
-                elapsed = st.session_state.model_availability_times.get(api_id, 0.0)
-                dot = "🟢" if status else "🔴"
-                sel = " **(Selected)**" if api_id == selected_id else ""
-                extra = f" — {elapsed:.2f}s" if elapsed else ""
-                if err:
-                    st.caption(f"{dot} {label}{sel}{extra} — {err}")
-                else:
-                    st.caption(f"{dot} {label}{sel}{extra}")
 
 
 def _test_api_key(api_key: str, timeout: int = 15) -> tuple[bool, str]:
@@ -527,7 +384,7 @@ def _interpret_prompt(
     google_api_key: str | None = None,
 ) -> dict:
     """Run prompt interpretation using the given provider and model (from Model engine)."""
-    provider = llm_provider if llm_provider is not None else _llm_provider()
+    provider = llm_provider if llm_provider is not None else st.session_state.get("llm_provider", "openrouter")
     model_id = llm_model_id if llm_model_id is not None else _effective_llm_model()
     if openrouter_api_key is None and provider == "openrouter":
         load_dotenv()
@@ -1099,17 +956,18 @@ def _parse_scenario_suggestion(text: str) -> tuple[str, str]:
 
 
 def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
-    """Use LLM (same provider/model as Psych-MAS Assistant) to suggest scenario A or B. Returns (letter 'A'|'B'|'', explanation)."""
+    """Use LLM (same provider/model as Psych-MAS Assistant) to suggest scenario A, B, or C. Returns (letter 'A'|'B'|'C'|'', explanation)."""
     if not (user_description or "").strip():
         return "", "Describe your testing situation (e.g. classroom quiz, certification exam, at-home test)."
     load_dotenv()
     prompt = (
         "You are helping choose an aberrant-behavior detection scenario for a psychometric test.\n\n"
         "Scenarios:\n"
-        "A = Quality Assurance: identifies non-substantive noise to ensure high-quality data utility. Examples: course evaluations, pilot surveys, classroom quizzes. Uses: detect_rg, detect_pm.\n"
-        "B = Certification Security: protects high-stakes credentials and intellectual property from theft. Examples: medical licensing, answer copying, brain-dump exposure. Uses: detect_ac, detect_pk, detect_pm.\n\n"
+        "A = Data Cleaning (Low-Stakes): surveys, classroom quizzes, pilot tests; focus on lazy/random responders. Uses: detect_rg, detect_pm.\n"
+        "B = Exam Security (High-Stakes/Proctored): certification or standardized exams in controlled setting; focus on copying and pre-knowledge. Uses: detect_ac, detect_pk, detect_pm.\n"
+        "C = Remote Monitoring (Online/Unproctored): at-home testing; focus on collusion, rapid guessing, inconsistent performance. Uses: detect_as, detect_rg, detect_nm.\n\n"
         f"User's situation: {user_description.strip()[:500]}\n\n"
-        "Reply with exactly two lines. Line 1: only one letter, A or B. Line 2: one short sentence explaining why that scenario fits."
+        "Reply with exactly two lines. Line 1: only one letter, A, B, or C. Line 2: one short sentence explaining why that scenario fits."
     )
     # Use same provider and model as Psych-MAS Assistant (Model engine tab)
     if _llm_provider() == "openrouter":
@@ -1888,9 +1746,6 @@ def _render_prompt_and_confirm() -> None:
                     st.session_state.prompt_analyzed = True
                     st.session_state.last_prompt = prompt
                     st.session_state["confirm_itemtype"] = st.session_state.model_settings.get("itemtype", "2PL")
-        with tab_model_engine:
-            st.caption("Configure LLM provider and model in **Settings → Model engine**. These settings apply to all analyses.")
-            st.caption(f"Current provider: `{_llm_provider()}`, model: `{_effective_llm_model()}`.")
         with tab_langgraph:
             st.caption("How LangGraph is used in this app")
             st.markdown(
@@ -1918,7 +1773,7 @@ def _render_prompt_and_confirm() -> None:
             _api_key = os.getenv("GOOGLE_API_KEY")
             _openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
             if "llm_provider" not in st.session_state:
-                st.session_state.llm_provider = _llm_provider()
+                st.session_state.llm_provider = "openrouter"
             st.radio(
                 "LLM provider",
                 options=["openrouter", "google"],
@@ -2374,16 +2229,22 @@ def _render_results(final: dict, response_only: bool = False) -> None:
         # Scenario presets and selection (ABERRANCE_FUNCTIONS is module-level)
         SCENARIO_PRESETS = {
             "A": {
-                "title": "Scenario A: Low-Stakes",
+                "title": "Scenario A: Data Cleaning (Low-Stakes)",
                 "icon": "🧹",
-                "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes",
+                "description": "Best for surveys, classroom quizzes, or pilot tests. Focuses on removing lazy or random responders.",
                 "selects": ["detect_rg", "detect_pm"],
             },
             "B": {
-                "title": "Scenario B: High-Stakes/Proctored",
+                "title": "Scenario B: Exam Security (High-Stakes/Proctored)",
                 "icon": "🛡️",
-                "description": "Protects high-stakes credentials and intellectual property from theft.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure",
+                "description": "Best for certification exams or standardized tests in a controlled environment. Focuses on copying and pre-knowledge.",
                 "selects": ["detect_ac", "detect_pk", "detect_pm"],
+            },
+            "C": {
+                "title": "Scenario C: Remote Monitoring (Online/Unproctored)",
+                "icon": "📶",
+                "description": "Best for at-home testing. Focuses on collusion, rapid guessing, and inconsistent performance.",
+                "selects": ["detect_as", "detect_rg", "detect_nm"],
             },
         }
         for fn in ABERRANCE_FUNCTIONS:
@@ -2393,7 +2254,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
             st.session_state["aberrance_scenario_select_previous"] = None
 
         def _apply_aberrance_scenario(letter: str, *, update_select: bool = True) -> None:
-            """Set scenario dropdown (if update_select) and function-list checkboxes to match the given scenario (A or B). Do not set the select key after the selectbox is instantiated (Streamlit disallows it)."""
+            """Set scenario dropdown (if update_select) and function-list checkboxes to match the given scenario (A, B, or C). Do not set the select key after the selectbox is instantiated (Streamlit disallows it)."""
             if letter not in SCENARIO_PRESETS:
                 return
             if update_select:
@@ -2439,6 +2300,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
             ("", "— Select a scenario (optional) —"),
             ("A", f"🧹 {SCENARIO_PRESETS['A']['title']}"),
             ("B", f"🛡️ {SCENARIO_PRESETS['B']['title']}"),
+            ("C", f"📶 {SCENARIO_PRESETS['C']['title']}"),
             ("Custom", "Custom (manual selection only)"),
         ]
         option_values = [x[0] for x in SCENARIO_OPTIONS]
@@ -2453,7 +2315,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
             label_visibility="collapsed",
         )
         prev = st.session_state.get("aberrance_scenario_select_previous")
-        if scenario_choice in ("A", "B") and scenario_choice != prev:
+        if scenario_choice in ("A", "B", "C") and scenario_choice != prev:
             _apply_aberrance_scenario(scenario_choice, update_select=False)
             st.rerun()
         if scenario_choice in ("", "Custom"):
@@ -2462,6 +2324,8 @@ def _render_results(final: dict, response_only: bool = False) -> None:
             st.caption(SCENARIO_PRESETS["A"]["description"])
         elif scenario_choice == "B":
             st.caption(SCENARIO_PRESETS["B"]["description"])
+        elif scenario_choice == "C":
+            st.caption(SCENARIO_PRESETS["C"]["description"])
 
         st.markdown("---")
         st.subheader("Function List")
@@ -2710,18 +2574,19 @@ st.markdown("""
 # ----- Sidebar: navigation -----
 # Use a separate key for the radio so we can set run_mode from Main-page buttons (Confirm / Go to).
 NAV_OPTIONS = [
-    "Scenario",
     "Preparation",
     "Detect Progress",
     "Data review",
     "Aberrance Summary",
     "Student Profile",
+    "Collusion Network",
+    "Individual Aberrance",
+    "Temporal Forensics",
     "Tools",
-    "Settings",
 ]
 if "run_mode" not in st.session_state:
-    st.session_state.run_mode = "Scenario"
-run_mode = st.session_state.get("run_mode", "Scenario")
+    st.session_state.run_mode = "Preparation"
+run_mode = st.session_state.get("run_mode", "Preparation")
 
 # Allow safe programmatic navigation without fighting the sidebar radio widget.
 # Any code can set st.session_state["_nav_request"] = "<page>" and st.rerun().
@@ -2752,25 +2617,27 @@ with st.sidebar:
     _has_forensic = bool(st.session_state.get("forensic_result"))
     _detect_status = st.session_state.get("detect_job_status", "pending")
     _nav_ready = {
-        "Scenario": True,
         "Preparation": True,
         "Detect Progress": _detect_status == "done",
         "Data review": _has_resp,
         "Aberrance Summary": _has_forensic,
         "Student Profile": _has_forensic,
+        "Collusion Network": _has_forensic,
+        "Individual Aberrance": _has_forensic,
+        "Temporal Forensics": _has_forensic,
         "Tools": _has_resp,
-        "Settings": True,
     }
     def _nav_label(x: str) -> str:
         base = {
-            "Scenario": "🧭 Scenario",
             "Preparation": "🧪 Preparation",
             "Detect Progress": "⏳ Detect Progress",
             "Data review": "📋 Data review",
             "Tools": "🧰 Tools",
             "Aberrance Summary": "🧾 Aberrance Summary",
             "Student Profile": "👤 Student Profile",
-            "Settings": "⚙️ Settings",
+            "Collusion Network": "🕸️ Collusion Network",
+            "Individual Aberrance": "📊 Individual Aberrance",
+            "Temporal Forensics": "⏳ Temporal Forensics",
         }.get(x, x)
         # Show a dot for every option (clearer readiness affordance)
         if x == "Detect Progress":
@@ -2793,7 +2660,7 @@ with st.sidebar:
     if sidebar_choice != run_mode:
         st.session_state.run_mode = sidebar_choice
         st.rerun()
-    st.caption("Start on **Scenario** to choose presets, then go to **Preparation** to upload data / generate ψ. Use **Settings** to configure the LLM provider and model.")
+    st.caption("Start on **Preparation** to upload data / generate ψ / test LLM.")
     st.divider()
 
     # Compact session status overview in the sidebar (no upload widgets here)
@@ -2803,19 +2670,8 @@ with st.sidebar:
     psi_loaded = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
     comp_items = st.session_state.get("prep_compromised_items") or []
     comp_ok = bool(comp_items)
-    tt_name = st.session_state.get("prep_tt_data_name") or ""
-    tt_loaded = bool(str(tt_name).strip())
 
-    # Requirements depend on which agents are currently selected (via Preparation checkboxes).
-    selected_fns = [fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")]
-    if not selected_fns:
-        selected_fns = ["detect_nm"]  # default backend fallback (no extra inputs)
-    need_rt = "detect_rg" in selected_fns
-    need_psi = any(fn in selected_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"])
-    need_comp = "detect_pk" in selected_fns
-    need_tt = "detect_tt" in selected_fns
-
-    provider_sb = _llm_provider()
+    provider_sb = st.session_state.get("llm_provider", "openrouter")
     or_key_sb = os.getenv("OPENROUTER_API_KEY", "")
     g_key_sb = os.getenv("GOOGLE_API_KEY", "")
     llm_configured_sb = bool(or_key_sb.strip()) if provider_sb == "openrouter" else bool(g_key_sb and g_key_sb.strip())
@@ -2829,18 +2685,14 @@ with st.sidebar:
 
     n_r = len(st.session_state.get("last_uploaded_responses") or [])
     n_c = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_r else 0
-    resp_extra = f"{n_r}×{n_c}" if resp_loaded else "not loaded"
-    rt_rows = len(st.session_state.get("last_uploaded_rt_data") or [])
-    rt_extra = (f"{rt_rows} rows" if rt_loaded else "not loaded") + (" (required)" if need_rt else " (optional)")
-    psi_extra = ("ready" if psi_loaded else "not ready") + (" (required)" if need_psi else " (optional)")
-    comp_extra = (f"{len(comp_items)} set" if comp_ok else "none") + (" (required)" if need_comp else " (optional)")
-    tt_extra = (str(tt_name) if tt_loaded else "not loaded") + (" (required)" if need_tt else " (optional)")
+    if resp_loaded:
+        data_extra = f"{n_r}×{n_c}" + (" + RT" if rt_loaded else "")
+    else:
+        data_extra = "not loaded"
 
-    st.caption(_sb_line("Response", resp_loaded, resp_extra))
-    st.caption(_sb_line("RT", rt_loaded, rt_extra))
-    st.caption(_sb_line("ψ (item params)", psi_loaded, psi_extra))
-    st.caption(_sb_line("Compromised items", comp_ok, comp_extra))
-    st.caption(_sb_line("Tampering file", tt_loaded, tt_extra))
+    st.caption(_sb_line("Data", resp_loaded, data_extra))
+    st.caption(_sb_line("ψ (item params)", psi_loaded, "ready" if psi_loaded else "not ready"))
+    st.caption(_sb_line("Compromised items", comp_ok, f"{len(comp_items)} set" if comp_ok else "none"))
     st.caption(_sb_line(f"LLM ({provider_sb})", llm_configured_sb, "configured" if llm_configured_sb else "missing key"))
     backend_ok, backend_note = _backend_status_summary()
     st.caption(_sb_line("LangGraph Agents", backend_ok, backend_note))
@@ -2859,10 +2711,9 @@ if run_mode != "Preparation":
 
 def _render_tool_aberrance() -> None:
     SCENARIO_PRESETS_AB = {
-        "A": {"title": "Scenario A: Quality Assurance (Low-Stakes)", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes", "selects": ["detect_rg", "detect_pm"]},
-        "B": {"title": "Scenario B: Certification Security (High-Stakes/Proctored)", "description": "Protects high-stakes credentials and intellectual property from theft.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure", "selects": ["detect_ac", "detect_pk", "detect_pm"]},
-        "C": {"title": "Scenario C: Behavioral Forensics (Online/Unproctored)", "description": "Monitors interaction anomalies within the multimodal process data.\n\nExamples: Rapid guessing; Suspicious latencies; Student collusion", "selects": ["detect_as", "detect_rg", "detect_nm"]},
-        "D": {"title": "Scenario D: Custom", "description": "Choose detection agents manually (no preset).", "selects": []},
+        "A": {"title": "Scenario A: Data Cleaning (Low-Stakes)", "description": "Surveys, classroom quizzes; focus on lazy/random responders.", "selects": ["detect_rg", "detect_pm"]},
+        "B": {"title": "Scenario B: Exam Security (High-Stakes/Proctored)", "description": "Certification exams; focus on copying and pre-knowledge.", "selects": ["detect_ac", "detect_pk", "detect_pm"]},
+        "C": {"title": "Scenario C: Remote Monitoring (Online/Unproctored)", "description": "At-home testing; focus on collusion, rapid guessing.", "selects": ["detect_as", "detect_rg", "detect_nm"]},
     }
     for fn in ABERRANCE_FUNCTIONS:
         if f"ab_only_cb_{fn}" not in st.session_state:
@@ -2881,16 +2732,64 @@ def _render_tool_aberrance() -> None:
         for fn in ABERRANCE_FUNCTIONS:
             st.session_state[f"ab_only_cb_{fn}"] = fn in SCENARIO_PRESETS_AB[letter]["selects"]
 
-    # Scenario controls moved to the dedicated "Scenario" page.
-    scenario_choice_ab = st.session_state.get("ab_only_scenario_select") or ""
-    if scenario_choice_ab in ("A", "B", "D"):
-        st.markdown(f"**Scenario preset:** {SCENARIO_PRESETS_AB[scenario_choice_ab]['title']}")
-        st.caption(SCENARIO_PRESETS_AB[scenario_choice_ab]["description"])
-    else:
-        st.info("No scenario preset selected. You can still choose functions below.")
-    if st.button("Change scenario", key="ab_only_change_scenario", use_container_width=True):
-        st.session_state["_nav_request"] = "Scenario"
+    # ----- 1. Scenario -----
+    with st.container():
+        st.markdown("**1. Scenario**")
+        st.caption("Choose a scenario; it will auto-select the function list below. Or use the LLM to suggest one.")
+    st.caption("Choose a scenario; it will auto-select the function list below. Or use the LLM dialogue to suggest one.")
+    SCENARIO_OPTIONS_AB = [
+        ("", "— Select a scenario (optional) —"),
+        ("A", f"🧹 {SCENARIO_PRESETS_AB['A']['title']}"),
+        ("B", f"🛡️ {SCENARIO_PRESETS_AB['B']['title']}"),
+        ("C", f"📶 {SCENARIO_PRESETS_AB['C']['title']}"),
+        ("Custom", "Custom (manual selection only)"),
+    ]
+    option_values_ab = [x[0] for x in SCENARIO_OPTIONS_AB]
+    option_label_map_ab = dict(SCENARIO_OPTIONS_AB)
+    scenario_choice_ab = st.selectbox(
+        "Scenario",
+        options=option_values_ab,
+        format_func=lambda x: option_label_map_ab.get(x, x),
+        key="ab_only_scenario_select",
+        label_visibility="collapsed",
+    )
+    prev_ab = st.session_state.get("ab_only_scenario_select_previous")
+    if scenario_choice_ab in ("A", "B", "C") and scenario_choice_ab != prev_ab:
+        _apply_ab_only_scenario(scenario_choice_ab, update_select=False)
         st.rerun()
+    if scenario_choice_ab in ("", "Custom"):
+        st.session_state["ab_only_scenario_select_previous"] = scenario_choice_ab
+    if scenario_choice_ab in ("A", "B", "C"):
+        st.caption(SCENARIO_PRESETS_AB[scenario_choice_ab]["description"])
+
+    # ----- 2. Options (LLM + function list) -----
+    with st.container():
+        st.markdown("**2. Options**")
+        st.caption("Describe your context for an LLM suggestion, then pick detection functions.")
+    llm_req_ab = st.text_area(
+        "Describe your testing situation",
+        value=st.session_state.get("ab_only_llm_requirement", ""),
+        placeholder="e.g. Low-stakes quizzes in class. / High-stakes licensure exam. / Online unproctored assessment.",
+        height=100,
+        key="ab_only_llm_requirement",
+        label_visibility="collapsed",
+    )
+    suggest_btn_ab = st.button("Suggest scenario from description", key="ab_only_suggest_scenario", use_container_width=True)
+    if suggest_btn_ab and (llm_req_ab or st.session_state.get("ab_only_llm_requirement", "")):
+        with st.spinner("Asking LLM…"):
+            letter_ab, explanation_ab = _suggest_aberrance_scenario(llm_req_ab.strip() or st.session_state.get("ab_only_llm_requirement", ""))
+        if letter_ab and letter_ab in SCENARIO_PRESETS_AB:
+            _apply_ab_only_scenario(letter_ab)
+            st.session_state["ab_only_llm_suggestion"] = explanation_ab
+            st.rerun()
+        elif explanation_ab:
+            st.session_state["ab_only_llm_suggestion"] = explanation_ab
+            st.rerun()
+    if st.session_state.get("ab_only_llm_suggestion"):
+        st.info(st.session_state["ab_only_llm_suggestion"])
+        if st.button("Clear suggestion", key="ab_only_clear_suggestion"):
+            st.session_state["ab_only_llm_suggestion"] = ""
+            st.rerun()
 
     st.caption("Select which detection functions to run. Scenario and LLM above update these; changing reflects as Custom.")
     ab_fns = []
@@ -3116,182 +3015,6 @@ def _render_tool_aberrance() -> None:
     st.caption("Use the **sidebar** to switch to Main or another module.")
 
 
-def _render_scenario_page() -> None:
-    """Scenario presets as cards + LLM assistant only."""
-    st.subheader("🧭 Scenario Selection")
-    SCENARIO_PRESETS_AB = {
-        "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Quality+Assurance"},
-        "B": {"title": "Scenario B: High-Stakes/Proctored", "description": "Protects high-stakes credentials and intellectual property from theft.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure", "icon": "🛡️", "selects": ["detect_ac", "detect_pk", "detect_pm"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=Certification+Security"},
-        "D": {"title": "Scenario D: Custom", "description": "Choose detection agents manually in **Tools → Aberrance**.", "icon": "✏️", "selects": [], "image": "https://placehold.co/320x160/2d2d4a/94a3b8?text=Custom"},
-    }
-    # CSS: card container (relative, left-aligned), overlay button on top, image left-aligned, equal height
-    st.markdown("""
-    <style>
-    /* Scenario cards: shorter height - also use simpler selectors in case marker scope fails */
-    div[data-testid="column"]:nth-of-type(1) > div,
-    div[data-testid="column"]:nth-of-type(2) > div,
-    div[data-testid="column"]:nth-of-type(3) > div {
-        min-height: 180px !important;
-        height: 180px !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    div[data-testid="column"]:nth-of-type(1) div[data-testid="stVerticalBlock"],
-    div[data-testid="column"]:nth-of-type(2) div[data-testid="stVerticalBlock"],
-    div[data-testid="column"]:nth-of-type(3) div[data-testid="stVerticalBlock"] {
-        min-height: 180px !important;
-        height: 180px !important;
-        flex: 1 1 auto !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    div[data-testid="column"]:nth-of-type(1) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"],
-    div[data-testid="column"]:nth-of-type(2) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"],
-    div[data-testid="column"]:nth-of-type(3) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"] {
-        min-height: 180px !important;
-        height: 100% !important;
-    }
-    /* Force equal height: scope to block after scenario-cards-marker */
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(1) > div,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(2) > div,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(3) > div {
-        min-height: 180px !important;
-        height: 180px !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(1) div[data-testid="stVerticalBlock"],
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(2) div[data-testid="stVerticalBlock"],
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(3) div[data-testid="stVerticalBlock"] {
-        min-height: 180px !important;
-        height: 180px !important;
-        flex: 1 1 auto !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(1) > div > div,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(2) > div > div,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(3) > div > div {
-        flex: 1 1 auto !important;
-        min-height: 0 !important;
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    /* Scenario card container: relative for overlay, left-aligned content, fill height */
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(1) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"],
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(2) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"],
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(3) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"] {
-        position: relative !important;
-        text-align: left !important;
-        height: 100% !important;
-        min-height: 180px !important;
-        flex: 1 1 auto !important;
-        overflow: hidden !important;
-        display: flex !important;
-        flex-direction: column !important;
-        border-radius: 14px !important;
-        border: 1px solid rgba(255,255,255,0.12) !important;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.2) !important;
-        transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
-    }
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(1) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"]:hover,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(2) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"]:hover,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(3) div[data-testid="stVerticalBlock"] > div[data-testid="stContainer"]:hover {
-        border-color: rgba(255,255,255,0.25) !important;
-        box-shadow: 0 8px 28px rgba(0,0,0,0.3) !important;
-    }
-    /* Left-align images inside scenario cards */
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(1) div[data-testid="stContainer"] img,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(2) div[data-testid="stContainer"] img,
-    #scenario-cards-marker ~ * div[data-testid="column"]:nth-of-type(3) div[data-testid="stContainer"] img {
-        margin-left: 0 !important;
-        display: block !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    for fn in ABERRANCE_FUNCTIONS:
-        if f"ab_only_cb_{fn}" not in st.session_state:
-            st.session_state[f"ab_only_cb_{fn}"] = False
-    if "ab_only_scenario_select_previous" not in st.session_state:
-        st.session_state["ab_only_scenario_select_previous"] = None
-    if "ab_only_scenario_select" not in st.session_state:
-        st.session_state["ab_only_scenario_select"] = "D"
-    elif st.session_state.get("ab_only_scenario_select") == "C":
-        st.session_state["ab_only_scenario_select"] = "D"
-
-    def _apply_ab_only_scenario(letter: str) -> None:
-        if letter in SCENARIO_PRESETS_AB:
-            st.session_state["ab_only_scenario_select"] = letter
-            st.session_state["ab_only_scenario_select_previous"] = letter
-            for fn in ABERRANCE_FUNCTIONS:
-                st.session_state[f"ab_only_cb_{fn}"] = fn in SCENARIO_PRESETS_AB[letter]["selects"]
-        else:
-            st.session_state["ab_only_scenario_select"] = "D"
-            st.session_state["ab_only_scenario_select_previous"] = "D"
-
-    # Three cards in one row (A, B, D): image + title + description, whole card clickable via overlay button
-    st.markdown('<div id="scenario-cards-marker" style="display:none;" aria-hidden="true"></div>', unsafe_allow_html=True)
-    cols = st.columns(3)
-    for i, letter in enumerate(["A", "B", "D"]):
-        with cols[i]:
-            preset = SCENARIO_PRESETS_AB[letter]
-            title = preset["title"]
-            desc = preset["description"]
-            icon = preset["icon"]
-            img_url = preset["image"]
-            with st.container(border=True):
-                try:
-                    st.image(img_url, use_container_width=True)
-                except Exception:
-                    st.markdown(f"<div style='height:80px;background:linear-gradient(135deg,#1e3a5f,#2d4a3e);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:2rem;'>{icon}</div>", unsafe_allow_html=True)
-                # Fixed-height content block so all four cards are the same height (title + description)
-                _desc_esc = (desc or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-                st.markdown(
-                    f"<div style='min-height:70px;'><strong>{icon} {title}</strong>"
-                    f"<p style='font-size:0.88rem;color:rgba(255,255,255,0.85);line-height:1.45;margin:0.5em 0 0 0;white-space:pre-wrap;'>{_desc_esc}</p>"
-                    f"<div style='height:1em;'></div></div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button("Select", key=f"scenario_card_{letter}", use_container_width=True):
-                    _apply_ab_only_scenario(letter)
-                    st.session_state["prep_compromised_items"] = st.session_state.get("ab_only_compromised_items") or []
-                    st.session_state["_nav_request"] = "Preparation"
-                    st.rerun()
-
-    st.divider()
-
-    llm_req_ab = st.text_area(
-        "Describe your testing situation",
-        value=st.session_state.get("ab_only_llm_requirement", ""),
-        placeholder="Describe your testing context; the assistant will suggest a suitable scenario. Select LLM service from **Settings**.",
-        height=100,
-        key="ab_only_llm_requirement",
-        label_visibility="collapsed",
-    )
-    suggest_btn_ab = st.button("Suggest scenario from description", key="ab_only_suggest_scenario", use_container_width=True)
-    if suggest_btn_ab and (llm_req_ab or st.session_state.get("ab_only_llm_requirement", "")):
-        with st.spinner("Asking LLM…"):
-            letter_ab, explanation_ab = _suggest_aberrance_scenario(llm_req_ab.strip() or st.session_state.get("ab_only_llm_requirement", ""))
-        if letter_ab and letter_ab in SCENARIO_PRESETS_AB and letter_ab != "C":
-            _apply_ab_only_scenario(letter_ab)
-            st.session_state["ab_only_llm_suggestion"] = explanation_ab
-            st.rerun()
-        elif explanation_ab:
-            st.session_state["ab_only_llm_suggestion"] = explanation_ab
-            st.rerun()
-    if st.session_state.get("ab_only_llm_suggestion"):
-        st.info(st.session_state["ab_only_llm_suggestion"])
-        if st.button("Clear suggestion", key="ab_only_clear_suggestion"):
-            st.session_state["ab_only_llm_suggestion"] = ""
-            st.rerun()
-
-    st.divider()
-    if st.button("Continue to Preparation", key="scenario_to_preparation", type="primary", use_container_width=True):
-        st.session_state["_nav_request"] = "Preparation"
-        st.rerun()
-
-
 def _render_tool_irt() -> None:
     st.markdown("---")
     st.subheader("IRT (item/person parameters)")
@@ -3510,16 +3233,8 @@ def _render_backend_test() -> None:
             except Exception as e:
                 st.error(f"/result failed: {e}")
 
-if run_mode == "Scenario":
-    _render_scenario_page()
 
-elif run_mode == "Settings":
-    st.subheader("⚙️ Settings")
-    st.caption("Configure the LLM provider and model used by Scenario suggestions, Detect, and Aberrance Summary.")
-    st.divider()
-    _render_llm_settings()
-
-elif run_mode == "Preparation":
+if run_mode == "Preparation":
     load_dotenv()
 
     st.markdown(
@@ -3603,7 +3318,7 @@ elif run_mode == "Preparation":
     n_items = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_persons else 0
     psi_loaded = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
 
-    provider = _llm_provider()
+    provider = st.session_state.get("llm_provider", "openrouter")
     model_id = _effective_llm_model()
     or_key = os.getenv("OPENROUTER_API_KEY", "")
     g_key = os.getenv("GOOGLE_API_KEY", "")
@@ -3615,10 +3330,8 @@ elif run_mode == "Preparation":
 
     backend_ok, backend_note = _backend_status_summary()
 
-    # Detect button is always green; its enabled/disabled state is
-    # recomputed later once we know which agents are selected and what
-    # data they actually require.
-    all_ready = False
+    # Detect button is always green; it is disabled until everything is ready.
+    all_ready = bool(resp_loaded and rt_loaded and psi_loaded and llm_configured)
     _run_bg = "#00c853"
     _run_bg_hover = "#00b248"
     st.markdown(
@@ -3644,65 +3357,20 @@ elif run_mode == "Preparation":
         unsafe_allow_html=True,
     )
 
-    # ----- Agent select (synced with Scenario; same state keys ab_only_cb_* / ab_only_scenario_select) -----
-    SCENARIO_PRESETS_AB_NAMES = {
-        "A": "Scenario A: Quality Assurance",
-        "B": "Scenario B: Certification Security",
-        "D": "Scenario D: Custom",
-        "Custom": "Scenario D: Custom",  # backward compat
-    }
-    SCENARIO_PRESET_IMAGES = {
-        "A": "https://placehold.co/480x120/1e3a5f/94a3b8?text=Quality+Assurance",
-        "B": "https://placehold.co/480x120/3d1f1f/94a3b8?text=Certification+Security",
-    }
-    for fn in ABERRANCE_FUNCTIONS:
-        if f"ab_only_cb_{fn}" not in st.session_state:
-            st.session_state[f"ab_only_cb_{fn}"] = False
-    if "ab_only_scenario_select" not in st.session_state:
-        st.session_state["ab_only_scenario_select"] = "D"
-    scenario_letter = st.session_state.get("ab_only_scenario_select") or "D"
-    if scenario_letter == "C":
-        st.session_state["ab_only_scenario_select"] = "D"
-        scenario_letter = "D"
+    st.markdown(
+        f"""
+        <div class="psymas-strip">
+          <span class="psymas-pill" title="{_esc('Response loaded' if resp_loaded else 'Response missing')}">{_dot(resp_loaded)}Response{(' ' + str(n_persons) + '×' + str(n_items)) if resp_loaded else ''}</span>
+          <span class="psymas-pill" title="{_esc('RT loaded' if rt_loaded else 'RT missing')}">{_dot(rt_loaded)}RT</span>
+          <span class="psymas-pill" title="{_esc('Item parameters (ψ) ready' if psi_loaded else 'Item parameters (ψ) missing')}">{_dot(psi_loaded)}ψ</span>
+          <span class="psymas-pill" title="{_esc('LLM configured' if llm_configured else 'LLM key missing for selected provider')}">{_dot(llm_configured)}LLM ({llm_short})</span>
+          <span class="psymas-pill" title="{_esc('LangGraph agents status')}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Compact left-aligned banner at top (reuses Scenario page imagery)
-    banner_img = SCENARIO_PRESET_IMAGES.get(scenario_letter)
-    if banner_img:
-        st.markdown(
-            f"<img src='{banner_img}' style='max-height:110px;border-radius:12px;margin:0 0 6px 0;display:block;' />",
-            unsafe_allow_html=True,
-        )
-
-    st.caption("Select which aberrance agents to include when you click **Detect**. Presets from **Scenario** pre-fill these; you can change them here.")
-
-    # Simple checkbox list of all agents on Preparation
-    prep_agent_labels = [
-        ("detect_rg", "Rapid Guessing (detect_rg) — flags unusually fast responding."),
-        ("detect_pm", "Model Misfit (detect_pm) — flags \"odd\" patterns under IRT."),
-        ("detect_ac", "Answer Copying (detect_ac) — flags source–copier pairs."),
-        ("detect_as", "Answer Similarity (detect_as) — flags suspiciously similar groups."),
-        ("detect_pk", "Preknowledge (detect_pk) — flags success on compromised items."),
-        ("detect_nm", "Guttman Errors (detect_nm) — flags hard-right / easy-wrong patterns."),
-        ("detect_tt", "Test Tampering (detect_tt) — requires erasure data."),
-    ]
-    for fn, desc in prep_agent_labels:
-        st.checkbox(desc, value=st.session_state.get(f"ab_only_cb_{fn}", False), key=f"ab_only_cb_{fn}")
-
-    prep_ab_fns = [fn for fn, _ in prep_agent_labels if st.session_state.get(f"ab_only_cb_{fn}")]
-    if not prep_ab_fns:
-        prep_ab_fns = ["detect_nm"]  # default so at least one agent runs
-
-    # Decide which extra inputs are relevant based on selected agents
-    need_rt = "detect_rg" in prep_ab_fns  # RT needed for Rapid Guessing
-    need_comp = "detect_pk" in prep_ab_fns  # compromised items needed for Preknowledge
-    need_tt = "detect_tt" in prep_ab_fns  # tampering data needed for Test Tampering
-    need_model = any(
-        fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"]
-    )  # IRT model needed when any IRT-based agent is selected
-
-    st.divider()
-
-    col_upload, col_irt = st.columns(2, gap="large")
+    col_upload, col_irt, col_llm = st.columns(3, gap="large")
 
     with col_upload:
         with st.container(border=True):
@@ -3710,17 +3378,20 @@ elif run_mode == "Preparation":
             st.markdown(
                 f"""
                 <div class="psymas-card-head">
-                  <div class="psymas-card-title">Upload Response</div>
+                  <div class="psymas-card-title">Upload</div>
                   <div class="psymas-card-status">
                     <span title="{_esc('Response loaded' if resp_loaded else 'Response missing')}">{_dot(resp_loaded)}Resp</span>
+                    <span title="{_esc('RT loaded' if rt_loaded else 'RT missing')}">{_dot(rt_loaded)}RT</span>
                   </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
             up_resp = st.file_uploader("Response (CSV)", type=["csv"], key="main_resp_uploader")
+            up_rt = st.file_uploader("RT (CSV, optional)", type=["csv"], key="main_rt_uploader")
             # Avoid infinite rerun loops: only process when the uploaded file changes.
             resp_sig = (getattr(up_resp, "name", None), getattr(up_resp, "size", None)) if up_resp is not None else None
+            rt_sig = (getattr(up_rt, "name", None), getattr(up_rt, "size", None)) if up_rt is not None else None
 
             if resp_sig and st.session_state.get("prep_last_resp_sig") != resp_sig:
                 try:
@@ -3730,91 +3401,24 @@ elif run_mode == "Preparation":
                     _r = _validate_binary_responses(_r)
                     st.session_state.last_uploaded_responses = _r.to_dict(orient="records")
                     st.session_state["prep_last_resp_sig"] = resp_sig
-                    # Keep the user on Preparation after upload-triggered reruns.
-                    st.session_state["_nav_request"] = "Preparation"
+                    # If RT is already selected, process it now too.
+                    if rt_sig:
+                        try:
+                            up_rt.seek(0)
+                            _rt = pd.read_csv(up_rt)
+                            _rt = _drop_index_column(_rt)
+                            _rt = _coerce_numeric(_rt, "RT")
+                            if _r.shape[1] == _rt.shape[1]:
+                                _rt = _align_rt_columns_to_response(_rt, _r)
+                            st.session_state.last_uploaded_rt_data = _rt.to_dict(orient="records")
+                            st.session_state["prep_last_rt_sig"] = rt_sig
+                        except Exception:
+                            st.session_state.last_uploaded_rt_data = []
                     st.rerun()
                 except Exception as e:
                     st.error(f"{e}")
 
-    with col_irt:
-        if need_model:
-            with st.container(border=True):
-                st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
-                ip = st.session_state.get("last_irt_item_params") or []
-                ip_ready = bool(ip)
-                st.markdown(
-                    f"""
-                    <div class="psymas-card-head">
-                      <div class="psymas-card-title">Model</div>
-                      <div class="psymas-card-status">{_dot(ip_ready)}{'Ready' if ip_ready else 'Not ready'}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                itemtype = st.selectbox("Model", ["2PL", "1PL", "3PL", "4PL"], index=0, key="main_irt_itemtype")
-                run_irt = st.button("Generate item parameters", key="main_generate_item_params", use_container_width=True)
-                if run_irt:
-                    responses = st.session_state.get("last_uploaded_responses") or []
-                    rt_data = st.session_state.get("last_uploaded_rt_data") or []
-                    if not responses:
-                        st.session_state["last_irt_error"] = "Upload Response first."
-                        st.error(st.session_state["last_irt_error"])
-                    else:
-                        # Run IRT in the backend (Docker/Linux) so Windows doesn't need local R/rpy2.
-                        st.session_state["last_irt_error"] = None
-                        with st.spinner(f"Running IRT ({itemtype}) to estimate item parameters…"):
-                            try:
-                                payload = _json_safe(
-                                    {
-                                        "responses": responses,
-                                        "rt_data": rt_data,
-                                        "itemtype": itemtype,
-                                        "model_settings": st.session_state.get("model_settings") or {},
-                                    }
-                                )
-                                r = requests.post(f"{BACKEND_URL}/irt", json=payload, timeout=180)
-                                r.raise_for_status()
-                                js = r.json()
-                                if js.get("status") != "done":
-                                    raise RuntimeError(js.get("error") or "IRT backend failed.")
-                                irt_result = js.get("result") or {}
-                            except Exception as e:
-                                irt_result = {}
-                                st.session_state["last_irt_error"] = f"IRT estimation failed: {e}"
-                        if irt_result.get("item_params"):
-                            psi_data = irt_result["item_params"]
-                            st.session_state["last_irt_item_params"] = psi_data
-                            st.session_state["item_params"] = psi_data
-                            if irt_result.get("person_params"):
-                                st.session_state["forensic_person_params"] = irt_result["person_params"]
-                            # Keep the user on Preparation after IRT-triggered reruns.
-                            st.session_state["_nav_request"] = "Preparation"
-                            st.rerun()
-                        else:
-                            st.session_state["last_irt_error"] = (
-                                st.session_state.get("last_irt_error")
-                                or irt_result.get("icc_error")
-                                or "IRT returned no item parameters."
-                            )
-                            st.error(st.session_state["last_irt_error"])
-                if st.session_state.get("last_irt_error"):
-                    st.caption(st.session_state["last_irt_error"])
-
-    # RT upload shown when any RT-using agent is selected
-    if need_rt:
-        with st.container(border=True):
-            st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"""
-                <div class="psymas-card-head">
-                  <div class="psymas-card-title">RT (optional)</div>
-                  <div class="psymas-card-status">{_dot(rt_loaded)}{'Ready' if rt_loaded else 'Not ready'}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            up_rt = st.file_uploader("RT (CSV, optional)", type=["csv"], key="main_rt_uploader")
-            rt_sig = (getattr(up_rt, "name", None), getattr(up_rt, "size", None)) if up_rt is not None else None
+            # RT upload can happen without re-uploading Response
             if rt_sig and st.session_state.get("prep_last_rt_sig") != rt_sig and st.session_state.get("last_uploaded_responses"):
                 try:
                     up_rt.seek(0)
@@ -3826,110 +3430,126 @@ elif run_mode == "Preparation":
                         _rt = _align_rt_columns_to_response(_rt, _r_prev)
                     st.session_state.last_uploaded_rt_data = _rt.to_dict(orient="records")
                     st.session_state["prep_last_rt_sig"] = rt_sig
-                    # Keep the user on Preparation after upload-triggered reruns.
-                    st.session_state["_nav_request"] = "Preparation"
                     st.rerun()
                 except Exception as e:
                     st.error(f"{e}")
 
-    # Compromised items section when Preknowledge is selected
-    if need_comp:
+    with col_irt:
         with st.container(border=True):
             st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
+            ip = st.session_state.get("last_irt_item_params") or []
+            ip_ready = bool(ip)
             st.markdown(
-                """
+                f"""
                 <div class="psymas-card-head">
-                  <div class="psymas-card-title">Compromised items</div>
+                  <div class="psymas-card-title">Model</div>
+                  <div class="psymas-card-status">{_dot(ip_ready)}{'Ready' if ip_ready else 'Not ready'}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            comp_input = st.text_input(
-                "Compromised item IDs (optional)",
-                key="prep_compromised_input",
-                label_visibility="collapsed",
-                placeholder="Compromised item IDs, e.g. 3,7,12",
-            )
+            itemtype = st.selectbox("Model", ["2PL", "1PL", "3PL", "4PL"], index=0, key="main_irt_itemtype")
+            comp_input = st.text_input("Compromised (optional)", key="prep_compromised_input", label_visibility="collapsed", placeholder="Compromised item IDs, e.g. 3,7,12")
             try:
-                st.session_state["prep_compromised_items"] = [
-                    int(x.strip()) for x in (comp_input or "").split(",") if x.strip().isdigit()
-                ]
+                st.session_state["prep_compromised_items"] = [int(x.strip()) for x in (comp_input or "").split(",") if x.strip().isdigit()]
             except Exception:
                 st.session_state["prep_compromised_items"] = []
+            run_irt = st.button("Generate item parameters", key="main_generate_item_params", use_container_width=True)
+            if run_irt:
+                responses = st.session_state.get("last_uploaded_responses") or []
+                rt_data = st.session_state.get("last_uploaded_rt_data") or []
+                if not responses:
+                    st.session_state["last_irt_error"] = "Upload Response first."
+                    st.error(st.session_state["last_irt_error"])
+                else:
+                    # Run IRT in the backend (Docker/Linux) so Windows doesn't need local R/rpy2.
+                    st.session_state["last_irt_error"] = None
+                    with st.spinner(f"Running IRT ({itemtype}) to estimate item parameters…"):
+                        try:
+                            payload = _json_safe(
+                                {
+                                    "responses": responses,
+                                    "rt_data": rt_data,
+                                    "itemtype": itemtype,
+                                    "model_settings": st.session_state.get("model_settings") or {},
+                                }
+                            )
+                            r = requests.post(f"{BACKEND_URL}/irt", json=payload, timeout=180)
+                            r.raise_for_status()
+                            js = r.json()
+                            if js.get("status") != "done":
+                                raise RuntimeError(js.get("error") or "IRT backend failed.")
+                            irt_result = js.get("result") or {}
+                        except Exception as e:
+                            irt_result = {}
+                            st.session_state["last_irt_error"] = f"IRT estimation failed: {e}"
+                    if irt_result.get("item_params"):
+                        psi_data = irt_result["item_params"]
+                        st.session_state["last_irt_item_params"] = psi_data
+                        st.session_state["item_params"] = psi_data
+                        if irt_result.get("person_params"):
+                            st.session_state["forensic_person_params"] = irt_result["person_params"]
+                        st.rerun()
+                    else:
+                        st.session_state["last_irt_error"] = (
+                            st.session_state.get("last_irt_error")
+                            or irt_result.get("icc_error")
+                            or "IRT returned no item parameters."
+                        )
+                        st.error(st.session_state["last_irt_error"])
+            if st.session_state.get("last_irt_error"):
+                st.caption(st.session_state["last_irt_error"])
 
-    # Test tampering data section when detect_tt is selected
-    if need_tt:
+    with col_llm:
         with st.container(border=True):
             st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
             st.markdown(
-                """
+                f"""
                 <div class="psymas-card-head">
-                  <div class="psymas-card-title">Test tampering data (optional)</div>
+                  <div class="psymas-card-title">LLM</div>
+                  <div class="psymas-card-status">{_dot(llm_configured)}{'Ready' if llm_configured else 'Not ready'}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            tt_file = st.file_uploader("Erasure / tampering data (CSV)", type=["csv"], key="prep_tt_uploader")
-            if tt_file is not None:
-                st.session_state["prep_tt_data_name"] = tt_file.name
+            if "llm_provider" not in st.session_state:
+                st.session_state.llm_provider = "openrouter"
+            st.radio(
+                "Provider",
+                options=["openrouter", "google"],
+                key="llm_provider",
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+            _model_ids = _current_model_ids()
+            if "selected_gemini_model" not in st.session_state:
+                st.session_state.selected_gemini_model = _model_ids[0] if _model_ids else ""
+            if _model_ids and st.session_state.selected_gemini_model not in _model_ids:
+                st.session_state.selected_gemini_model = _model_ids[0]
+            st.selectbox(
+                "Model",
+                options=_model_ids,
+                key="selected_gemini_model",
+                label_visibility="collapsed",
+            )
+            test = st.button("Test LLM", key="main_test_llm", use_container_width=True)
+            if test:
+                load_dotenv()
+                provider_now = st.session_state.get("llm_provider", "openrouter")
+                if provider_now == "openrouter":
+                    key = os.getenv("OPENROUTER_API_KEY", "")
+                    ok, msg = _test_openrouter_api_key(key)
+                    st.session_state["main_llm_test"] = (ok, msg)
+                else:
+                    key = os.getenv("GOOGLE_API_KEY", "")
+                    ok, msg = _test_api_key(key)
+                    st.session_state["main_llm_test"] = (ok, msg)
+                st.rerun()
+            if st.session_state.get("main_llm_test") is not None:
+                ok, msg = st.session_state["main_llm_test"]
+                (st.success if ok else st.error)(msg)
 
     st.divider()
-    # Align readiness pills with what is actually required by the selected agents
-    need_rt = "detect_rg" in prep_ab_fns
-    need_psi = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"])
-
-    resp_ok = resp_loaded
-    rt_ok = rt_loaded if need_rt else True
-    psi_ok = psi_loaded if need_psi else True
-
-    # Now that we know which resources are actually required for the
-    # current agent selection, we can decide whether Detect should be
-    # enabled. RT / ψ are only required when their corresponding flags
-    # are needed by at least one selected agent.
-    all_ready = bool(resp_ok and rt_ok and psi_ok and llm_configured)
-
-    rt_title = (
-        _esc("RT loaded (used by Rapid Guessing).")
-        if need_rt and rt_loaded
-        else _esc("RT missing (required for Rapid Guessing).")
-        if need_rt
-        else _esc("RT not required for the current agent selection.")
-    )
-    psi_title = (
-        _esc("Item parameters (ψ) ready for IRT-based agents.")
-        if need_psi and psi_loaded
-        else _esc("Item parameters (ψ) missing but required for some selected agents.")
-        if need_psi
-        else _esc("Item parameters (ψ) not required for the current agent selection.")
-    )
-
-    # Build status pills only for requirements relevant to the current agent selection
-    _pills_html = []
-    _pills_html.append(
-        f'<span class="psymas-pill" title="{_esc("Response loaded" if resp_ok else "Response missing")}">{_dot(resp_ok)}Response'
-        f'{(" " + str(n_persons) + "×" + str(n_items)) if resp_ok else ""}</span>'
-    )
-    if need_rt:
-        _pills_html.append(
-            f'<span class="psymas-pill" title="{rt_title}">{_dot(rt_ok)}RT</span>'
-        )
-    if need_psi:
-        _pills_html.append(
-            f'<span class="psymas-pill" title="{psi_title}">{_dot(psi_ok)}ψ</span>'
-        )
-    # LLM and LangGraph Agents are always relevant for Detect
-    _pills_html.append(
-        f'<span class="psymas-pill" title="{_esc("LLM configured" if llm_configured else "LLM key missing for selected provider")}">'
-        f'{_dot(llm_configured)}LLM ({llm_short})</span>'
-    )
-    _pills_html.append(
-        f'<span class="psymas-pill" title="{_esc("LangGraph agents status")}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>'
-    )
-
-    st.markdown(
-        f'<div class="psymas-strip">{"".join(_pills_html)}</div>',
-        unsafe_allow_html=True,
-    )
     with st.container():
         st.markdown("<div class='psymas-runforensic-marker'></div>", unsafe_allow_html=True)
         run_forensic = st.button(
@@ -3946,10 +3566,9 @@ elif run_mode == "Preparation":
             "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
             "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
             "compromised_items": st.session_state.get("prep_compromised_items") or [],
-            "model_settings": _model_settings_for_backend(),
+            "model_settings": st.session_state.get("model_settings") or {},
             # Reuse ψ generated on Preparation to keep IRT parameters identical.
             "psi_data": st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or [],
-            "aberrance_functions": prep_ab_fns,
         }
         payload = _json_safe(raw_payload)
         try:
@@ -3982,9 +3601,8 @@ elif run_mode == "Detect Progress":
                 "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
                 "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
                 "compromised_items": st.session_state.get("prep_compromised_items") or [],
-                "model_settings": _model_settings_for_backend(),
+                "model_settings": st.session_state.get("model_settings") or {},
                 "psi_data": st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or [],
-                "aberrance_functions": [fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")] or ["detect_nm"],
             }
             payload = _json_safe(raw_payload)
             try:
@@ -4059,10 +3677,104 @@ elif run_mode == "Detect Progress":
         rt_data = st.session_state.get("last_uploaded_rt_data") or []
 
         st.markdown("**Working status**")
+        # Placeholder for a LangGraph-style tree visualization (Graphviz), centered in the layout
         _left_spacer, tree_col, _right_spacer = st.columns([2, 7, 2])
         with tree_col:
-            # Professional flow diagram on Detect Progress; colors updated later when backend node_states are known
-            st.markdown("*(Flow diagram appears after backend status is fetched.)*")
+            graph_placeholder = st.empty()
+
+            # Define agents for LangGraph-style visualization (LangGraph-style tree).
+            _agent_defs = [
+                ("router", "Router"),
+                ("pm_agent", "Model Misfit (detect_pm)"),
+                ("nm_agent", "Guttman / Nonparametric (detect_nm)"),
+                ("ac_agent", "Answer Copying (detect_ac)"),
+                ("as_agent", "Answer Similarity (detect_as)"),
+                ("rg_agent", "Rapid Guessing (detect_rg)"),
+                ("cp_agent", "Change Point (detect_cp)"),
+                ("tt_agent", "Tampering (detect_tt)"),
+                ("pk_agent", "Preknowledge (detect_pk)"),
+                ("synthesizer", "Manager synthesis (LLM)"),
+            ]
+
+            # Track node states for the tree. Values: "pending", "running", "done", "error".
+            node_states: dict[str, str] = {
+                "router": "pending",
+                "pm_agent": "pending",
+                "nm_agent": "pending",
+                "ac_agent": "pending",
+                "as_agent": "pending",
+                "rg_agent": "pending",
+                "cp_agent": "pending",
+                "tt_agent": "pending",
+                "pk_agent": "pending",
+                "synthesizer": "pending",
+            }
+
+            def _render_agent_graph() -> None:
+                """Render LangGraph-style tree using Graphviz, styled to be compact and modern."""
+                color_map = {
+                    "pending": "#4b5563",   # grey
+                    "running": "#fbbf24",   # amber
+                    "done": "#16a34a",      # green
+                    "error": "#f87171",     # red
+                }
+
+                def _node_line(node_id: str, label: str) -> str:
+                    state = node_states.get(node_id, "pending")
+                    color = color_map.get(state, "#4b5563")
+                    safe_label = label.replace('"', '\\"')
+                    return (
+                        f'"{node_id}" [label="{safe_label}", '
+                        f'style="filled", fillcolor="{color}", fontcolor="white"];'
+                    )
+
+                lines = [
+                    "digraph G {",
+                    '  graph [bgcolor="#0e1117", ranksep=0.35, nodesep=0.22, margin=0.10];',
+                    '  node [shape=box, width=0.9, height=0.28, fontsize=6, penwidth=0.6, fontname="Segoe UI", fixedsize=true];',
+                    '  edge [color="#4b5563", penwidth=0.5, arrowsize=0.30];',
+                    "  rankdir=TB;",
+                    f"  {_node_line('router', 'Router')}",
+                    "  {rank=same; "
+                    + " ".join(f'\"{k}\"' for k in ["pm_agent", "nm_agent", "ac_agent", "as_agent"])
+                    + "};",
+                    "  {rank=same; "
+                    + " ".join(f'\"{k}\"' for k in ["rg_agent", "cp_agent", "tt_agent", "pk_agent"])
+                    + "};",
+                    f"  {_node_line('pm_agent', 'Parametric')}",
+                    f"  {_node_line('nm_agent', 'Nonparametric')}",
+                    f"  {_node_line('ac_agent', 'Copying')}",
+                    f"  {_node_line('as_agent', 'Similarity')}",
+                    f"  {_node_line('rg_agent', 'Rapid guessing')}",
+                    f"  {_node_line('cp_agent', 'Change point')}",
+                    f"  {_node_line('tt_agent', 'Tampering')}",
+                    f"  {_node_line('pk_agent', 'Preknowledge')}",
+                    f"  {_node_line('synthesizer', 'Manager (LLM)')}",
+                    # Router → specialists
+                    '  "router" -> "pm_agent";',
+                    '  "router" -> "nm_agent";',
+                    '  "router" -> "ac_agent";',
+                    '  "router" -> "as_agent";',
+                    '  "router" -> "rg_agent";',
+                    '  "router" -> "cp_agent";',
+                    '  "router" -> "tt_agent";',
+                    '  "router" -> "pk_agent";',
+                    # Specialists → synthesizer
+                    '  "pm_agent" -> "synthesizer";',
+                    '  "nm_agent" -> "synthesizer";',
+                    '  "ac_agent" -> "synthesizer";',
+                    '  "as_agent" -> "synthesizer";',
+                    '  "rg_agent" -> "synthesizer";',
+                    '  "cp_agent" -> "synthesizer";',
+                    '  "tt_agent" -> "synthesizer";',
+                    '  "pk_agent" -> "synthesizer";',
+                    "}",
+                ]
+                # Render using the full width of the center column for better readability
+                graph_placeholder.graphviz_chart("\n".join(lines), use_container_width=True)
+
+            # Initial render so the tree appears immediately on entering Detect Progress.
+            _render_agent_graph()
 
             # IRT / RT status shown separately from the agent tree (driven by backend state)
             left, right = st.columns(2, gap="small")
@@ -4100,8 +3812,12 @@ elif run_mode == "Detect Progress":
                         irt_box.update(state="running", expanded=False)
                     rt_box.update(state="complete" if rt_data else "error", expanded=False)
 
-                    # Update progress bar
+                    # Update progress bar and tree colors
                     _smooth_to(min(backend_progress, 97), duration_s=0.20)
+                    for node_name, state in backend_nodes.items():
+                        if node_name in node_states:
+                            node_states[node_name] = state
+                    _render_agent_graph()
 
                     if backend_status == "error":
                         err_msg = js.get("error") or "Backend reported an error."
@@ -4127,17 +3843,12 @@ elif run_mode == "Detect Progress":
                             st.session_state["forensic_psi_data"] = result.get("psi_data") or []
                             st.session_state["detect_job_status"] = "done"
                             _smooth_to(100, duration_s=0.25)
-                            st.success("Detection completed.")
-                            if st.button("Generate Report", key="detect_generate_report", type="primary", use_container_width=True):
-                                # Jump straight to the Aberrance Summary dashboard
-                                st.session_state["_nav_request"] = "Aberrance Summary"
-                                st.rerun()
+                            st.success("Detection completed. Use the sidebar to open **Aberrance Summary**.")
 
                     if backend_status in ("running", "pending"):
-                        _status.caption("Job still running. This page will refresh automatically until it finishes.")
-                        # Auto-poll backend every few seconds instead of requiring a manual Refresh click.
-                        time.sleep(3)
-                        st.rerun()
+                        _status.caption("Job still running. Click **Refresh status** below to update.")
+                        if st.button("Refresh status", key="detect_refresh_status", use_container_width=True):
+                            st.rerun()
 
 elif run_mode == "Data review":
     resp_data = st.session_state.get("last_uploaded_responses") or []
@@ -4274,7 +3985,7 @@ elif run_mode == "Aberrance Summary":
                     from graph import manager_synthesizer
                     # Use current sidebar/Preparation LLM selection for regeneration
                     load_dotenv()
-                    _provider = _llm_provider()
+                    _provider = st.session_state.get("llm_provider", "openrouter")
                     _model_id = _effective_llm_model()
                     _or_key = os.getenv("OPENROUTER_API_KEY", "")
                     _google_key = os.getenv("GOOGLE_API_KEY", "")
@@ -4301,95 +4012,73 @@ elif run_mode == "Aberrance Summary":
                     st.error(f"Could not regenerate forensic verdict: {e}")
         st.divider()
 
-        # ── Middle Section: Visuals (only render when plots exist) ──
-        ac_data = flags.get("ac_agent", {}) if isinstance(flags.get("ac_agent", {}), dict) else {}
-        rg_data = flags.get("rg_agent", {}) if isinstance(flags.get("rg_agent", {}), dict) else {}
-        nm_data = flags.get("nm_agent", {}) if isinstance(flags.get("nm_agent", {}), dict) else {}
+        # ── Middle Section: Visuals ──
+        vis_col1, vis_col2 = st.columns(2)
 
-        # Pre-check whether each plot has enough data to be meaningful.
-        _ac_pairs = ac_data.get("pairs") if isinstance(ac_data.get("pairs"), list) else []
-        _sig_pairs = []
-        for pair in _ac_pairs:
-            if not isinstance(pair, dict):
-                continue
-            src, cop = pair.get("Source", 0), pair.get("Copier", 0)
-            stats = {k: v for k, v in pair.items() if k not in ("Source", "Copier") and isinstance(v, (int, float))}
-            if any(abs(v) > 2 for v in stats.values()):
-                _sig_pairs.append((src, cop))
-
-        _rte_vals = rg_data.get("rte") if isinstance(rg_data.get("rte"), list) else []
-        _ability = []
-        if nm_data.get("stat") and isinstance(nm_data.get("stat"), list):
-            for rec in nm_data["stat"]:
-                if isinstance(rec, dict):
-                    try:
-                        _ability.append(float(rec.get("ZU3_S", 0)))
-                    except Exception:
-                        _ability.append(0.0)
-        else:
-            _ability = list(range(len(_rte_vals)))
-        _n_eff = min(len(_rte_vals), len(_ability))
-
-        _show_collusion = bool(_sig_pairs) and not bool(ac_data.get("error"))
-        _show_effort = bool(_rte_vals) and _n_eff > 0 and not bool(rg_data.get("error"))
-
-        if _show_collusion or _show_effort:
-            if _show_collusion and _show_effort:
-                vis_col1, vis_col2 = st.columns(2)
-            else:
-                (vis_col1,) = st.columns(1)
-                vis_col2 = vis_col1
-
-            if _show_collusion:
-                with vis_col1:
-                    st.subheader("Collusion Graph")
-                    try:
-                        import networkx as nx
-
-                        G = nx.Graph()
-                        n_resp = len(st.session_state.get("forensic_responses", []))
-                        for i in range(n_resp):
-                            G.add_node(i + 1)
-
-                        flagged_copiers = set(ac_data.get("flagged_copiers", []))
-                        for src, cop in _sig_pairs:
+        # Collusion Graph
+        with vis_col1:
+            st.subheader("Collusion Graph")
+            ac_data = flags.get("ac_agent", {})
+            if ac_data.get("error"):
+                st.caption(f"ac_agent error: {ac_data['error']}")
+            elif ac_data.get("pairs"):
+                try:
+                    import networkx as nx
+                    G = nx.Graph()
+                    n_resp = len(st.session_state.get("forensic_responses", []))
+                    for i in range(n_resp):
+                        G.add_node(i + 1)
+                    flagged_copiers = set(ac_data.get("flagged_copiers", []))
+                    sig_pairs = []
+                    for pair in ac_data["pairs"]:
+                        src, cop = pair.get("Source", 0), pair.get("Copier", 0)
+                        stats = {k: v for k, v in pair.items() if k not in ("Source", "Copier") and isinstance(v, (int, float))}
+                        if any(abs(v) > 2 for v in stats.values()):
+                            sig_pairs.append((src, cop))
                             G.add_edge(src, cop)
-
+                    if sig_pairs:
                         fig_g, ax_g = plt.subplots(figsize=(6, 5))
                         pos = nx.spring_layout(G, seed=42)
                         node_colors = ["#ff4444" if (n - 1) in flagged_copiers else "#4488ff" for n in G.nodes()]
-                        nx.draw(
-                            G,
-                            pos,
-                            ax=ax_g,
-                            with_labels=True,
-                            node_color=node_colors,
-                            node_size=300,
-                            font_size=8,
-                            edge_color="#666666",
-                            width=1.5,
-                            font_color="white",
-                        )
+                        nx.draw(G, pos, ax=ax_g, with_labels=True, node_color=node_colors,
+                                node_size=300, font_size=8, edge_color="#666666", width=1.5,
+                                font_color="white")
                         ax_g.set_facecolor("#1a1a2e")
                         fig_g.patch.set_facecolor("#1a1a2e")
-                        ax_g.set_title(f"Copying Network ({len(_sig_pairs)} significant pairs)", color="white")
+                        ax_g.set_title(f"Copying Network ({len(sig_pairs)} significant pairs)", color="white")
                         st.pyplot(fig_g)
                         plt.close(fig_g)
-                    except ImportError:
-                        st.warning("Install `networkx` to render the collusion graph.")
-                    except Exception as e:
-                        st.warning(f"Could not render collusion graph: {e}")
+                    else:
+                        st.caption("No significant copying pairs detected.")
+                except ImportError:
+                    st.caption("Install `networkx` for collusion graph visualization.")
+                except Exception as e:
+                    st.caption(f"Could not render collusion graph: {e}")
+            else:
+                st.caption("No answer-copying data available.")
 
-            if _show_effort:
-                with vis_col2:
-                    st.subheader("Effort Matrix")
-                    scatter_df = pd.DataFrame(
-                        {
-                            "Ability (ZU3_S)": _ability[:_n_eff],
-                            "RTE": _rte_vals[:_n_eff],
-                            "Student": [f"S{i+1}" for i in range(_n_eff)],
-                        }
-                    )
+        # Effort Matrix (Ability vs RTE)
+        with vis_col2:
+            st.subheader("Effort Matrix")
+            rg_data = flags.get("rg_agent", {})
+            nm_data = flags.get("nm_agent", {})
+            if rg_data.get("error"):
+                st.caption(f"rg_agent error: {rg_data['error']}")
+            elif rg_data.get("rte"):
+                rte_vals = rg_data["rte"]
+                ability = []
+                if nm_data.get("stat"):
+                    for rec in nm_data["stat"]:
+                        ability.append(float(rec.get("ZU3_S", 0)))
+                else:
+                    ability = list(range(len(rte_vals)))
+                n = min(len(rte_vals), len(ability))
+                if n > 0:
+                    scatter_df = pd.DataFrame({
+                        "Ability (ZU3_S)": ability[:n],
+                        "RTE": rte_vals[:n],
+                        "Student": [f"S{i+1}" for i in range(n)],
+                    })
                     fig_e, ax_e = plt.subplots(figsize=(6, 5))
                     ax_e.set_facecolor("#1a1a2e")
                     fig_e.patch.set_facecolor("#1a1a2e")
@@ -4403,36 +4092,24 @@ elif run_mode == "Aberrance Summary":
                             colors.append("#ffaa00")
                         else:
                             colors.append("#44ff44")
-                    ax_e.scatter(
-                        scatter_df["Ability (ZU3_S)"],
-                        scatter_df["RTE"],
-                        c=colors,
-                        s=40,
-                        alpha=0.7,
-                        edgecolors="white",
-                        linewidth=0.5,
-                    )
+                    ax_e.scatter(scatter_df["Ability (ZU3_S)"], scatter_df["RTE"],
+                                 c=colors, s=40, alpha=0.7, edgecolors="white", linewidth=0.5)
                     ax_e.axhline(y=med_rte, color="#555555", linestyle="--", alpha=0.5)
                     ax_e.axvline(x=med_ability, color="#555555", linestyle="--", alpha=0.5)
                     ax_e.set_xlabel("Ability (ZU3_S)", color="white")
                     ax_e.set_ylabel("Response Time Effort (RTE)", color="white")
                     ax_e.set_title("Ability vs Effort", color="white")
                     ax_e.tick_params(colors="white")
-                    ax_e.text(
-                        0.95,
-                        0.05,
-                        "Smart Cheater\nZone",
-                        transform=ax_e.transAxes,
-                        ha="right",
-                        va="bottom",
-                        color="#ff4444",
-                        fontsize=9,
-                        fontstyle="italic",
-                    )
+                    ax_e.text(0.95, 0.05, "Smart Cheater\nZone", transform=ax_e.transAxes,
+                              ha="right", va="bottom", color="#ff4444", fontsize=9, fontstyle="italic")
                     st.pyplot(fig_e)
                     plt.close(fig_e)
+                else:
+                    st.caption("Insufficient data for effort matrix.")
+            else:
+                st.caption("No rapid-guessing RTE data (upload RT data and rerun).")
 
-            st.divider()
+        st.divider()
 
         # ── Bottom Section: The Watchlist ──
         st.subheader("The Watchlist — High-Risk Students")
@@ -4474,81 +4151,6 @@ elif run_mode == "Aberrance Summary":
             st.caption("Navigate to **Student Profile** for drill-down analysis.")
         else:
             st.info("No students were flagged across any agents.")
-
-        st.divider()
-
-        # ── Agent-by-agent narrative reports ──
-        st.subheader("Agent-by-Agent Reports")
-        responses = st.session_state.get("forensic_responses", [])
-        n_students = len(responses)
-
-        _agent_meta = {
-            "nm_agent": ("Nonparametric Misfit (detect_nm)", "Person-fit without IRT; large positive ZU3_S values indicate inconsistent response patterns."),
-            "pm_agent": ("Model Misfit (detect_pm)", "Parametric person-fit under IRT; flags students whose patterns do not fit the calibrated model."),
-            "ac_agent": ("Answer Copying (detect_ac)", "Source–copier pairs with suspiciously similar answer strings."),
-            "as_agent": ("Answer Similarity (detect_as)", "Clusters of students with unusually similar response vectors."),
-            "rg_agent": ("Rapid Guessing (detect_rg)", "Low response-time effort (RTE) relative to peers and item difficulty."),
-            "tt_agent": ("Test Tampering (detect_tt)", "Potential erasures or overwriting patterns suggesting tampering."),
-            "pk_agent": ("Preknowledge (detect_pk)", "Unusual success on compromised items relative to baseline ability."),
-        }
-
-        for agent_key, (title, blurb) in _agent_meta.items():
-            data = flags.get(agent_key, {})
-            if not isinstance(data, dict) or not data:
-                continue
-
-            with st.expander(title, expanded=False):
-                st.caption(blurb)
-
-                if data.get("error"):
-                    st.markdown(f"❌ **Error**: {data['error']}")
-                    continue
-                if data.get("info"):
-                    st.markdown(f"ℹ️ {data['info']}")
-
-                flagged_sets = [
-                    set(data.get("flagged", [])),
-                    set(data.get("flagged_copiers", [])),
-                    set(data.get("flagged_pairs", [])),
-                ]
-                flagged = set().union(*flagged_sets)
-                n_flagged = len(flagged)
-
-                if n_students:
-                    rate = (n_flagged / n_students) * 100 if n_students > 0 else 0.0
-                    st.markdown(f"**Flagged students**: {n_flagged} of {n_students} (~{rate:.1f}%).")
-                else:
-                    st.markdown(f"**Flagged students**: {n_flagged}.")
-
-                if n_flagged:
-                    example_ids = sorted(flagged)[:10]
-                    st.markdown(
-                        "Examples (student indices): "
-                        + ", ".join(str(i + 1) for i in example_ids)
-                    )
-
-                # Agent-specific quantitative highlights
-                if agent_key == "nm_agent" and data.get("stat"):
-                    try:
-                        stats = data["stat"]
-                        scores = [float(stats[i].get("ZU3_S", 0)) for i in flagged if i < len(stats)]
-                        if scores:
-                            st.caption(f"Maximum person-fit ZU3_S among flagged examinees: {max(scores):.2f}.")
-                    except Exception:
-                        pass
-
-                if agent_key == "rg_agent" and data.get("rte"):
-                    try:
-                        rte_vals = data["rte"]
-                        rte_flagged = [float(rte_vals[i]) for i in flagged if i < len(rte_vals)]
-                        if rte_flagged:
-                            rte_series = pd.Series(rte_flagged)
-                            st.caption(
-                                f"Median RTE for flagged students: {rte_series.median():.2f} "
-                                "(lower values indicate faster, less effortful responding)."
-                            )
-                    except Exception:
-                        pass
 
         # Agent Status Overview
         with st.expander("Agent Status Summary"):
