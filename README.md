@@ -1,4 +1,4 @@
-# PsyMAS-Aberrance (v0.4.0)
+# PsyMAS-Aberrance (v0.5.0)
 
 **PsyMAS-Aberrance** is a Streamlit app for **forensic psychometrics**: it fits an IRT model (to produce ψ item parameters) and runs **aberrance detection agents**, then produces a **Forensic Verdict** (LLM-assisted).
 
@@ -15,14 +15,12 @@ Why split it?
 
 ---
 
-## What’s new in 0.4.0
+## What’s new in 0.5.0
 
-- **Scenario**: Removed Scenario C (Online/Unproctored). Three presets: **A** (Low-Stakes), **B** (High-Stakes/Proctored), **D** (Custom).
-- **Preparation**: Page no longer jumps back to Scenario after uploading Response/RT or generating item parameters. Sidebar navigation stays in sync via `_nav_request`.
-- **Detect Progress**: Auto-refreshes every few seconds while running (no manual “Refresh status”). **Generate Report** opens **Aberrance Summary**.
-- **Aberrance Summary**: Agent-by-agent reports (counts, examples). Collusion Graph and Effort Matrix only show when data is available.
-- **Sidebar — Session status**: Shows Response, RT, ψ, Compromised items, Tampering file, LLM, and LangGraph Agents, with “(required)” / “(optional)” by selected agents. Detect button enabled only when required data is present.
-- **IRT estimation**: No longer causes a jump to Scenario; user stays on Preparation.
+- **Backend IRT stability**: Fixed rpy2 conversion-context errors in `POST /irt` when running under uvicorn worker threads.
+- **Preknowledge defaults**: If no compromised items are provided for `detect_pk`, we default to **items 1..n-1** as compromised (leaving ≥1 secure item, as required by R `detect_pk`).
+- **Streamlit plotting stability**: Force headless matplotlib backend (`Agg`) to avoid missing GUI backend issues during rendering (e.g., collusion plots).
+- **Docs**: Added/updated `docs/FORENSIC_AGENTS_DATA_FLOW.md` to document data flow and R conversion rules.
 
 ---
 
