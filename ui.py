@@ -19,6 +19,8 @@ import re
 import base64
 import pandas as pd
 import streamlit as st
+import matplotlib
+matplotlib.use("Agg")  # Non-GUI backend for headless/server (Streamlit)
 import matplotlib.pyplot as plt
 import numpy as np
 import tempfile
@@ -160,20 +162,17 @@ def _test_openrouter_api_key(api_key: str, timeout: int = 15) -> tuple[bool, str
 
 
 def _llm_provider() -> str:
-    """Current LLM provider: 'google' or 'openrouter' (Google is default when GOOGLE_API_KEY is set)."""
-    # If the user has already chosen a provider this session, honor it.
+    """Current LLM provider: 'google' or 'openrouter'. Honors session choice; default prefers OpenRouter when both keys set."""
     if "llm_provider" in st.session_state:
         return st.session_state.llm_provider
-    # Otherwise, auto-detect from environment: prefer Google when GOOGLE_API_KEY is present.
     load_dotenv()
     g_key = os.getenv("GOOGLE_API_KEY", "").strip()
     or_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if g_key:
-        return "google"
     if or_key:
         return "openrouter"
-    # Fallback default when no keys are configured.
-    return "google"
+    if g_key:
+        return "google"
+    return "openrouter"
 
 
 def _current_model_ids() -> list[str]:
@@ -675,24 +674,34 @@ def _run_workflow(payload_json: str) -> dict:
 
 
 def _psych_describe_responses(resp_df: pd.DataFrame) -> tuple[pd.DataFrame | None, str | None]:
-    """Run psych::describe in R on response data. Returns (describe_df, None) or (None, error_msg)."""
+    """Run psych::describe in R on response data. Pass data via R vectors only to avoid py2rpy numpy error."""
     if resp_df.empty or resp_df.shape[1] == 0:
         return None, "No response data."
     try:
         import rpy2.robjects as ro
-        from rpy2.robjects import pandas2ri
+        try:
+            from rpy2.robjects import numpy2ri
+            numpy2ri.activate()
+        except Exception:
+            pass
     except Exception as exc:
         return None, f"rpy2/R not available: {exc}"
     try:
+        # Build response matrix in R from list (no DataFrame/numpy passed to R)
+        block = resp_df.astype(int)
+        nrow, ncol = int(block.shape[0]), int(block.shape[1])
+        x_flat = block.values.flatten().tolist()
+        ro.globalenv["x_vec"] = ro.IntVector(x_flat)
+        ro.r(f"resp_df <- as.data.frame(matrix(x_vec, nrow={nrow}, ncol={ncol}, byrow=TRUE))")
+        desc = ro.r("psych::describe(resp_df)")
+        from rpy2.robjects import pandas2ri
         with (ro.default_converter + pandas2ri.converter).context():
-            ro.globalenv["resp_df"] = resp_df
-            desc = ro.r("psych::describe(resp_df)")
             desc_py = ro.conversion.rpy2py(desc)
-            if isinstance(desc_py, pd.DataFrame):
-                return desc_py, None
-            if hasattr(desc_py, "to_pandas"):
-                return desc_py.to_pandas(), None
-            return pd.DataFrame(np.asarray(desc_py)), None
+        if isinstance(desc_py, pd.DataFrame):
+            return desc_py, None
+        if hasattr(desc_py, "to_pandas"):
+            return desc_py.to_pandas(), None
+        return pd.DataFrame(np.asarray(desc_py)), None
     except Exception as exc:
         return None, str(exc)
 
@@ -827,10 +836,14 @@ def _plot_person_ability(person_params: pd.DataFrame) -> str | None:
 
 
 def _create_wright_map(item_params: pd.DataFrame, person_params: pd.DataFrame) -> str:
-    """Create a Wright Map using R's WrightMap package."""
+    """Create a Wright Map using R's WrightMap package. Pass data to R as vectors only (no DataFrame)."""
     try:
         import rpy2.robjects as ro
-        from rpy2.robjects import pandas2ri
+        try:
+            from rpy2.robjects import numpy2ri
+            numpy2ri.activate()
+        except Exception:
+            pass
     except Exception as exc:
         print(f"Wright Map skipped; rpy2/R not available ({type(exc).__name__}: {exc})")
         return None
@@ -872,35 +885,24 @@ def _create_wright_map(item_params: pd.DataFrame, person_params: pd.DataFrame) -
     wright_map_path.parent.mkdir(parents=True, exist_ok=True)
     
     try:
-        with (ro.default_converter + pandas2ri.converter).context():
-            # Convert DataFrames to R objects
-            ro.globalenv["item_df"] = item_df
-            ro.globalenv["person_df"] = person_df
-            ro.globalenv["wright_map_path"] = str(wright_map_path)
-            ro.globalenv["b_col"] = b_col
-            ro.globalenv["ability_col"] = ability_col
-            
-            ro.r(
-                """
-                library(WrightMap)
-                library(grDevices)
-                
-                # Extract item difficulties as a matrix/vector
-                item_difficulty <- as.numeric(item_df[[b_col]])
-                
-                # Extract person abilities as a vector
-                person_ability <- as.numeric(person_df[[ability_col]])
-                
-                # Create Wright Map
-                # item.prop = 0.8 means 80% space for items, 20% for persons (histogram)
-                png(wright_map_path, width=1200, height=1000, res=150, type="cairo")
-                wrightMap(thetas = person_ability, 
-                         thresholds = item_difficulty,
-                         item.prop = 0.8,
-                         main.title = "Wright Map: Person Ability Distribution and Item Difficulties")
-                dev.off()
-                """
-            )
+        # Pass only primitive types to R: vectors from Python lists, path as string
+        item_difficulty = [float(x) for x in item_df[b_col].tolist()]
+        person_ability = [float(x) for x in person_df[ability_col].tolist()]
+        ro.globalenv["wright_map_path"] = str(wright_map_path)
+        ro.globalenv["item_difficulty"] = ro.FloatVector(item_difficulty)
+        ro.globalenv["person_ability"] = ro.FloatVector(person_ability)
+        ro.r(
+            """
+            library(WrightMap)
+            library(grDevices)
+            png(wright_map_path, width=1200, height=1000, res=150, type="cairo")
+            wrightMap(thetas = person_ability, 
+                     thresholds = item_difficulty,
+                     item.prop = 0.8,
+                     main.title = "Wright Map: Person Ability Distribution and Item Difficulties")
+            dev.off()
+            """
+        )
     except Exception as exc:
         print(f"Wright Map generation failed: {type(exc).__name__}: {exc}")
         return None
@@ -1146,6 +1148,163 @@ def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
             last_err = f"{type(e).__name__}: {e}"
             break
     return "", (last_err or "No model responded. Check Model engine and GOOGLE_API_KEY.")
+
+
+def _generate_agent_apa_summary(
+    agent_title: str, agent_key: str, data: dict, n_students: int, flagged_ids: list[int] | None = None
+) -> tuple[str | None, str | None]:
+    """Generate a brief research-oriented summary with interpretation in Pinker's style. Returns (summary_text, error_message)."""
+    load_dotenv()
+    methods = data.get("methods") or []
+    n_flagged = len(data.get("flagged", [])) + len(data.get("flagged_copiers", []))
+    rate = (n_flagged / n_students * 100) if n_students else 0
+    flagged_ids = flagged_ids or []
+    example_ids_str = ", ".join(str(i + 1) for i in sorted(flagged_ids)[:25]) if flagged_ids else "none"
+    prompt = (
+        "You are a psychometrics expert writing for a research paper. Write one or two short paragraphs that:\n"
+        "(1) Summarize the aberrant behavior detection result (method, sample size, number flagged).\n"
+        "(2) Interpret what the findings mean in practical terms.\n"
+        "(3) Discuss the abnormal test takers: mention that some examinees were flagged (e.g., by examinee/student numbers "
+        "if provided) and briefly describe their potential issues—e.g., what the aberrant pattern may indicate "
+        "(low effort, copying, preknowledge, misfit, tampering, etc.) and why it matters for validity or fairness.\n\n"
+        "Use Steven Pinker's style: clear, direct, concrete language; active voice and short sentences; explain what the "
+        "numbers and flags mean. You may use APA 7 conventions (past tense, third person).\n\n"
+        f"Detection method: {agent_title}.\n"
+        f"Indices/methods used: {', '.join(methods) or 'N/A'}.\n"
+        f"Sample size: N = {n_students}.\n"
+        f"Number flagged: {n_flagged} ({rate:.1f}%).\n"
+        f"Example flagged examinee numbers (1-based): {example_ids_str}.\n\n"
+        "Output only the paragraph(s), no heading or extra text."
+    )
+    if _llm_provider() == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        model_ids = _model_variants_with_selected_first()
+        for model_id in model_ids:
+            text, err = _call_openrouter(api_key, model_id, [{"role": "user", "content": prompt}], timeout=60)
+            if err or not text:
+                continue
+            return (text.strip()[:2000] if text else None), None
+        return None, "OpenRouter: no response. Set OPENROUTER_API_KEY or try another model in Settings."
+    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        return None, "GOOGLE_API_KEY not set. Add it to .env or use **Settings** → LLM provider → **OpenRouter** (no key required for free models)."
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    last_err = None
+    for model_name in _model_variants_with_selected_first():
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
+            resp = requests.post(url, params={"key": api_key}, json=body, timeout=60)
+            resp.raise_for_status()
+            text = (resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "") or "").strip()
+            return (text[:2000] if text else None), None
+        except requests.exceptions.HTTPError as e:
+            last_err = f"{e.response.status_code}" if e.response is not None else str(e)
+            if e.response is not None and e.response.status_code == 404:
+                continue
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+    hint = f" Last error: {last_err}." if last_err else ""
+    return None, f"No Gemini model responded.{hint} Check GOOGLE_API_KEY in .env and that the key has Gemini API access. Or use **Settings** → LLM provider → **OpenRouter**."
+
+
+def _generate_student_abnormal_report(
+    student_id: int,
+    flags: dict,
+    responses: list,
+    rt_data: list,
+    n_students: int,
+) -> tuple[str | None, str | None]:
+    """Generate an LLM-based abnormal behavior report for one student. Returns (report_text, error_message)."""
+    load_dotenv()
+    sid = student_id - 1  # 0-based
+    # Build structured summary of this student's issues across all agents
+    parts = [f"Student ID: {student_id} (of {n_students} examinees)."]
+    if responses and sid < len(responses):
+        row = responses[sid]
+        vals = list(row.values())
+        correct = sum(1 for v in vals if v == 1)
+        total = len(vals)
+        parts.append(f"Total score: {correct}/{total} ({100*correct/total:.1f}%)" if total else "Total score: N/A")
+    flagged_agents = []
+    agent_descriptions = {
+        "nm_agent": "Nonparametric misfit (Guttman-style person-fit)",
+        "pm_agent": "Parametric misfit (IRT-based person-fit)",
+        "as_agent": "Answer similarity / collusion",
+        "ac_agent": "Answer copying",
+        "pk_agent": "Preknowledge (compromised items)",
+        "tt_agent": "Test tampering / erasure",
+        "cp_agent": "Change point (speed/performance shift)",
+        "rg_agent": "Rapid guessing / low effort",
+    }
+    for ag_name, ag_data in flags.items():
+        if not isinstance(ag_data, dict):
+            continue
+        fl = ag_data.get("flagged", []) + ag_data.get("flagged_copiers", [])
+        if sid in fl:
+            flagged_agents.append(ag_name)
+            desc = agent_descriptions.get(ag_name, ag_name)
+            line = f"- **{ag_name}** ({desc})"
+            if ag_data.get("stat") and sid < len(ag_data["stat"]):
+                rec = ag_data["stat"][sid]
+                # Include key indices (numeric)
+                key_vals = {k: v for k, v in rec.items() if isinstance(v, (int, float)) and k != "row"}
+                if key_vals:
+                    line += f" — indices: {key_vals}"
+            if ag_name == "rg_agent" and ag_data.get("rte") and sid < len(ag_data["rte"]):
+                line += f" — RTE: {ag_data['rte'][sid]:.4f}"
+            if ag_name == "ac_agent" and ag_data.get("pairs"):
+                partners = []
+                for p in ag_data["pairs"]:
+                    if p.get("Copier") == student_id:
+                        partners.append(f"Source={p.get('Source')}")
+                    elif p.get("Source") == student_id:
+                        partners.append(f"Copier={p.get('Copier')}")
+                if partners:
+                    line += f" — pairs: {partners[:5]}"
+            parts.append(line)
+    if not flagged_agents:
+        parts.append("This student was not flagged by any detection agent.")
+    else:
+        parts.insert(1, f"Flagged by {len(flagged_agents)} agent(s): {', '.join(flagged_agents)}")
+    context = "\n".join(parts)
+    prompt = (
+        "You are a test-security and psychometrics expert. Write a concise **Abnormal Behavior Report** for the following examinee based on forensic detection results.\n\n"
+        "**Input (detection results for this student):**\n"
+        f"{context}\n\n"
+        "**Required structure:**\n"
+        "1. **Summary** — One short paragraph: which detectors flagged this student and what that means in plain language.\n"
+        "2. **Detailed analysis** — For each detector that flagged the student, briefly explain the finding (what the index means, severity, and implication).\n"
+        "3. **Final determination** — One clear conclusion: overall risk level (e.g., low / moderate / high concern) and a one-sentence recommendation (e.g., no action, review response pattern, or escalate for review). Use a line starting with '**Final determination:**'.\n\n"
+        "Write in professional, neutral tone. Output only the report (no preamble)."
+    )
+    if _llm_provider() == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        model_ids = _model_variants_with_selected_first()
+        for model_id in model_ids:
+            text, err = _call_openrouter(api_key, model_id, [{"role": "user", "content": prompt}], timeout=90)
+            if err or not text:
+                continue
+            return (text.strip()[:3500] if text else None), None
+        return None, "OpenRouter: no response. Set OPENROUTER_API_KEY or try another model in Settings."
+    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        return None, "GOOGLE_API_KEY not set. Add it to .env or use Settings → LLM provider → OpenRouter."
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    last_err = None
+    for model_name in _model_variants_with_selected_first():
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
+            resp = requests.post(url, params={"key": api_key}, json=body, timeout=90)
+            resp.raise_for_status()
+            text = (resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "") or "").strip()
+            return (text[:3500] if text else None), None
+        except requests.exceptions.HTTPError as e:
+            last_err = f"{e.response.status_code}" if e.response is not None else str(e)
+            if e.response is not None and e.response.status_code == 404:
+                continue
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+    return None, (last_err or "No model responded. Check Settings and API keys.")
 
 
 def _suggest_module(user_description: str) -> tuple[str, str]:
@@ -1575,6 +1734,308 @@ def _analyze_wright_map_image(image_path: str) -> str:
         return f"Error parsing LLM response: {type(e).__name__}: {e}"
 
 
+def _plot_response_for_pdf(resp_row: dict) -> bytes | None:
+    """Draw response by item (green=correct, red=incorrect) as a bar chart; return PNG bytes."""
+    if not resp_row:
+        return None
+    vals = list(resp_row.values())
+    n = min(len(vals), 60)
+    if n == 0:
+        return None
+    try:
+        fig, ax = plt.subplots(figsize=(6, 1.8))
+        items = list(range(1, n + 1))
+        colors_list = ["#40916c" if v == 1 else "#ef4444" for v in vals[:n]]
+        ax.bar(items, [1] * n, color=colors_list, width=0.7, edgecolor="none")
+        ax.set_ylim(0, 1.2)
+        ax.set_yticks([0.5])
+        ax.set_yticklabels(["Correct / Incorrect"])
+        ax.set_xlabel("Item")
+        ax.set_title("Response by item (green = correct, red = incorrect)")
+        ax.set_xticks(items[:: max(1, n // 20)])
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _plot_rt_for_pdf(rt_row: list, rt_medians: list, student_id: int) -> bytes | None:
+    """Draw response time by item as Forensic Timeline (line + shaded area, white background); return PNG bytes."""
+    if not rt_row or not rt_medians or len(rt_row) != len(rt_medians):
+        return None
+    n = min(len(rt_row), 50)
+    if n == 0:
+        return None
+    try:
+        fig, ax = plt.subplots(figsize=(6, 2.2))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
+        ax.tick_params(colors="black", labelsize=9)
+        ax.spines["bottom"].set_color("black")
+        ax.spines["left"].set_color("black")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.xaxis.label.set_color("black")
+        ax.yaxis.label.set_color("black")
+        ax.title.set_color("black")
+        rt_vals = [float(x) for x in rt_row[:n]]
+        items = list(range(1, n + 1))
+        ax.plot(items, rt_vals, color="#0d9488", linewidth=2, solid_capstyle="round")
+        ax.fill_between(items, 0, rt_vals, alpha=0.3, color="#0d9488")
+        ax.set_xlabel("Item Number")
+        ax.set_ylabel("Response Time")
+        ax.set_title(f"Response Time Across Test — Student {student_id}")
+        ax.set_xticks(items[:: max(1, n // 15)])
+        ax.set_ylim(0, max(rt_vals) * 1.1 if rt_vals else 1)
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white", edgecolor="none")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _plot_percentile_for_pdf(
+    percentile: float,
+    student_id: int,
+    all_scores: list[int] | None,
+    student_score: int,
+    total_items: int,
+) -> bytes | None:
+    """Draw score distribution (histogram) with student's position marked; return PNG bytes. White background."""
+    try:
+        pct = min(100, max(0, float(percentile)))
+        fig, ax = plt.subplots(figsize=(6, 2.2))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
+        ax.tick_params(colors="black", labelsize=9)
+        ax.spines["bottom"].set_color("black")
+        ax.spines["left"].set_color("black")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.xaxis.label.set_color("black")
+        ax.yaxis.label.set_color("black")
+        ax.title.set_color("black")
+        if all_scores and len(all_scores) > 0:
+            # Histogram of total scores (0 to total_items)
+            low = 0
+            high = total_items if total_items else max(all_scores)
+            bins = np.arange(low - 0.5, high + 1.5, 1)
+            counts, edges, _ = ax.hist(
+                all_scores, bins=bins, color="#0d9488", alpha=0.6, edgecolor="#0f766e", linewidth=0.5
+            )
+            ax.axvline(x=student_score, color="#d97706", linewidth=2, linestyle="-", label=f"Student {student_id} (score {student_score})")
+            ax.set_xlim(low, high)
+            ax.set_xlabel("Total Score")
+            ax.set_ylabel("Count")
+            ax.set_title(f"Score Distribution — Student {student_id}: {student_score}/{total_items} ({pct:.0f}th percentile)")
+            ax.legend(loc="upper right", fontsize=8, labelcolor="black", facecolor="white", edgecolor="gray")
+        else:
+            # Fallback: horizontal bar at percentile
+            ax.barh(0, pct, left=0, height=0.5, color="#0d9488", alpha=0.8, edgecolor="none")
+            ax.set_xlim(0, 100)
+            ax.set_ylim(-0.6, 0.6)
+            ax.set_yticks([])
+            ax.set_xlabel("Percentile (0–100)")
+            ax.set_title(f"Percentile — Student {student_id}: {pct:.0f}th percentile")
+            ax.set_xticks([0, 25, 50, 75, 100])
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white", edgecolor="none")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _markdown_to_reportlab(text: str) -> str:
+    """Convert Markdown to ReportLab Paragraph markup (bold, italic, line breaks, headings)."""
+    if not text or not text.strip():
+        return text
+    s = text
+    # Escape XML/HTML specials first
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Headings: ### or ## or # at start of line → bold
+    s = re.sub(r"^#{1,3}\s*(.+)$", r"<b>\1</b>", s, flags=re.MULTILINE)
+    # Bold: **...** and __...__
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"__(.+?)__", r"<b>\1</b>", s)
+    # Italic: *...* and _..._ (single; avoid matching inside words)
+    s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", s)
+    s = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", s)
+    # Line breaks
+    s = s.replace("\n", "<br/>")
+    return s
+
+
+def _build_test_taker_report_pdf(
+    student_id: int,
+    correct: int,
+    total_items: int,
+    resp_row: dict,
+    flags: dict,
+    rt_row: list | None,
+    rt_medians: list | None,
+    percentile: float,
+    aberrant_rows: list[dict],
+    report_text: str | None,
+    all_scores: list[int] | None = None,
+) -> tuple[bytes, str | None]:
+    """Build a letter-size PDF for the Test-Taker Report (white background). Returns (pdf_bytes, error_message)."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+    except ImportError as e:
+        return b"", f"reportlab not installed: {e}"
+
+    black = colors.HexColor("#000000")
+    lightgrey = colors.HexColor("#e5e7eb")
+    green = colors.HexColor("#40916c")
+    red = colors.HexColor("#ef4444")
+
+    temp_files = []
+    try:
+        buffer = io.BytesIO()
+        margin = 0.75 * inch
+        doc = SimpleDocTemplate(
+            buffer, pagesize=letter,
+            rightMargin=margin, leftMargin=margin,
+            topMargin=margin, bottomMargin=margin,
+        )
+
+        styles = getSampleStyleSheet()
+        styles.add(ParagraphStyle(
+            name="TtrHeading1",
+            parent=styles["Heading1"],
+            textColor=black,
+            fontSize=14,
+            spaceAfter=6,
+        ))
+        styles.add(ParagraphStyle(
+            name="TtrHeading2",
+            parent=styles["Heading2"],
+            textColor=black,
+            fontSize=11,
+            spaceBefore=12,
+            spaceAfter=6,
+        ))
+        styles.add(ParagraphStyle(
+            name="TtrNormal",
+            parent=styles["Normal"],
+            textColor=black,
+            fontSize=9,
+            spaceAfter=4,
+        ))
+        story = []
+
+        story.append(Paragraph("Test-Taker Report", styles["TtrHeading1"]))
+        story.append(Paragraph(f"Student {student_id}", styles["TtrNormal"]))
+        story.append(Spacer(1, 0.15 * inch))
+
+        # ── Response Record (iraw.1..iraw.N, TOTAL, red/green cells) ──
+        if resp_row:
+            story.append(Paragraph("Response Record", styles["TtrHeading2"]))
+            vals = list(resp_row.values())
+            n = min(len(vals), 40)
+            header_row = [f"iraw.{i + 1}" for i in range(n)] + ["TOTAL"]
+            data_row = [str(int(v)) if v in (0, 1) else str(v) for v in vals[:n]] + [f"{correct}/{total_items}"]
+            col_widths = [0.28 * inch] * n + [0.6 * inch]
+            cell_data = [header_row, data_row]
+            t = Table(cell_data, colWidths=col_widths)
+            style_list = [
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("TEXTCOLOR", (0, 0), (-1, 0), black),
+                ("TEXTCOLOR", (0, 1), (n - 1, 1), colors.white),
+                ("TEXTCOLOR", (n, 1), (n, 1), black),
+                ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
+                ("BACKGROUND", (n, 1), (n, 1), lightgrey),
+            ]
+            for j in range(n):
+                if j < len(vals) and vals[j] == 1:
+                    style_list.append(("BACKGROUND", (j, 1), (j, 1), green))
+                elif j < len(vals) and vals[j] == 0:
+                    style_list.append(("BACKGROUND", (j, 1), (j, 1), red))
+            t.setStyle(TableStyle(style_list))
+            story.append(t)
+            pct = 100 * correct / total_items if total_items else 0
+            story.append(Paragraph(f"Total Score: {correct} / {total_items} ({pct:.1f}%)", styles["TtrNormal"]))
+            story.append(Spacer(1, 0.12 * inch))
+
+        # ── Percentile (distribution plot) ──
+        story.append(Paragraph("Percentile", styles["TtrHeading2"]))
+        png_pct = _plot_percentile_for_pdf(percentile, student_id, all_scores, correct, total_items)
+        if png_pct:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp:
+                fp.write(png_pct)
+                fp.flush()
+                temp_files.append(fp.name)
+            story.append(RLImage(temp_files[-1], width=5.5 * inch, height=2.0 * inch))
+        story.append(Paragraph(f"Percentile: {percentile:.0f}th (position in total score distribution).", styles["TtrNormal"]))
+        story.append(Spacer(1, 0.12 * inch))
+
+        # ── Forensic Timeline (response time by item) ──
+        if rt_row and rt_medians:
+            story.append(Paragraph("Forensic Timeline", styles["TtrHeading2"]))
+            png_rt = _plot_rt_for_pdf(rt_row, rt_medians, student_id)
+            if png_rt:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp_rt:
+                    fp_rt.write(png_rt)
+                    fp_rt.flush()
+                    temp_files.append(fp_rt.name)
+                story.append(RLImage(temp_files[-1], width=5.5 * inch, height=2.0 * inch))
+                story.append(Spacer(1, 0.1 * inch))
+            elif len(rt_row) <= 30:
+                rt_vals = [float(x) for x in rt_row[:30]]
+                meds = rt_medians[:30]
+                rows = [["Item", "RT", "vs median"]]
+                for i, (rv, m) in enumerate(zip(rt_vals, meds)):
+                    rows.append([str(i + 1), f"{rv:.2f}", "slower" if rv >= m else "faster"])
+                t2 = Table(rows, colWidths=[0.6 * inch, 0.8 * inch, 1 * inch])
+                t2.setStyle(TableStyle([
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ]))
+                story.append(t2)
+            story.append(Spacer(1, 0.1 * inch))
+
+        # ── Report (LLM-generated) ──
+        story.append(Paragraph("Report", styles["TtrHeading2"]))
+        llm_style = ParagraphStyle(
+            name="TtrReport",
+            parent=styles["TtrNormal"],
+            fontSize=9,
+            leading=11,
+            spaceAfter=6,
+        )
+        if report_text and report_text.strip():
+            for para in report_text.strip().split("\n\n")[:12]:
+                safe = _markdown_to_reportlab(para.strip())
+                if safe.strip():
+                    story.append(Paragraph(safe[:2500], llm_style))
+        else:
+            story.append(Paragraph("No report generated. Generate the Test-Taker Report in the app to produce an LLM summary.", styles["TtrNormal"]))
+
+        doc.build(story)
+        return buffer.getvalue(), None
+    except Exception as e:
+        return b"", str(e)
+    finally:
+        for p in temp_files:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+
 def _build_apa_report_pdf(final: dict) -> tuple[bytes, str | None]:
     """Build an APA-style report PDF from analysis results. Returns (pdf_bytes, error_message)."""
     try:
@@ -1904,7 +2365,7 @@ def _render_prompt_and_confirm() -> None:
                 "The Streamlit UI works without the server (it uses the graph in-process)."
             )
             LANGGRAPH_API_URL = "https://langchain-ai.github.io/langgraph/concepts/langgraph_api/"
-            st.link_button("Open LangGraph API", url=LANGGRAPH_API_URL, type="primary", use_container_width=True)
+            st.link_button("Open LangGraph API", url=LANGGRAPH_API_URL, type="primary")
             st.markdown(
                 f'<a href="{LANGGRAPH_API_URL}" target="_blank" rel="noopener noreferrer">Open LangGraph API in new tab</a>',
                 unsafe_allow_html=True,
@@ -2320,7 +2781,7 @@ def _render_response_results(final: dict) -> None:
                 height=100,
                 key="analysis_question_input"
             )
-            submit_question = st.form_submit_button("Ask LLM", use_container_width=True)
+            submit_question = st.form_submit_button("Ask LLM")
             if submit_question and user_question.strip():
                 st.session_state.analysis_chat_history.append(("user", user_question.strip()))
                 with st.spinner("Analyzing with LLM..."):
@@ -2380,10 +2841,10 @@ def _render_results(final: dict, response_only: bool = False) -> None:
                 "selects": ["detect_rg", "detect_pm"],
             },
             "B": {
-                "title": "Scenario B: High-Stakes/Proctored",
+                "title": "Scenario B: High-Stakes",
                 "icon": "🛡️",
-                "description": "Protects high-stakes credentials and intellectual property from theft.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure",
-                "selects": ["detect_ac", "detect_pk", "detect_pm"],
+                "description": "Protects high-stakes credentials: response-based, similarity, temporal, and tampering detection.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure",
+                "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"],
             },
         }
         for fn in ABERRANCE_FUNCTIONS:
@@ -2415,7 +2876,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
         )
         suggest_col1, suggest_col2 = st.columns([1, 3])
         with suggest_col1:
-            suggest_btn = st.button("Suggest scenario from description", key="aberrance_suggest_scenario", use_container_width=True)
+            suggest_btn = st.button("Suggest scenario from description", key="aberrance_suggest_scenario")
         if suggest_btn and (llm_req or st.session_state.get("aberrance_llm_requirement", "")):
             with st.spinner("Asking LLM..."):
                 letter, explanation = _suggest_aberrance_scenario(llm_req.strip() or st.session_state.get("aberrance_llm_requirement", ""))
@@ -2528,7 +2989,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
         if (cb_rg or st.session_state.get("aberrance_cb_detect_rg", False)) and not has_rt_data:
             st.warning("**Rapid Guessing (detect_rg)** requires Response Time data. Upload RT data and re-run the workflow for rapid-guessing detection.")
 
-        gen_btn = st.button("Generate results", key="aberrance_generate_results", type="primary", use_container_width=True)
+        gen_btn = st.button("Generate results", key="aberrance_generate_results", type="primary")
         if gen_btn:
             # Use previously uploaded data (from last run) or last_payload
             if st.session_state.get("last_uploaded_responses") and st.session_state.get("last_uploaded_model_settings") and st.session_state.get("last_uploaded_is_verified"):
@@ -2563,7 +3024,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
         st.markdown("---")
         with st.expander("**What the aberrance package can do**", expanded=False):
             st.markdown("""
-**Detection functions (aberrance v0.4.0, CRAN):**
+**Detection functions (aberrance v0.5.0, CRAN):**
 
 | Function | Purpose | Main inputs |
 |----------|---------|-------------|
@@ -2721,6 +3182,12 @@ NAV_OPTIONS = [
 ]
 if "run_mode" not in st.session_state:
     st.session_state.run_mode = "Scenario"
+# Initialize LLM provider once so it's set even if user never opens Settings (e.g. after refresh on Aberrance Summary).
+if "llm_provider" not in st.session_state:
+    load_dotenv()
+    _o = os.getenv("OPENROUTER_API_KEY", "").strip()
+    _g = os.getenv("GOOGLE_API_KEY", "").strip()
+    st.session_state.llm_provider = "openrouter" if _o else ("google" if _g else "openrouter")
 run_mode = st.session_state.get("run_mode", "Scenario")
 
 # Allow safe programmatic navigation without fighting the sidebar radio widget.
@@ -2744,7 +3211,7 @@ if run_mode == "Command Center":
 
 with st.sidebar:
     st.title("PsyMAS-Aberrance")
-    st.caption("Ver. 0.4.0— Psychometric MAS for detecting aberrant test behavior.")
+    st.caption("Ver. 0.5.0— Psychometric MAS for detecting aberrant test behavior.")
     st.divider()
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))
@@ -2846,6 +3313,29 @@ with st.sidebar:
     st.caption(_sb_line("LangGraph Agents", backend_ok, backend_note))
     st.divider()
 
+# Global: activable buttons green, fixed width (no full row)
+st.markdown(
+    """
+    <style>
+    div[data-testid="stButton"] > button:not(:disabled) {
+        background-color: #22c55e !important;
+        color: white !important;
+        border-color: rgba(255,255,255,0.2) !important;
+        width: auto !important;
+        min-width: 8rem;
+    }
+    div[data-testid="stButton"] > button:not(:disabled):hover {
+        background-color: #16a34a !important;
+        border-color: rgba(255,255,255,0.3) !important;
+    }
+    div[data-testid="stButton"] {
+        width: fit-content !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ----- Main content: module title only when not Preparation -----
 if run_mode != "Preparation":
     # Show feedback after switching from Preparation
@@ -2888,7 +3378,7 @@ def _render_tool_aberrance() -> None:
         st.caption(SCENARIO_PRESETS_AB[scenario_choice_ab]["description"])
     else:
         st.info("No scenario preset selected. You can still choose functions below.")
-    if st.button("Change scenario", key="ab_only_change_scenario", use_container_width=True):
+    if st.button("Change scenario", key="ab_only_change_scenario"):
         st.session_state["_nav_request"] = "Scenario"
         st.rerun()
 
@@ -2920,8 +3410,8 @@ def _render_tool_aberrance() -> None:
             "Compromised item numbers (for Preknowledge)",
             value=comp_default,
             key="ab_only_compromised_input",
-            placeholder="e.g. 1, 5, 10, 15",
-            help="Comma-separated 1-based item indices that are known to be compromised/leaked. Required for detect_pk (Scenario B).",
+            placeholder="e.g. 1, 5, 10, 15 — leave empty for first n-1",
+            help="Comma-separated 1-based item indices. Leave empty to use items 1..n-1 (R requires ≥1 secure).",
         )
         try:
             comp_list = [int(x.strip()) for x in comp_input.split(",") if x.strip() and x.strip().isdigit()]
@@ -2932,7 +3422,7 @@ def _render_tool_aberrance() -> None:
         except Exception:
             pass
         if "detect_pk" in ab_fns and not (st.session_state.get(ab_only_compromised_key)):
-            st.caption("Enter at least one compromised item number to run Preknowledge detection.")
+            st.caption("Leave empty to use first n-1 items as compromised (R requires ≥1 secure item).")
 
     # Model misfit, answer copying, and preknowledge need item parameters (ψ); we get them from the IRT node, not CSV
     needs_item_params = bool(
@@ -2965,7 +3455,7 @@ def _render_tool_aberrance() -> None:
     if needs_item_params:
         status_parts.append("(IRT will run first for ψ)")
     st.markdown(f'<div class="status-strip">{ " | ".join(status_parts) }</div>', unsafe_allow_html=True)
-    run_ab = st.button("Run", key="run_ab_only", type="primary", use_container_width=True)
+    run_ab = st.button("Run", key="run_ab_only", type="primary")
     if run_ab and has_data:
         try:
             if ab_resp is not None:
@@ -3098,7 +3588,7 @@ def _render_tool_aberrance() -> None:
                     "Flagged_copying": [1 if i in flagged_copiers else 0 for i in range(int(n_persons))],
                     "Flagged": [1 if i in flagged_persons else 0 for i in range(int(n_persons))],
                 })
-                st.caption(f"Person-fit statistics were not returned (n_persons={n_persons}, n_flagged={n_flagged}). Methods: {methods_display}. Ensure **detect_nm** (Guttman) and/or **detect_pm** / **detect_pk** are selected; for model misfit and preknowledge the IRT agent will fit the model first when you click **Run**. For **preknowledge** enter **compromised item numbers**.")
+                st.caption(f"Person-fit statistics were not returned (n_persons={n_persons}, n_flagged={n_flagged}). Methods: {methods_display}. Ensure **detect_nm** (Guttman) and/or **detect_pm** / **detect_pk** are selected; for model misfit and preknowledge the IRT agent will fit the model first when you click **Run**. For **preknowledge** enter compromised item numbers (or leave empty for first n-1 items).")
                 st.dataframe(df_fallback, height=min(450, 120 + 32 * int(n_persons)), use_container_width=True)
             else:
                 st.caption(f"No person-level records (n_persons={n_persons}, n_flagged={n_flagged}). Methods: {methods_display}")
@@ -3119,9 +3609,10 @@ def _render_tool_aberrance() -> None:
 def _render_scenario_page() -> None:
     """Scenario presets as cards + LLM assistant only."""
     st.subheader("🧭 Scenario Selection")
+    # Scenario A = Low-stakes (effort/quality); B = High-stakes (full detection set per table).
     SCENARIO_PRESETS_AB = {
-        "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Quality+Assurance"},
-        "B": {"title": "Scenario B: High-Stakes/Proctored", "description": "Protects high-stakes credentials and intellectual property from theft.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure", "icon": "🛡️", "selects": ["detect_ac", "detect_pk", "detect_pm"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=Certification+Security"},
+        "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Low-stakes"},
+        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, and tampering detection.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
         "D": {"title": "Scenario D: Custom", "description": "Choose detection agents manually in **Tools → Aberrance**.", "icon": "✏️", "selects": [], "image": "https://placehold.co/320x160/2d2d4a/94a3b8?text=Custom"},
     }
     # CSS: card container (relative, left-aligned), overlay button on top, image left-aligned, equal height
@@ -3253,7 +3744,7 @@ def _render_scenario_page() -> None:
                     f"<div style='height:1em;'></div></div>",
                     unsafe_allow_html=True,
                 )
-                if st.button("Select", key=f"scenario_card_{letter}", use_container_width=True):
+                if st.button("Select", key=f"scenario_card_{letter}"):
                     _apply_ab_only_scenario(letter)
                     st.session_state["prep_compromised_items"] = st.session_state.get("ab_only_compromised_items") or []
                     st.session_state["_nav_request"] = "Preparation"
@@ -3269,7 +3760,7 @@ def _render_scenario_page() -> None:
         key="ab_only_llm_requirement",
         label_visibility="collapsed",
     )
-    suggest_btn_ab = st.button("Suggest scenario from description", key="ab_only_suggest_scenario", use_container_width=True)
+    suggest_btn_ab = st.button("Suggest scenario from description", key="ab_only_suggest_scenario")
     if suggest_btn_ab and (llm_req_ab or st.session_state.get("ab_only_llm_requirement", "")):
         with st.spinner("Asking LLM…"):
             letter_ab, explanation_ab = _suggest_aberrance_scenario(llm_req_ab.strip() or st.session_state.get("ab_only_llm_requirement", ""))
@@ -3287,9 +3778,6 @@ def _render_scenario_page() -> None:
             st.rerun()
 
     st.divider()
-    if st.button("Continue to Preparation", key="scenario_to_preparation", type="primary", use_container_width=True):
-        st.session_state["_nav_request"] = "Preparation"
-        st.rerun()
 
 
 def _render_tool_irt() -> None:
@@ -3406,7 +3894,7 @@ def _render_backend_test() -> None:
 
     col_a, col_b = st.columns(2, gap="medium")
     with col_a:
-        if st.button("GET /health", use_container_width=True):
+        if st.button("GET /health"):
             try:
                 r = requests.get(f"{BACKEND_URL}/health", timeout=5)
                 st.write(r.status_code)
@@ -3451,7 +3939,7 @@ def _render_backend_test() -> None:
     st.divider()
     st.markdown("**Run IRT in backend (/irt) and store ψ into session**")
     with col_b:
-        if st.button("POST /irt", use_container_width=True, disabled=not bool(responses)):
+        if st.button("POST /irt", disabled=not bool(responses)):
             try:
                 irt_payload = _json_safe(
                     {
@@ -3477,7 +3965,7 @@ def _render_backend_test() -> None:
 
     st.divider()
     st.markdown("**Start Detect (/detect) and poll status**")
-    if st.button("POST /detect", use_container_width=True, disabled=not bool(responses)):
+    if st.button("POST /detect", disabled=not bool(responses)):
         try:
             r = requests.post(f"{BACKEND_URL}/detect", json=payload, timeout=30)
             r.raise_for_status()
@@ -3495,14 +3983,14 @@ def _render_backend_test() -> None:
     if run_id:
         st.markdown("**Latest run_id**")
         st.code(run_id)
-        if st.button("GET /detect/{run_id}/status", use_container_width=True):
+        if st.button("GET /detect/{run_id}/status"):
             try:
                 r = requests.get(f"{BACKEND_URL}/detect/{run_id}/status", timeout=10)
                 r.raise_for_status()
                 st.json(r.json())
             except Exception as e:
                 st.error(f"/status failed: {e}")
-        if st.button("GET /detect/{run_id}/result", use_container_width=True):
+        if st.button("GET /detect/{run_id}/result"):
             try:
                 r = requests.get(f"{BACKEND_URL}/detect/{run_id}/result", timeout=20)
                 r.raise_for_status()
@@ -3646,14 +4134,14 @@ elif run_mode == "Preparation":
 
     # ----- Agent select (synced with Scenario; same state keys ab_only_cb_* / ab_only_scenario_select) -----
     SCENARIO_PRESETS_AB_NAMES = {
-        "A": "Scenario A: Quality Assurance",
-        "B": "Scenario B: Certification Security",
+        "A": "Scenario A: Low-Stakes",
+        "B": "Scenario B: High-Stakes",
         "D": "Scenario D: Custom",
         "Custom": "Scenario D: Custom",  # backward compat
     }
     SCENARIO_PRESET_IMAGES = {
-        "A": "https://placehold.co/480x120/1e3a5f/94a3b8?text=Quality+Assurance",
-        "B": "https://placehold.co/480x120/3d1f1f/94a3b8?text=Certification+Security",
+        "A": "https://placehold.co/480x120/1e3a5f/94a3b8?text=Low-stakes",
+        "B": "https://placehold.co/480x120/3d1f1f/94a3b8?text=High-stakes",
     }
     for fn in ABERRANCE_FUNCTIONS:
         if f"ab_only_cb_{fn}" not in st.session_state:
@@ -3676,14 +4164,15 @@ elif run_mode == "Preparation":
     st.caption("Select which aberrance agents to include when you click **Detect**. Presets from **Scenario** pre-fill these; you can change them here.")
 
     # Simple checkbox list of all agents on Preparation
+    # Ordered to match index categories: nm, pm, as, pk, tt, (cp implicit), rg.
     prep_agent_labels = [
-        ("detect_rg", "Rapid Guessing (detect_rg) — flags unusually fast responding."),
-        ("detect_pm", "Model Misfit (detect_pm) — flags \"odd\" patterns under IRT."),
-        ("detect_ac", "Answer Copying (detect_ac) — flags source–copier pairs."),
-        ("detect_as", "Answer Similarity (detect_as) — flags suspiciously similar groups."),
-        ("detect_pk", "Preknowledge (detect_pk) — flags success on compromised items."),
-        ("detect_nm", "Guttman Errors (detect_nm) — flags hard-right / easy-wrong patterns."),
-        ("detect_tt", "Test Tampering (detect_tt) — requires erasure data."),
+        ("detect_nm", "Nonparametric Misfit (detect_nm) — Guttman/HT person-fit without IRT."),
+        ("detect_pm", "Model Misfit (detect_pm) — parametric person-fit under IRT."),
+        ("detect_as", "Answer Similarity (detect_as) — similarity clusters / collusion."),
+        ("detect_ac", "Answer Copying (detect_ac) — source–copier pairs."),
+        ("detect_pk", "Preknowledge (detect_pk) — success on compromised items."),
+        ("detect_tt", "Test Tampering (detect_tt) — erasures / overwriting patterns."),
+        ("detect_rg", "Rapid Guessing (detect_rg) — unusually fast, low-effort responding."),
     ]
     for fn, desc in prep_agent_labels:
         st.checkbox(desc, value=st.session_state.get(f"ab_only_cb_{fn}", False), key=f"ab_only_cb_{fn}")
@@ -3693,7 +4182,9 @@ elif run_mode == "Preparation":
         prep_ab_fns = ["detect_nm"]  # default so at least one agent runs
 
     # Decide which extra inputs are relevant based on selected agents
-    need_rt = "detect_rg" in prep_ab_fns  # RT needed for Rapid Guessing
+    # RT is required not only for Rapid Guessing but also for time-based parametric
+    # and preknowledge/similarity indices (L_T / L_ST_* etc.).
+    need_rt = any(fn in prep_ab_fns for fn in ["detect_rg", "detect_pm", "detect_pk", "detect_as", "detect_ac"])
     need_comp = "detect_pk" in prep_ab_fns  # compromised items needed for Preknowledge
     need_tt = "detect_tt" in prep_ab_fns  # tampering data needed for Test Tampering
     need_model = any(
@@ -3702,9 +4193,10 @@ elif run_mode == "Preparation":
 
     st.divider()
 
-    col_upload, col_irt = st.columns(2, gap="large")
+    # Same row, equal width: Upload Response | Model Estimation | Upload Item Parameter
+    col_resp, col_model, col_psi = st.columns(3, gap="medium")
 
-    with col_upload:
+    with col_resp:
         with st.container(border=True):
             st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
             st.markdown(
@@ -3719,9 +4211,7 @@ elif run_mode == "Preparation":
                 unsafe_allow_html=True,
             )
             up_resp = st.file_uploader("Response (CSV)", type=["csv"], key="main_resp_uploader")
-            # Avoid infinite rerun loops: only process when the uploaded file changes.
             resp_sig = (getattr(up_resp, "name", None), getattr(up_resp, "size", None)) if up_resp is not None else None
-
             if resp_sig and st.session_state.get("prep_last_resp_sig") != resp_sig:
                 try:
                     up_resp.seek(0)
@@ -3730,13 +4220,12 @@ elif run_mode == "Preparation":
                     _r = _validate_binary_responses(_r)
                     st.session_state.last_uploaded_responses = _r.to_dict(orient="records")
                     st.session_state["prep_last_resp_sig"] = resp_sig
-                    # Keep the user on Preparation after upload-triggered reruns.
                     st.session_state["_nav_request"] = "Preparation"
                     st.rerun()
                 except Exception as e:
                     st.error(f"{e}")
 
-    with col_irt:
+    with col_model:
         if need_model:
             with st.container(border=True):
                 st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
@@ -3745,14 +4234,14 @@ elif run_mode == "Preparation":
                 st.markdown(
                     f"""
                     <div class="psymas-card-head">
-                      <div class="psymas-card-title">Model</div>
+                      <div class="psymas-card-title">Model Estimation</div>
                       <div class="psymas-card-status">{_dot(ip_ready)}{'Ready' if ip_ready else 'Not ready'}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
                 itemtype = st.selectbox("Model", ["2PL", "1PL", "3PL", "4PL"], index=0, key="main_irt_itemtype")
-                run_irt = st.button("Generate item parameters", key="main_generate_item_params", use_container_width=True)
+                run_irt = st.button("Generate item parameters", key="main_generate_item_params")
                 if run_irt:
                     responses = st.session_state.get("last_uploaded_responses") or []
                     rt_data = st.session_state.get("last_uploaded_rt_data") or []
@@ -3760,7 +4249,6 @@ elif run_mode == "Preparation":
                         st.session_state["last_irt_error"] = "Upload Response first."
                         st.error(st.session_state["last_irt_error"])
                     else:
-                        # Run IRT in the backend (Docker/Linux) so Windows doesn't need local R/rpy2.
                         st.session_state["last_irt_error"] = None
                         with st.spinner(f"Running IRT ({itemtype}) to estimate item parameters…"):
                             try:
@@ -3787,7 +4275,6 @@ elif run_mode == "Preparation":
                             st.session_state["item_params"] = psi_data
                             if irt_result.get("person_params"):
                                 st.session_state["forensic_person_params"] = irt_result["person_params"]
-                            # Keep the user on Preparation after IRT-triggered reruns.
                             st.session_state["_nav_request"] = "Preparation"
                             st.rerun()
                         else:
@@ -3799,6 +4286,72 @@ elif run_mode == "Preparation":
                             st.error(st.session_state["last_irt_error"])
                 if st.session_state.get("last_irt_error"):
                     st.caption(st.session_state["last_irt_error"])
+        else:
+            with st.container(border=True):
+                st.markdown(
+                    "<div class='psymas-card-head'><div class='psymas-card-title'>Model Estimation</div></div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Not required for selected agents.")
+
+    with col_psi:
+        if need_model:
+            with st.container(border=True):
+                st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
+                ip_psi = st.session_state.get("last_irt_item_params") or []
+                psi_ready = bool(ip_psi)
+                st.markdown(
+                    f"""
+                    <div class="psymas-card-head">
+                      <div class="psymas-card-title">Upload Item Parameter</div>
+                      <div class="psymas-card-status">{_dot(psi_ready)}{'Ready' if psi_ready else 'Not ready'}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                up_psi = st.file_uploader(
+                    "ψ (JSON/CSV)",
+                    type=["json", "csv"],
+                    key="main_psi_uploader",
+                    help="Pre-estimated item parameters: JSON array of objects with a, b (and optionally c), or CSV with columns a, b [, c].",
+                )
+                _psi_sig = (getattr(up_psi, "name", None), getattr(up_psi, "size", None)) if up_psi is not None else None
+                if _psi_sig and st.session_state.get("prep_last_psi_sig") != _psi_sig:
+                    st.session_state["last_irt_error"] = None
+                    try:
+                        up_psi.seek(0)
+                        raw = up_psi.read()
+                        if up_psi.name and up_psi.name.lower().endswith(".json"):
+                            data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+                            if not isinstance(data, list):
+                                data = data.get("item_params", data.get("result", data.get("items", [data])))
+                            if not isinstance(data, list):
+                                raise ValueError("JSON must be an array of item objects or an object with 'item_params' / 'result' / 'items'.")
+                            psi_list = [dict(x) for x in data]
+                        else:
+                            df = pd.read_csv(io.BytesIO(raw) if isinstance(raw, bytes) else io.StringIO(raw))
+                            df = _drop_index_column(df)
+                            a_col = "a1" if "a1" in df.columns else "a"
+                            if a_col not in df.columns or "b" not in df.columns:
+                                raise ValueError("CSV must have columns 'a' (or 'a1') and 'b'; optional 'c' or 'g'.")
+                            psi_list = df.to_dict(orient="records")
+                        if not psi_list:
+                            raise ValueError("No item parameters found.")
+                        st.session_state["last_irt_item_params"] = psi_list
+                        st.session_state["item_params"] = psi_list
+                        st.session_state["prep_last_psi_sig"] = _psi_sig
+                        st.session_state["_nav_request"] = "Preparation"
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state["last_irt_error"] = f"Upload ψ failed: {e}"
+                        st.caption(st.session_state["last_irt_error"])
+        else:
+            with st.container(border=True):
+                st.markdown(
+                    "<div class='psymas-card-head'><div class='psymas-card-title'>Upload Item Parameter</div></div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Not required for selected agents.")
 
     # RT upload shown when any RT-using agent is selected
     if need_rt:
@@ -3848,7 +4401,7 @@ elif run_mode == "Preparation":
                 "Compromised item IDs (optional)",
                 key="prep_compromised_input",
                 label_visibility="collapsed",
-                placeholder="Compromised item IDs, e.g. 3,7,12",
+                placeholder="Compromised item IDs, e.g. 3,7,12 — leave empty for first n-1",
             )
             try:
                 st.session_state["prep_compromised_items"] = [
@@ -3875,7 +4428,7 @@ elif run_mode == "Preparation":
 
     st.divider()
     # Align readiness pills with what is actually required by the selected agents
-    need_rt = "detect_rg" in prep_ab_fns
+    need_rt = any(fn in prep_ab_fns for fn in ["detect_rg", "detect_pm", "detect_pk", "detect_as", "detect_ac"])
     need_psi = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"])
 
     resp_ok = resp_loaded
@@ -3935,17 +4488,21 @@ elif run_mode == "Preparation":
         run_forensic = st.button(
             "Detect",
             key="prep_run_forensic",
-            use_container_width=True,
             disabled=not all_ready,
         )
 
     if run_forensic:
         # Start a backend job instead of running LangGraph directly in Streamlit
+        # Remember which agents were selected so Summary only reports those.
+        st.session_state["last_detect_agents"] = prep_ab_fns
+        _responses = st.session_state.get("last_uploaded_responses") or []
+        _comp = st.session_state.get("prep_compromised_items") or []
+        # Leave empty to let backend default to items 1..n-1 (R requires ≥1 secure item)
         raw_payload = {
-            "responses": st.session_state.get("last_uploaded_responses") or [],
+            "responses": _responses,
             "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
             "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
-            "compromised_items": st.session_state.get("prep_compromised_items") or [],
+            "compromised_items": _comp,
             "model_settings": _model_settings_for_backend(),
             # Reuse ψ generated on Preparation to keep IRT parameters identical.
             "psi_data": st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or [],
@@ -3976,12 +4533,15 @@ elif run_mode == "Detect Progress":
     # Optional: force a fresh LangGraph rerun using current session data
     with st.expander("Advanced controls", expanded=False):
         st.caption("If a previous run stalled or you changed settings, you can force a fresh aberrance detection rerun.")
-        if st.button("Re-run Detect now", key="detect_force_rerun", use_container_width=True):
+        if st.button("Re-run Detect now", key="detect_force_rerun"):
+            _resp = st.session_state.get("last_uploaded_responses") or []
+            _ci = st.session_state.get("prep_compromised_items") or []
+            # Leave empty to let backend default to items 1..n-1 (R requires ≥1 secure item)
             raw_payload = {
-                "responses": st.session_state.get("last_uploaded_responses") or [],
+                "responses": _resp,
                 "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
                 "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
-                "compromised_items": st.session_state.get("prep_compromised_items") or [],
+                "compromised_items": _ci,
                 "model_settings": _model_settings_for_backend(),
                 "psi_data": st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or [],
                 "aberrance_functions": [fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")] or ["detect_nm"],
@@ -4007,7 +4567,7 @@ elif run_mode == "Detect Progress":
 
     if not st.session_state.get("last_uploaded_responses"):
         st.error("No Response data in session. Go back to **Preparation** and upload Response (and RT).")
-        if st.button("Back to Preparation", use_container_width=True):
+        if st.button("Back to Preparation"):
             st.session_state.run_mode = "Preparation"
             st.rerun()
     else:
@@ -4128,7 +4688,7 @@ elif run_mode == "Detect Progress":
                             st.session_state["detect_job_status"] = "done"
                             _smooth_to(100, duration_s=0.25)
                             st.success("Detection completed.")
-                            if st.button("Generate Report", key="detect_generate_report", type="primary", use_container_width=True):
+                            if st.button("Generate Report", key="detect_generate_report", type="primary"):
                                 # Jump straight to the Aberrance Summary dashboard
                                 st.session_state["_nav_request"] = "Aberrance Summary"
                                 st.rerun()
@@ -4197,7 +4757,9 @@ elif run_mode == "Data review":
             axes[1].set_title("Response-time distribution")
             axes[1].grid(True, alpha=0.3)
         plt.tight_layout()
-        st.pyplot(fig)
+        _pc, _ = st.columns([1, 2])
+        with _pc:
+            st.pyplot(fig)
         plt.close()
     st.caption("Use the **sidebar** to switch to another module.")
 
@@ -4242,8 +4804,6 @@ elif run_mode == "Aberrance Summary":
     </style>
     """, unsafe_allow_html=True)
     st.markdown('<div class="command-header"><h2>🧾 Aberrance Summary</h2><p>Forensic verdict and flags</p></div>', unsafe_allow_html=True)
-
-    st.caption("Run forensic analysis from **Preparation** (Detect), then review results here.")
     st.divider()
 
     # ── Dashboard (results) ──
@@ -4252,6 +4812,24 @@ elif run_mode == "Aberrance Summary":
     else:
         fr = st.session_state["forensic_result"]
         flags = fr.get("flags", {})
+        # Only show agents that were actually selected on Preparation.
+        # Map UI function names -> backend agent keys.
+        _fn_to_agent = {
+            "detect_nm": "nm_agent",
+            "detect_pm": "pm_agent",
+            "detect_ac": "ac_agent",
+            "detect_as": "as_agent",
+            "detect_rg": "rg_agent",
+            "detect_tt": "tt_agent",
+            "detect_pk": "pk_agent",
+        }
+        # Use the agents actually used in the last Detect run; fall back to current checkboxes.
+        _selected_fns = st.session_state.get("last_detect_agents") or [
+            fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")
+        ]
+        if not _selected_fns:
+            _selected_fns = ["detect_nm"]
+        _visible_agents = { _fn_to_agent[fn] for fn in _selected_fns if fn in _fn_to_agent }
         final_report = fr.get("final_report", "")
 
         # ── Top Section: Generative Report ──
@@ -4269,7 +4847,7 @@ elif run_mode == "Aberrance Summary":
             else:
                 st.info("No report generated (LLM may not be configured).")
         with col_actions:
-            if st.button("Regenerate", key="regen_forensic_verdict", use_container_width=True):
+            if st.button("Regenerate", key="regen_forensic_verdict"):
                 try:
                     from graph import manager_synthesizer
                     # Use current sidebar/Preparation LLM selection for regeneration
@@ -4288,6 +4866,9 @@ elif run_mode == "Aberrance Summary":
                     regen_state = {
                         "flags": flags,
                         "model_settings": _regen_model_settings,
+                        # Ensure the LLM verdict only considers agents that were active
+                        # in the last Detect run.
+                        "aberrance_functions": st.session_state.get("last_detect_agents") or [],
                     }
                     regen_result = manager_synthesizer(regen_state)
                     new_report = regen_result.get("final_report")
@@ -4373,7 +4954,9 @@ elif run_mode == "Aberrance Summary":
                         ax_g.set_facecolor("#1a1a2e")
                         fig_g.patch.set_facecolor("#1a1a2e")
                         ax_g.set_title(f"Copying Network ({len(_sig_pairs)} significant pairs)", color="white")
-                        st.pyplot(fig_g)
+                        _pc1, _ = st.columns([1, 2])
+                        with _pc1:
+                            st.pyplot(fig_g)
                         plt.close(fig_g)
                     except ImportError:
                         st.warning("Install `networkx` to render the collusion graph.")
@@ -4429,7 +5012,9 @@ elif run_mode == "Aberrance Summary":
                         fontsize=9,
                         fontstyle="italic",
                     )
-                    st.pyplot(fig_e)
+                    _pc2, _ = st.columns([1, 2])
+                    with _pc2:
+                        st.pyplot(fig_e)
                     plt.close(fig_e)
 
             st.divider()
@@ -4483,76 +5068,199 @@ elif run_mode == "Aberrance Summary":
         n_students = len(responses)
 
         _agent_meta = {
-            "nm_agent": ("Nonparametric Misfit (detect_nm)", "Person-fit without IRT; large positive ZU3_S values indicate inconsistent response patterns."),
-            "pm_agent": ("Model Misfit (detect_pm)", "Parametric person-fit under IRT; flags students whose patterns do not fit the calibrated model."),
-            "ac_agent": ("Answer Copying (detect_ac)", "Source–copier pairs with suspiciously similar answer strings."),
-            "as_agent": ("Answer Similarity (detect_as)", "Clusters of students with unusually similar response vectors."),
-            "rg_agent": ("Rapid Guessing (detect_rg)", "Low response-time effort (RTE) relative to peers and item difficulty."),
-            "tt_agent": ("Test Tampering (detect_tt)", "Potential erasures or overwriting patterns suggesting tampering."),
-            "pk_agent": ("Preknowledge (detect_pk)", "Unusual success on compromised items relative to baseline ability."),
+            "nm_agent": (
+                "Nonparametric Misfit (detect_nm)",
+                "Person-fit without IRT using nonparametric indices (e.g., Guttman errors G_S, NC_S, HT_S, KL_T). Requires response data (R) and optionally RT for KL_T.",
+            ),
+            "pm_agent": (
+                "Model Misfit (detect_pm)",
+                "Parametric person-fit under IRT using l_z-style likelihood indices for accuracy (L_S_NO), time (L_T), or joint accuracy+time (L_ST_NO). Requires ψ item parameters plus R and/or RT.",
+            ),
+            "ac_agent": (
+                "Answer Copying (detect_ac)",
+                "Copying-focused answer similarity indices (e.g., OMG_S) that compare observed matching answers to random expectation. Uses response data (R) only.",
+            ),
+            "as_agent": (
+                "Answer Similarity (detect_as)",
+                "Similarity / collusion analysis using ω-style indices for score only (OMG_S) or score+time (OMG_ST), highlighting clusters of unusually similar response vectors.",
+            ),
+            "rg_agent": (
+                "Rapid Guessing (detect_rg)",
+                "Low-effort responding based on response times: threshold or normative-time indices (CT / NT) and related RG methods. Requires RT, optionally combined with scores.",
+            ),
+            "tt_agent": (
+                "Test Tampering (detect_tt)",
+                "Erasure / tampering indices (e.g., EDI_SD_CO, EDI_R_*) that compare initial vs. final responses or multi-version forms. Requires response data from pre/post or multiple versions.",
+            ),
+            "pk_agent": (
+                "Preknowledge (detect_pk)",
+                "Score- and time-based likelihood-ratio indices (L_S, L_T, L_ST) contrasting compromised vs. safe item sets to detect advance knowledge of leaked items.",
+            ),
         }
 
         for agent_key, (title, blurb) in _agent_meta.items():
+            if agent_key not in _visible_agents:
+                continue
             data = flags.get(agent_key, {})
             if not isinstance(data, dict) or not data:
                 continue
 
+            # Build table payload for tab 2 (same logic as before)
+            table_data: list[dict] | None = None
+            table_title = "Full output table"
+            if agent_key == "nm_agent":
+                table_data = data.get("stat") or data.get("nonparametric_misfit") or []
+                table_title = "Nonparametric misfit indices (detect_nm)"
+            elif agent_key == "pm_agent":
+                table_data = data.get("stat") or []
+                table_title = "Parametric misfit indices (detect_pm)"
+            elif agent_key == "ac_agent":
+                table_data = data.get("pairs") or []
+                table_title = "Answer copying pairs and statistics (detect_ac)"
+            elif agent_key == "as_agent":
+                table_data = data.get("stat") or []
+                table_title = "Answer similarity pairs and statistics (detect_as)"
+            elif agent_key == "rg_agent":
+                rte_vals = data.get("rte") or []
+                if rte_vals:
+                    table_data = [{"Student": i + 1, "RTE": float(v)} for i, v in enumerate(rte_vals)]
+                    table_title = "Response Time Effort (RTE) by student (detect_rg)"
+            elif agent_key == "cp_agent":
+                table_data = data.get("stat") or []
+                table_title = "Change-point statistics by student (detect_cp)"
+            elif agent_key == "pk_agent":
+                table_data = data.get("stat") or []
+                table_title = "Preknowledge indices by student (detect_pk)"
+
+            flagged_sets = [
+                set(data.get("flagged", [])),
+                set(data.get("flagged_copiers", [])),
+                set(data.get("flagged_pairs", [])),
+            ]
+            flagged = set().union(*flagged_sets)
+            n_flagged = len(flagged)
+
             with st.expander(title, expanded=False):
                 st.caption(blurb)
+                tab_overview, tab_table, tab_apa = st.tabs(["Overview", "Indices", "Agent Summary"])
 
-                if data.get("error"):
-                    st.markdown(f"❌ **Error**: {data['error']}")
-                    continue
-                if data.get("info"):
-                    st.markdown(f"ℹ️ {data['info']}")
-
-                flagged_sets = [
-                    set(data.get("flagged", [])),
-                    set(data.get("flagged_copiers", [])),
-                    set(data.get("flagged_pairs", [])),
-                ]
-                flagged = set().union(*flagged_sets)
-                n_flagged = len(flagged)
-
-                if n_students:
-                    rate = (n_flagged / n_students) * 100 if n_students > 0 else 0.0
-                    st.markdown(f"**Flagged students**: {n_flagged} of {n_students} (~{rate:.1f}%).")
-                else:
-                    st.markdown(f"**Flagged students**: {n_flagged}.")
-
-                if n_flagged:
-                    example_ids = sorted(flagged)[:10]
-                    st.markdown(
-                        "Examples (student indices): "
-                        + ", ".join(str(i + 1) for i in example_ids)
-                    )
-
-                # Agent-specific quantitative highlights
-                if agent_key == "nm_agent" and data.get("stat"):
-                    try:
-                        stats = data["stat"]
-                        scores = [float(stats[i].get("ZU3_S", 0)) for i in flagged if i < len(stats)]
-                        if scores:
-                            st.caption(f"Maximum person-fit ZU3_S among flagged examinees: {max(scores):.2f}.")
-                    except Exception:
-                        pass
-
-                if agent_key == "rg_agent" and data.get("rte"):
-                    try:
-                        rte_vals = data["rte"]
-                        rte_flagged = [float(rte_vals[i]) for i in flagged if i < len(rte_vals)]
-                        if rte_flagged:
-                            rte_series = pd.Series(rte_flagged)
-                            st.caption(
-                                f"Median RTE for flagged students: {rte_series.median():.2f} "
-                                "(lower values indicate faster, less effortful responding)."
+                with tab_overview:
+                    if data.get("error"):
+                        st.markdown(f"❌ **Error**: {data['error']}")
+                        if agent_key == "pk_agent" and "py2rpy" in str(data.get("error", "")):
+                            st.caption("Run **Run** (Detect) again on the Preparation page to recompute with the latest fix; then reopen Aberrance.")
+                    elif data.get("info"):
+                        st.markdown(f"ℹ️ {data['info']}")
+                    else:
+                        # Static methodological details
+                        if agent_key == "nm_agent":
+                            st.markdown(
+                                "- **Indices run**: G_S, NC_S, U1_S, U3_S, ZU3_S, A_S, D_S, E_S, C_S, MC_S, PC_S, HT_S.\n"
+                                "- **Data needed**: Response matrix R (binary/graded).\n"
+                                "- **Interpretation**: Large positive values indicate patterns that are logically inconsistent with the item difficulty ordering or group norms."
                             )
-                    except Exception:
-                        pass
+                            methods = data.get("methods") or []
+                            if methods:
+                                st.caption("Methods in this run: " + ", ".join(str(m) for m in methods))
+                        elif agent_key == "pm_agent":
+                            st.markdown(
+                                "- **Indices run**: L_S_TS (score-only), L_T (time-only), Q_ST_TS and/or L_ST_TS (joint score+time), depending on RT availability.\n"
+                                "- **Data needed**: IRT item parameters ψ, response matrix R, and optionally RT.\n"
+                                "- **Interpretation**: Flags examinees whose patterns are unlikely under the calibrated IRT model, even if their total score looks reasonable."
+                            )
+                        elif agent_key == "ac_agent":
+                            st.markdown(
+                                "- **Typical indices**: Copying-oriented ω statistics such as OMG_S.\n"
+                                "- **Data needed**: Response matrix R.\n"
+                                "- **Interpretation**: Large positive values indicate more matching answers than expected by chance for a suspected source–copier pair."
+                            )
+                        elif agent_key == "as_agent":
+                            st.markdown(
+                                "- **Typical indices**: ω and ω_ST (OMG_S / OMG_ST) for score-only and score+time similarity.\n"
+                                "- **Data needed**: Response matrix R; RT when using time-augmented variants.\n"
+                                "- **Interpretation**: Highlights clusters of students with unusually similar response and timing patterns suggestive of collusion."
+                            )
+                        elif agent_key == "rg_agent":
+                            st.markdown(
+                                "- **Typical indices**: Change-point and threshold methods (CT / NT, cumulative accuracy) applied to RT.\n"
+                                "- **Data needed**: Response-time matrix (RT), optionally responses (R) for accuracy checks.\n"
+                                "- **Interpretation**: Flags examinees whose response times are too short to reflect solution behavior (rapid guessing / low effort)."
+                            )
+                        elif agent_key == "tt_agent":
+                            st.markdown(
+                                "- **Typical indices**: Erasure Detection Index (EDI_SD_CO, EDI_R_*), generalized binomial tests (GBT), and likelihood-ratio tests (L_SD / L_R).\n"
+                                "- **Data needed**: Initial vs. final responses or multiple test versions, plus ψ when needed.\n"
+                                "- **Interpretation**: Detects improbable patterns of answer changes (e.g., many erasures from wrong to right) consistent with tampering."
+                            )
+                        elif agent_key == "pk_agent":
+                            st.markdown(
+                                "- **Typical indices**: L_S (score-only), L_T (time-only), and L_ST (joint score+time) comparing compromised vs. safe item sets.\n"
+                                "- **Data needed**: Responses (R), RT for time-based variants, and a flagged set of compromised items.\n"
+                                "- **Interpretation**: Flags examinees who perform much better and/or faster on compromised items than on secure items of similar difficulty."
+                            )
+                        if n_students:
+                            rate_pct = (n_flagged / n_students) * 100 if n_students > 0 else 0.0
+                            st.markdown(f"**Flagged students**: {n_flagged} of {n_students} (~{rate_pct:.1f}%).")
+                        else:
+                            st.markdown(f"**Flagged students**: {n_flagged}.")
+                        if n_flagged:
+                            example_ids = sorted(flagged)[:10]
+                            st.markdown("Examples (student indices): " + ", ".join(str(i + 1) for i in example_ids))
+                        if agent_key == "nm_agent" and data.get("stat"):
+                            try:
+                                stats = data["stat"]
+                                scores = [float(stats[i].get("ZU3_S", 0)) for i in flagged if i < len(stats)]
+                                if scores:
+                                    st.caption(f"Maximum person-fit ZU3_S among flagged examinees: {max(scores):.2f}.")
+                            except Exception:
+                                pass
+                        if agent_key == "rg_agent" and data.get("rte"):
+                            try:
+                                rte_vals = data["rte"]
+                                rte_flagged = [float(rte_vals[i]) for i in flagged if i < len(rte_vals)]
+                                if rte_flagged:
+                                    rte_series = pd.Series(rte_flagged)
+                                    st.caption(f"Median RTE for flagged students: {rte_series.median():.2f} (lower = faster, less effortful).")
+                            except Exception:
+                                pass
 
-        # Agent Status Overview
+                with tab_table:
+                    if table_data:
+                        try:
+                            df_detail = pd.DataFrame(table_data)
+                            st.caption(table_title)
+                            st.dataframe(df_detail, use_container_width=True, hide_index=True)
+                        except Exception:
+                            st.info("Detailed table is not available for this agent output.")
+                    else:
+                        st.caption("No tabular output for this agent.")
+
+                with tab_apa:
+                    _apa_key = f"apa_summary_{agent_key}"
+                    if st.button("Generate Agent Summary", key=f"{agent_key}_gen_apa"):
+                        with st.spinner("Generating Agent Summary…"):
+                            summary, err = _generate_agent_apa_summary(
+                                title, agent_key, data, n_students, flagged_ids=sorted(flagged)[:25]
+                            )
+                            if err:
+                                st.session_state[_apa_key] = None
+                                st.session_state[f"{_apa_key}_err"] = err
+                            else:
+                                st.session_state[_apa_key] = summary
+                                st.session_state[f"{_apa_key}_err"] = None
+                    if st.session_state.get(f"{_apa_key}_err"):
+                        st.warning(st.session_state[f"{_apa_key}_err"])
+                    if st.session_state.get(_apa_key):
+                        st.markdown("**Agent Summary**")
+                        st.markdown(st.session_state[_apa_key])
+
+        # Agent Status Overview (ordered by aberrance index categories)
         with st.expander("Agent Status Summary"):
-            for agent_name in ["nm_agent", "pm_agent", "ac_agent", "as_agent", "rg_agent", "cp_agent", "tt_agent", "pk_agent"]:
+            # Order: nm, pm, as, pk, tt, cp, rg (copying AC grouped with AS in visuals / reports).
+            _status_agents = ["nm_agent", "pm_agent", "as_agent", "ac_agent", "pk_agent", "tt_agent", "cp_agent", "rg_agent"]
+            for agent_name in _status_agents:
+                if agent_name in _fn_to_agent.values() and agent_name not in _visible_agents:
+                    continue
                 data = flags.get(agent_name, {})
                 if data.get("error"):
                     st.markdown(f"❌ **{agent_name}**: {data['error']}")
@@ -4594,8 +5302,34 @@ elif run_mode == "Student Profile":
             import plotly.graph_objects as go
             import math
 
-            _bub_agents = ["nm_agent", "pm_agent", "ac_agent", "as_agent", "rg_agent", "cp_agent", "tt_agent", "pk_agent"]
-            _bub_agent_labels = ["NM", "PM", "AC", "AS", "RG", "CP", "TT", "PK"]
+            # Order bubbles by aberrance index categories, and only include agents
+            # that were actually used in the last Detect run:
+            _fn_to_agent = {
+                "detect_nm": "nm_agent",
+                "detect_pm": "pm_agent",
+                "detect_ac": "ac_agent",
+                "detect_as": "as_agent",
+                "detect_rg": "rg_agent",
+                "detect_tt": "tt_agent",
+                "detect_pk": "pk_agent",
+            }
+            _last_fns = st.session_state.get("last_detect_agents") or ABERRANCE_FUNCTIONS
+            _visible_agents_sp = {_fn_to_agent[fn] for fn in _last_fns if fn in _fn_to_agent}
+
+            # 1) Person-fit (NM, PM), 2) Answer similarity (AS, AC),
+            # 3) Preknowledge (PK), 4) Test tampering (TT), 5) Low effort (CP, RG).
+            _bub_all_agents = ["nm_agent", "pm_agent", "as_agent", "ac_agent", "pk_agent", "tt_agent", "cp_agent", "rg_agent"]
+            _bub_all_labels = ["NM", "PM", "AS", "AC", "PK", "TT", "CP", "RG"]
+            _bub_agents = []
+            _bub_agent_labels = []
+            for ag, lab in zip(_bub_all_agents, _bub_all_labels):
+                if ag not in _visible_agents_sp:
+                    continue
+                _bub_agents.append(ag)
+                _bub_agent_labels.append(lab)
+            if not _bub_agents:
+                _bub_agents = ["nm_agent"]
+                _bub_agent_labels = ["NM"]
             # Count total flags per student
             _bub_totals = []
             _bub_details = []  # per-student detail strings for hover
@@ -4686,10 +5420,18 @@ elif run_mode == "Student Profile":
 
             st.divider()
 
-            # Build flagged student list with details
-            _all_agents = ["nm_agent", "pm_agent", "ac_agent", "as_agent", "rg_agent", "cp_agent", "tt_agent", "pk_agent"]
-            _agent_short = {"nm_agent": "NM", "pm_agent": "PM", "ac_agent": "AC", "as_agent": "AS",
-                            "rg_agent": "RG", "cp_agent": "CP", "tt_agent": "TT", "pk_agent": "PK"}
+            # Build flagged student list with details (ordered nm, pm, as, ac, pk, tt, cp, rg)
+            _all_agents = ["nm_agent", "pm_agent", "as_agent", "ac_agent", "pk_agent", "tt_agent", "cp_agent", "rg_agent"]
+            _agent_short = {
+                "nm_agent": "NM",
+                "pm_agent": "PM",
+                "as_agent": "AS",
+                "ac_agent": "AC",
+                "pk_agent": "PK",
+                "tt_agent": "TT",
+                "cp_agent": "CP",
+                "rg_agent": "RG",
+            }
             _flagged_options = []  # list of (student_id_1based, label_str)
             for _si in range(n_students):
                 _flag_names = []
@@ -4951,6 +5693,131 @@ elif run_mode == "Student Profile":
                             st.markdown(f"- Change point detected: {cp_stat[sid]}")
                 else:
                     st.success(f"Student {selected_student} was not flagged by any agent.")
+
+            # ── Generate Test-Taker Report (button) ──
+            _report_key = f"student_abnormal_report_{selected_student}"
+            _show_report = st.session_state.get("test_taker_report_id") == selected_student
+            if st.button("Generate Test-Taker Report", key=f"gen_student_report_{selected_student}"):
+                with st.spinner("Generating report…"):
+                    if not st.session_state.get(_report_key):
+                        report_text, report_err = _generate_student_abnormal_report(
+                            selected_student, flags, responses, rt_data or [], n_students
+                        )
+                        if report_err:
+                            st.session_state[f"{_report_key}_err"] = report_err
+                        else:
+                            st.session_state[_report_key] = report_text
+                            st.session_state[f"{_report_key}_err"] = None
+                    st.session_state["test_taker_report_id"] = selected_student
+                st.rerun()
+            if st.session_state.get(f"{_report_key}_err") and not _show_report:
+                st.warning(st.session_state[f"{_report_key}_err"])
+
+            # ── Show PDF only (downloadable, letter-size with all sections) ──
+            if _show_report:
+                correct = total_items = 0
+                resp_row = {}
+                if responses and sid < len(responses):
+                    resp_row = responses[sid]
+                    resp_vals = list(resp_row.values())
+                    correct = sum(1 for v in resp_vals if v == 1)
+                    total_items = len(resp_vals)
+                rt_row_list = None
+                rt_medians_list = None
+                rt_list = rt_data if isinstance(rt_data, list) else []
+                if rt_list and sid < len(rt_list):
+                    student_rt = rt_list[sid]
+                    if isinstance(student_rt, dict):
+                        _rt_keys_rt = list(student_rt.keys())
+                        rt_vals = []
+                        for k in _rt_keys_rt:
+                            v = student_rt.get(k)
+                            try:
+                                rt_vals.append(float(v) if v is not None else 0.0)
+                            except (TypeError, ValueError):
+                                rt_vals.append(0.0)
+                    else:
+                        rt_vals = [float(v) for v in student_rt if v is not None]
+                    if rt_vals:
+                        n_items_rt = len(rt_vals)
+                        _rt_keys_rt = list(student_rt.keys()) if isinstance(student_rt, dict) else list(range(n_items_rt))
+                        medians = []
+                        for j in range(n_items_rt):
+                            col_vals = []
+                            for r in rt_list:
+                                if isinstance(r, dict):
+                                    k = _rt_keys_rt[j] if j < len(_rt_keys_rt) else None
+                                    v = r.get(k) if k is not None else None
+                                else:
+                                    v = r[j] if j < len(r) else None
+                                try:
+                                    col_vals.append(float(v))
+                                except (TypeError, ValueError):
+                                    pass
+                            medians.append(float(pd.Series(col_vals).median()) if col_vals else 0.0)
+                        rt_row_list = rt_vals
+                        rt_medians_list = medians
+                percentile_val = 0.0
+                all_scores_list = []
+                if responses and n_students > 0:
+                    all_scores_list = [sum(1 for v in (list(r.values()) if isinstance(r, dict) else r) if v == 1) for r in responses]
+                    percentile_val = (sum(1 for s in all_scores_list if s <= correct) / n_students) * 100 if n_students else 0
+                _agent_names_ttr = {
+                    "nm_agent": "Nonparametric misfit", "pm_agent": "Parametric misfit",
+                    "as_agent": "Answer similarity", "ac_agent": "Answer copying",
+                    "pk_agent": "Preknowledge", "tt_agent": "Test tampering",
+                    "cp_agent": "Change point", "rg_agent": "Rapid guessing",
+                }
+                aberrant_rows_list = []
+                for ag_name, ag_label in _agent_names_ttr.items():
+                    ag_data = flags.get(ag_name, {})
+                    fl = ag_data.get("flagged", []) + ag_data.get("flagged_copiers", [])
+                    flagged = sid in fl
+                    indices_str = ""
+                    if ag_data.get("stat") and sid < len(ag_data["stat"]):
+                        rec = ag_data["stat"][sid]
+                        key_vals = {k: f"{v:.3f}" if isinstance(v, float) else str(v) for k, v in rec.items() if isinstance(v, (int, float)) and k != "row"}
+                        indices_str = ", ".join(f"{k}={v}" for k, v in list(key_vals.items())[:6])
+                    if ag_name == "rg_agent" and ag_data.get("rte") and sid < len(ag_data["rte"]):
+                        indices_str = f"RTE={ag_data['rte'][sid]:.4f}" + (f"; {indices_str}" if indices_str else "")
+                    aberrant_rows_list.append({"Agent": ag_label, "Flagged": "Yes" if flagged else "No", "Key indices": indices_str or "—"})
+
+                need_rebuild = st.session_state.get("ttr_pdf_student_id") != selected_student
+                if need_rebuild:
+                    pdf_bytes, pdf_err = _build_test_taker_report_pdf(
+                        selected_student, correct, total_items, resp_row, flags,
+                        rt_row_list, rt_medians_list, percentile_val, aberrant_rows_list,
+                        st.session_state.get(_report_key),
+                        all_scores_list,
+                    )
+                    if pdf_err:
+                        st.session_state["ttr_pdf_err"] = pdf_err
+                        st.session_state["ttr_pdf_bytes"] = None
+                    else:
+                        st.session_state["ttr_pdf_bytes"] = pdf_bytes
+                        st.session_state["ttr_pdf_err"] = None
+                    st.session_state["ttr_pdf_student_id"] = selected_student
+
+                pdf_bytes = st.session_state.get("ttr_pdf_bytes")
+                pdf_err = st.session_state.get("ttr_pdf_err")
+                if pdf_err:
+                    st.warning(f"PDF could not be built: {pdf_err}")
+                elif pdf_bytes:
+                    b64 = base64.b64encode(pdf_bytes).decode()
+                    st.markdown(
+                        f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="800" style="border:1px solid #2d3748; border-radius:8px;"></iframe>',
+                        unsafe_allow_html=True,
+                    )
+                    st.download_button(
+                        "Download PDF",
+                        data=pdf_bytes,
+                        file_name=f"test_taker_report_student_{selected_student}.pdf",
+                        mime="application/pdf",
+                        key="ttr_download_pdf",
+                    )
+                if st.button("← Back to profile", key="ttr_back"):
+                    st.session_state["test_taker_report_id"] = None
+                    st.rerun()
 
             # (Response table now shown at the top of the profile)
 
@@ -5247,7 +6114,9 @@ elif run_mode == "Individual Aberrance":
                 margin=dict(t=40, b=60),
             )
 
-            event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="quad_chart")
+            _pc_quad, _ = st.columns([1, 2])
+            with _pc_quad:
+                event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="quad_chart")
 
             # Handle click to navigate to Student Profile
             if event and event.selection and event.selection.points:
@@ -5371,7 +6240,9 @@ elif run_mode == "Temporal Forensics":
                 showlegend=False,
             )
 
-            _tf_event = st.plotly_chart(_tf_fig, use_container_width=True, on_select="rerun", key="tf_bubble_grid")
+            _pc_tf, _ = st.columns([1, 2])
+            with _pc_tf:
+                _tf_event = st.plotly_chart(_tf_fig, use_container_width=True, on_select="rerun", key="tf_bubble_grid")
 
             # Handle click to select student for the Speed Shift tab
             if _tf_event and _tf_event.selection and _tf_event.selection.points:
@@ -5462,7 +6333,9 @@ elif run_mode == "Temporal Forensics":
                             plot_bgcolor="#0f3460",
                             height=400,
                         )
-                        st.plotly_chart(fig_cp, use_container_width=True)
+                        _pc_cp, _ = st.columns([1, 2])
+                        with _pc_cp:
+                            st.plotly_chart(fig_cp, use_container_width=True)
 
                         # Flagged status
                         if cp_data.get("flagged") and sid in cp_data["flagged"]:
@@ -5508,6 +6381,8 @@ elif run_mode == "Temporal Forensics":
 
             if pk_data.get("error"):
                 st.warning(f"pk_agent error: {pk_data['error']}")
+                if "py2rpy" in str(pk_data.get("error", "")):
+                    st.caption("Run **Run** (Detect) again on the Preparation page to recompute; then reopen this page.")
             elif pk_data.get("info"):
                 st.info(pk_data["info"])
             elif pk_data.get("stat"):

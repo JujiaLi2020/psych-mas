@@ -19,6 +19,8 @@ class DetectRequest(BaseModel):
     compromised_items: list[int] = []
     model_settings: dict = {}
     psi_data: list[dict] | None = None
+    # Which aberrance functions the UI selected on Preparation
+    aberrance_functions: list[str] = []
 
 
 class IrtRequest(BaseModel):
@@ -99,6 +101,8 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                 "is_verified": True,
                 "psi_data": psi_data,
                 "compromised_items": req.compromised_items,
+                 # Carry selected agents through even in stub mode
+                "aberrance_functions": req.aberrance_functions or [],
                 "flags": {
                     "stub": {
                         "note": "Stubbed LangGraph run (PSYMAS_STUB_LANGGRAPH=1); no R/aberrance executed."
@@ -119,6 +123,12 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
             return
 
         # ---- Real mode: Aberrance workflow (ψ must be provided by Preparation) ----
+        # Activate numpy->R conversion so any numpy in state never triggers "py2rpy not defined"
+        try:
+            from rpy2.robjects import numpy2ri
+            numpy2ri.activate()
+        except Exception:
+            pass
         # Import here so stub mode can avoid importing heavy R / LangGraph stack.
         from graph import forensic_workflow
 
@@ -147,6 +157,7 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
             "is_verified": True,
             "psi_data": psi_data,
             "compromised_items": req.compromised_items,
+            "aberrance_functions": req.aberrance_functions or [],
             "flags": {},
             "final_report": "",
         }
@@ -283,6 +294,14 @@ def run_irt(req: IrtRequest) -> dict:
     local R/rpy2 for ψ estimation.
     """
     load_dotenv()
+    # Activate rpy2 conversion in this thread so ro.conversion.rpy2py works
+    # (uvicorn may run handlers in worker threads where contextvars are not set).
+    try:
+        from rpy2.robjects import numpy2ri, pandas2ri
+        numpy2ri.activate()
+        pandas2ri.activate()
+    except Exception:
+        pass
     from graph import irt_agent
 
     irt_state = {

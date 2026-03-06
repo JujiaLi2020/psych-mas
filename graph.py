@@ -543,6 +543,12 @@ def irt_agent(state):
     try:
         import rpy2.robjects as ro
         from rpy2.robjects import pandas2ri
+        try:
+            from rpy2.robjects import numpy2ri
+            numpy2ri.activate()
+            _converter = ro.default_converter + pandas2ri.converter + numpy2ri.converter
+        except Exception:
+            _converter = ro.default_converter + pandas2ri.converter
     except Exception as exc:
         message = (
             f"ICC skipped; rpy2/R not available ({type(exc).__name__}: {exc}). "
@@ -558,10 +564,20 @@ def irt_agent(state):
     icc_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with (ro.default_converter + pandas2ri.converter).context():
-            ro.globalenv["df"] = resp_df[keep_cols] if keep_cols else resp_df
+        # Run all R and rpy2py inside a conversion context so it works in uvicorn worker threads.
+        with _converter.context():
+            # Build df in R from pure Python list (no numpy) to avoid py2rpy numpy.ndarray
+            block = resp_df[keep_cols] if keep_cols else resp_df
+            nrow, ncol = int(block.shape[0]), int(block.shape[1])
+            x_flat = []
+            for i in range(nrow):
+                for j in range(ncol):
+                    v = block.iloc[i, j]
+                    x_flat.append(int(v) if v is not None and str(v) not in ("nan", "NaN", "") else 0)
+            ro.globalenv["x_vec"] = ro.IntVector(x_flat)
             ro.globalenv["icc_path"] = str(icc_path)
             ro.globalenv["itemtype"] = itemtype
+            ro.r(f"df <- as.data.frame(matrix(x_vec, nrow={nrow}, ncol={ncol}, byrow=TRUE))")
             ro.r(
                 """
                 library(mirt)
@@ -596,15 +612,17 @@ def irt_agent(state):
             item_pars = ro.conversion.rpy2py(ro.r("item_pars"))
             person_pars = ro.conversion.rpy2py(ro.r("person_pars"))
             item_fit = ro.conversion.rpy2py(ro.r("item_fit"))
-            model_fit = {}
-            try:
+        model_fit = {}
+        try:
+            with _converter.context():
                 model_fit_df = ro.conversion.rpy2py(ro.r("model_fit_df"))
                 if hasattr(model_fit_df, "iloc") and len(model_fit_df) > 0:
                     model_fit = model_fit_df.iloc[0].to_dict()
-            except Exception:
-                pass
-            if not model_fit:
-                try:
+        except Exception:
+            pass
+        if not model_fit:
+            try:
+                with _converter.context():
                     model_fit_r = ro.r("model_fit_list")
                     rnames = getattr(model_fit_r, "names", None)
                     if rnames is not None and len(rnames) > 0:
@@ -615,8 +633,8 @@ def irt_agent(state):
                                 model_fit[str(name)] = ro.conversion.rpy2py(val)
                             except Exception:
                                 pass
-                except Exception:
-                    pass
+            except Exception:
+                pass
     except Exception as exc:
         message = (
             f"ICC skipped; R error ({type(exc).__name__}: {exc}). "
@@ -698,6 +716,11 @@ def aberrance_agent(state: State):
     try:
         import rpy2.robjects as ro
         from rpy2.robjects import pandas2ri
+        try:
+            from rpy2.robjects import numpy2ri
+            numpy2ri.activate()
+        except Exception:
+            pass
     except Exception as exc:
         return {
             "aberrance_results": {"error": f"rpy2/R not available: {exc}. Install R and rpy2 for aberrance analysis."},
@@ -717,358 +740,369 @@ def aberrance_agent(state: State):
     if not run_nm and (not run_pm or not item_params or len(item_params) == 0) and not (run_ac and item_params) and not (run_pk and item_params):
         run_nm = True
     try:
-        with (ro.default_converter + pandas2ri.converter).context():
-            ro.globalenv["df"] = resp_df[keep_cols]
-            ro.r("library(aberrance)")
-            ro.r("x <- as.matrix(df)")
-            if run_nm:
-                # Nonparametric person-fit: ZU3_S and HT_S (dichotomous)
-                ro.r("out <- detect_nm(method = c('ZU3_S', 'HT_S'), x = x)")
-                ro.r("stat_r <- as.data.frame(out$stat)")
-                stat_r = ro.r("stat_r")
-                stat_df = ro.conversion.rpy2py(stat_r)
-                methods = ["ZU3_S", "HT_S"]
-                if stat_df is not None and hasattr(stat_df, "to_dict"):
-                    records = stat_df.to_dict(orient="records")
-                    if hasattr(stat_df, "columns"):
-                        methods = list(stat_df.columns)
-                elif stat_df is not None and hasattr(stat_df, "__array__"):
-                    arr = np.asarray(stat_df)
-                    if arr.size > 0 and arr.ndim == 2:
-                        try:
-                            col_names = ro.conversion.rpy2py(ro.r("colnames(out$stat)"))
-                            if col_names is not None and len(col_names) == arr.shape[1]:
-                                methods = list(col_names)
-                        except Exception:
-                            pass
-                        records = [dict(zip(methods, row)) for row in arr.tolist()]
-                if records:
-                    df_nm = pd.DataFrame(records)
-                    if "ZU3_S" in df_nm.columns:
-                        zu3 = pd.to_numeric(df_nm["ZU3_S"], errors="coerce")
-                        if zu3.notna().any():
-                            flagged_persons.extend(np.where(zu3 < -2)[0].tolist())
-                    if "HT_S" in df_nm.columns:
-                        ht = pd.to_numeric(df_nm["HT_S"], errors="coerce")
-                        if ht.notna().any():
-                            q05 = ht.quantile(0.05)
-                            if pd.notna(q05):
-                                flagged_persons.extend(np.where(ht <= q05)[0].tolist())
-                    flagged_persons = sorted(set(flagged_persons))
-            n_persons = len(records) if records else resp_df[keep_cols].shape[0]
-            # methods: only include nonparametric method names when we actually ran detect_nm
-            result = {
-                "nonparametric_misfit": records or [],
-                "methods": list(methods) if (records or []) else [],
-                "n_persons": n_persons,
-                "flagged_persons": flagged_persons,
-                "n_flagged": len(flagged_persons),
-            }
-            if run_nm and not records:
-                return {
-                    "aberrance_results": {"error": "aberrance detect_nm returned no stat matrix."},
-                    "next_step": "end",
-                }
-            # When run_nm was False (only pm/ac/pk selected), initialize result so run_pm/run_pk can run
-            if not run_nm:
-                n_persons = resp_df[keep_cols].shape[0]
-                result = {
-                    "nonparametric_misfit": [],
-                    "methods": [],
-                    "n_persons": n_persons,
-                    "flagged_persons": [],
-                    "n_flagged": 0,
-                }
-            # Parametric person-fit (detect_pm) when selected and IRT item params available
-            item_params = state.get("item_params")
-            # Create psi in R when any of pm/ac/pk need it (so detect_ac and detect_pk can use psi even if detect_pm is not selected)
-            psi_ready = False
-            if (run_pm or run_ac or run_pk) and item_params and len(item_params) == len(keep_cols):
-                try:
-                    ip_df = pd.DataFrame(item_params)
-                    a_col = "a1" if "a1" in ip_df.columns else "a"
-                    b_col = "b"
-                    # detect_pm requires psi with columns a, b, c (guessing)
-                    # IRT (mirt IRTpars=TRUE) returns: a, b, g, u — 'g' is the guessing param → map to 'c'
-                    c_col = "g" if "g" in ip_df.columns else ("c" if "c" in ip_df.columns else None)
-                    if a_col in ip_df.columns and b_col in ip_df.columns:
-                        a_vals = [float(v) for v in ip_df[a_col].tolist()]
-                        b_vals = [float(v) for v in ip_df[b_col].tolist()]
-                        ro.globalenv["psi_a"] = ro.FloatVector(a_vals)
-                        ro.globalenv["psi_b"] = ro.FloatVector(b_vals)
-                        if c_col and c_col in ip_df.columns:
-                            c_vals = [float(v) for v in ip_df[c_col].tolist()]
-                        else:
-                            # 2PL: guessing = 0 for all items
-                            c_vals = [0.0] * len(a_vals)
-                        ro.globalenv["psi_c"] = ro.FloatVector(c_vals)
-                        ro.r("psi <- as.matrix(cbind(a = psi_a, b = psi_b, c = psi_c))")
-                        # Verify psi was created correctly
-                        psi_ncol = int(ro.r("ncol(psi)")[0])
-                        psi_nrow = int(ro.r("nrow(psi)")[0])
-                        if psi_nrow == len(keep_cols) and psi_ncol == 3:
-                            psi_ready = True
-                        else:
-                            result["info"] = (result.get("info") or "") + f" ψ matrix has unexpected dimensions [{psi_nrow}, {psi_ncol}]; expected [{len(keep_cols)}, 3]."
-                    else:
-                        avail_cols = list(ip_df.columns)
-                        result["info"] = (result.get("info") or "") + f" Item params missing '{a_col}' or '{b_col}'. Available columns: {avail_cols}."
-                except Exception as e:
-                    result["info"] = (result.get("info") or "") + f" Could not build ψ: {e}"
-            elif (run_pm or run_ac or run_pk) and not item_params:
-                result["info"] = (result.get("info") or "") + " No item parameters available; IRT may not have run. Model misfit / answer copying / preknowledge skipped."
-            elif (run_pm or run_ac or run_pk) and item_params and len(item_params) != len(keep_cols):
-                result["info"] = (result.get("info") or "") + f" Item params ({len(item_params)}) vs response columns ({len(keep_cols)}) mismatch; cannot build ψ."
-            if run_pm and psi_ready:
-                try:
-                    # detect_pm requires psi with columns a, b, c, alpha, beta AND y (log RT)
-                    # Estimate alpha/beta from RT data if available; otherwise score-only fallback
-                    pm_rt_data = state.get("rt_data") or []
-                    pm_n_persons = resp_df[keep_cols].shape[0]
-                    pm_has_rt = bool(pm_rt_data) and len(pm_rt_data) == pm_n_persons
-                    if pm_has_rt:
-                        # Build log-RT matrix y and estimate alpha/beta per item
-                        pm_rt_df = pd.DataFrame(pm_rt_data)
-                        pm_rt_block = pm_rt_df.iloc[:, :len(keep_cols)].apply(pd.to_numeric, errors="coerce").fillna(0.01)
-                        # y = log response time matrix
-                        y_flat = np.log(pm_rt_block.values.clip(min=0.001)).flatten().tolist()
-                        ro.globalenv["y_vec"] = ro.FloatVector(y_flat)
-                        ro.r(f"y <- matrix(y_vec, nrow={pm_n_persons}, ncol={len(keep_cols)}, byrow=FALSE)")
-                        # Estimate alpha (time discrimination) and beta (time intensity) per item
-                        ro.r("""
-                            pm_beta_est  <- apply(y, 2, mean)
-                            pm_alpha_est <- 1 / apply(y, 2, sd)
-                            pm_alpha_est[!is.finite(pm_alpha_est)] <- 1.0
-                            psi <- cbind(psi, alpha = pm_alpha_est, beta = pm_beta_est)
-                        """)
-                        # Call detect_pm with x AND y
-                        ro.r("""
-                            assign('pm_err', NULL, envir = .GlobalEnv)
-                            pm_out <- tryCatch(
-                                detect_pm(method = c('L_S_TS', 'L_T', 'Q_ST_TS', 'L_ST_TS'), psi = psi, x = x, y = y, alpha = 0.05),
-                                error = function(e) { assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL }
-                            )
-                        """)
-                    else:
-                        # No RT data: try score-only call (psi = a, b, c only)
-                        ro.r("""
-                            assign('pm_err', NULL, envir = .GlobalEnv)
-                            pm_out <- tryCatch(
-                                detect_pm(method = c('L_S_TS', 'L_T', 'Q_ST_TS', 'L_ST_TS'), psi = psi, x = x, alpha = 0.05),
-                                error = function(e) { assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL }
-                            )
-                        """)
-                    has_pm_r = ro.r("!is.null(pm_out)")
-                    # Convert has_pm to Python bool safely
+        ro.r("library(aberrance)")
+        # Build x in R from pure Python list (no numpy) to avoid py2rpy numpy.ndarray
+        block = resp_df[keep_cols]
+        nrow, ncol = int(block.shape[0]), int(block.shape[1])
+        x_flat = []
+        for i in range(nrow):
+            for j in range(ncol):
+                v = block.iloc[i, j]
+                x_flat.append(int(v) if v is not None and str(v) not in ("nan", "NaN", "") else 0)
+        ro.globalenv["x_vec"] = ro.IntVector(x_flat)
+        ro.r(f"x <- matrix(x_vec, nrow={nrow}, ncol={ncol}, byrow=TRUE)")
+        if run_nm:
+            # Nonparametric person-fit: run the full set of score-based indices
+            # (G_S, NC_S, U1_S, U3_S, ZU3_S, A_S, D_S, E_S, C_S, MC_S, PC_S, HT_S).
+            ro.r("out <- detect_nm(method = c('G_S','NC_S','U1_S','U3_S','ZU3_S','A_S','D_S','E_S','C_S','MC_S','PC_S','HT_S'), x = x)")
+            ro.r("stat_r <- as.data.frame(out$stat)")
+            stat_r = ro.r("stat_r")
+            stat_df = ro.conversion.rpy2py(stat_r)
+            methods = ["ZU3_S", "HT_S"]
+            if stat_df is not None and hasattr(stat_df, "to_dict"):
+                records = stat_df.to_dict(orient="records")
+                if hasattr(stat_df, "columns"):
+                    methods = list(stat_df.columns)
+            elif stat_df is not None and hasattr(stat_df, "__array__"):
+                arr = np.asarray(stat_df)
+                if arr.size > 0 and arr.ndim == 2:
                     try:
-                        has_pm_py = ro.conversion.rpy2py(has_pm_r)
-                        has_pm = bool(list(has_pm_py)[0]) if hasattr(has_pm_py, '__iter__') else bool(has_pm_py)
+                        col_names = ro.conversion.rpy2py(ro.r("colnames(out$stat)"))
+                        if col_names is not None and len(col_names) == arr.shape[1]:
+                            methods = list(col_names)
                     except Exception:
-                        has_pm = False
-                    if has_pm:
-                        # $stat is matrix [n_persons, n_methods]; $pval same; $flag is [n_persons, n_methods, 1]
-                        # Extract dimensions and method names entirely in R, return as single strings/ints
-                        ro.r("""
-                            pm_stat_mat  <- pm_out$stat
-                            pm_pval_mat  <- pm_out$pval
-                            pm_flag_arr  <- pm_out$flag
-                            pm_n         <- as.integer(nrow(pm_stat_mat))
-                            pm_methods   <- colnames(pm_stat_mat)
-                            pm_n_methods <- as.integer(length(pm_methods))
-                            pm_methods_str <- paste(pm_methods, collapse = '|')
-                        """)
-                        pm_n = int(ro.r("pm_n")[0])
-                        pm_n_methods = int(ro.r("pm_n_methods")[0])
-                        pm_methods_str = str(ro.r("pm_methods_str")[0])
-                        pm_methods_r = pm_methods_str.split("|") if pm_methods_str else []
-                        if pm_n > 0 and pm_n_methods > 0 and len(pm_methods_r) == pm_n_methods:
-                            # Read each stat and pval column as a plain list via R indexing
-                            pm_data = {}
-                            for mi in range(pm_n_methods):
-                                mname = pm_methods_r[mi]
-                                stat_r = ro.r(f"as.numeric(pm_stat_mat[, {mi + 1}])")
-                                pm_data[mname] = [float(v) for v in stat_r]
-                                pval_r = ro.r(f"as.numeric(pm_pval_mat[, {mi + 1}])")
-                                pm_data[f"{mname}_pval"] = [float(v) for v in pval_r]
-                            pm_df = pd.DataFrame(pm_data)
-                            result["parametric_misfit"] = pm_df.to_dict(orient="records")
-                            # Flag: 3D array [n_persons, n_methods, 1]; person flagged if ANY method flags
-                            try:
-                                flag_any_r = ro.r("as.logical(apply(pm_flag_arr, 1, any))")
-                                pm_flagged = [i for i, v in enumerate(flag_any_r) if v]
-                                result["flagged_persons_pm"] = pm_flagged
-                                result["flagged_persons"] = sorted(set(flagged_persons + pm_flagged))
-                                result["n_flagged"] = len(result["flagged_persons"])
-                            except Exception:
-                                pass
-                        else:
-                            result["info"] = (result.get("info") or "") + f" detect_pm stat unexpected ({pm_n}×{pm_n_methods}, methods={pm_methods_r})."
-                    else:
-                        pm_err_r = ro.r("get0('pm_err', envir = .GlobalEnv, ifnotfound = 'unknown error')")
-                        pm_err_msg = str(ro.conversion.rpy2py(pm_err_r)) if pm_err_r is not None else "unknown"
-                        result["info"] = (result.get("info") or "") + f" detect_pm failed. R: {pm_err_msg}"
-                except Exception as e:
-                    result["info"] = (result.get("info") or "") + f" detect_pm error: {e}"
-            # Answer copying (detect_ac): needs psi, x; returns stat/pval/flag per (source, copier) pair
-            if run_ac and psi_ready:
-                try:
-                    ro.r("ac_out <- tryCatch(detect_ac(method = c('OMG_S', 'GBT_S'), psi = psi, x = x, alpha = 0.05), error = function(e) NULL)")
-                    has_ac = ro.r("!is.null(ac_out)")
-                    if has_ac and ro.conversion.rpy2py(has_ac):
-                        ac_stat = ro.r("as.data.frame(ac_out$stat)")
-                        ac_stat_py = ro.conversion.rpy2py(ac_stat)
-                        ac_flag = ro.r("ac_out$flag")
-                        ac_flag_py = ro.conversion.rpy2py(ac_flag) if ac_flag is not None else None
-                        N = resp_df[keep_cols].shape[0]
-                        # R uses combn(N, 2) order: (1,2), (1,3), ..., (N-1,N) -> n_pairs = N*(N-1)/2
-                        pairs_0based = [(i, j) for i in range(N) for j in range(i + 1, N)]
-                        if ac_stat_py is not None and len(pairs_0based) > 0:
-                            if hasattr(ac_stat_py, "to_dict"):
-                                ac_records = ac_stat_py.to_dict(orient="records")
-                            else:
-                                arr = np.asarray(ac_stat_py)
-                                if arr.ndim == 2 and arr.shape[0] >= len(pairs_0based):
-                                    cols = getattr(ac_stat_py, "columns", None) or [f"AC_{k}" for k in range(arr.shape[1])]
-                                    ac_records = [dict(zip(cols, row)) for row in arr[: len(pairs_0based)].tolist()]
-                                else:
-                                    ac_records = []
-                            pair_rows = []
-                            flagged_copiers = set()
-                            for idx, (i, j) in enumerate(pairs_0based):
-                                if idx >= len(ac_records):
-                                    break
-                                row = {"Source": i + 1, "Copier": j + 1, **ac_records[idx]}
-                                pair_rows.append(row)
-                                if ac_flag_py is not None and hasattr(ac_flag_py, "__array__"):
-                                    fl = np.asarray(ac_flag_py)
-                                    if fl.ndim >= 2 and idx < fl.shape[0] and np.any(fl[idx] if fl.ndim == 2 else fl[idx]):
-                                        flagged_copiers.add(j)
-                            result["answer_copying_pairs"] = pair_rows
-                            result["flagged_copiers"] = sorted(flagged_copiers)
-                            result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + flagged_copiers))
-                            result["n_flagged"] = len(result["flagged_persons"])
-                except Exception:
-                    pass
-            # Preknowledge (detect_pk): needs ci (compromised item indices, 1-based), psi, x; returns stat per person
-            compromised_items = state.get("compromised_items") or []
-            if run_pk and psi_ready and len(compromised_items) > 0:
-                try:
-                    ci_1based = [int(i) for i in compromised_items if isinstance(i, (int, float))]
-                    if not ci_1based:
-                        ci_1based = [int(x) for x in compromised_items]
-                    ro.globalenv["ci"] = ro.r("c(" + ",".join(map(str, ci_1based)) + ")")
-                    ro.r("pk_out <- tryCatch(detect_pk(method = c('L_S', 'S_S', 'W_S'), ci = ci, psi = psi, x = x, alpha = 0.05), error = function(e) NULL)")
-                    has_pk = ro.r("!is.null(pk_out)")
-                    if has_pk and ro.conversion.rpy2py(has_pk):
-                        pk_stat = ro.r("as.data.frame(pk_out$stat)")
-                        pk_stat_py = ro.conversion.rpy2py(pk_stat)
-                        pk_flag = ro.r("pk_out$flag")
-                        if pk_stat_py is not None and hasattr(pk_stat_py, "to_dict"):
-                            pk_records = pk_stat_py.to_dict(orient="records")
-                            result["preknowledge"] = pk_records
-                            if pk_flag is not None:
-                                flag_py = ro.conversion.rpy2py(pk_flag)
-                                if hasattr(flag_py, "__array__"):
-                                    arr = np.asarray(flag_py)
-                                    if arr.ndim >= 2:
-                                        pk_flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
-                                        result["flagged_persons_pk"] = pk_flagged
-                                        result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + pk_flagged))
-                                        result["n_flagged"] = len(result["flagged_persons"])
-                except Exception:
-                    pass
-            # Rapid guessing (detect_rg): needs response time matrix t and optional scores x; method NT = normative threshold
-            rt_data = state.get("rt_data") or []
-            n_persons_resp = resp_df[keep_cols].shape[0]
-            n_items = len(keep_cols)
-            rg_error = None  # capture R or conversion error for user message
-            if run_rg and rt_data and len(rt_data) == n_persons_resp:
-                rt_df = pd.DataFrame(rt_data)
-                # Use first n_items columns by position; coerce to numeric, fill NA so R doesn't choke
-                try:
-                    if rt_df.shape[1] >= n_items:
-                        block = rt_df.iloc[:, :n_items].apply(
-                            lambda s: pd.to_numeric(s, errors="coerce")
-                        )
-                        block = block.fillna(0.01)  # R often requires no NA; use small positive
-                        t_block = block.astype(np.float64)
-                    else:
-                        t_block = None
-                except (ValueError, TypeError) as e:
-                    rg_error = str(e)
-                    t_block = None
-                if t_block is not None and t_block.shape[0] == n_persons_resp and t_block.shape[1] == n_items:
-                    try:
-                        # Build RT matrix entirely in R to avoid all py2rpy numpy issues
-                        flat = t_block.values.flatten().tolist()  # plain Python list of floats
-                        ro.globalenv["t_vec"] = ro.FloatVector(flat)
-                        ro.r(f"t <- matrix(t_vec, nrow={int(t_block.shape[0])}, ncol={int(t_block.shape[1])}, byrow=TRUE)")
-                        # Capture R error message if detect_rg fails
-                        ro.r("assign('rg_err', NULL, envir = .GlobalEnv); rg_out <- tryCatch(detect_rg(method = 'NT', t = t, x = x, nt = 10), error = function(e) { assign('rg_err', conditionMessage(e), envir = .GlobalEnv); NULL })")
-                        has_rg = ro.r("!is.null(rg_out)")
-                        if not (has_rg and ro.conversion.rpy2py(has_rg)):
-                            re = ro.r("get0('rg_err', envir = .GlobalEnv, ifnotfound = NULL)")
-                            if re is not None:
-                                rg_error = ro.conversion.rpy2py(re)
-                        if has_rg and ro.conversion.rpy2py(has_rg):
-                            rg_flag = ro.r("rg_out$flag")
-                            if rg_flag is not None:
-                                flag_py = ro.conversion.rpy2py(rg_flag)
-                                if hasattr(flag_py, "__array__"):
-                                    arr = np.asarray(flag_py)
-                                    if arr.size > 0:
-                                        if arr.ndim == 1:
-                                            rg_flagged = np.where(arr)[0].tolist()
-                                        else:
-                                            rg_flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
-                                        result["flagged_persons_rg"] = rg_flagged
-                                        result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + rg_flagged))
-                                        result["n_flagged"] = len(result["flagged_persons"])
-                            rte = ro.r("rg_out$rte")
-                            if rte is not None:
-                                rte_py = ro.conversion.rpy2py(rte)
-                                if hasattr(rte_py, "__array__"):
-                                    result["rapid_guessing_rte"] = np.asarray(rte_py).flatten().tolist()
-                            result["rapid_guessing"] = True
-                        else:
-                            r_err = ro.r("rg_err")
-                            if r_err is not None and str(r_err) != "NULL":
-                                rg_error = ro.conversion.rpy2py(r_err)
-                    except Exception as e:
-                        rg_error = str(e)
-            if rg_error:
-                result["rapid_guessing_error"] = rg_error
-            # methods: list all method names from whatever functions actually ran (not just detect_nm)
-            all_methods = list(result.get("methods", []))
-            if result.get("parametric_misfit"):
-                # Get actual method names from the parametric_misfit records (e.g. L_S_TS, L_T, Q_ST_TS, L_ST_TS)
-                pm_cols = [k for k in result["parametric_misfit"][0].keys() if not k.endswith("_pval")]
-                all_methods.extend(pm_cols)
-            if result.get("answer_copying_pairs"):
-                all_methods.extend(["OMG_S", "GBT_S"])
-            if result.get("preknowledge"):
-                all_methods.extend(["L_S", "S_S", "W_S"])
-            if result.get("rapid_guessing"):
-                all_methods.extend(["RG_NT"])
-            result["methods"] = list(dict.fromkeys(all_methods))  # preserve order, no duplicates
-            if run_tt:
-                result["info"] = (result.get("info") or "") + (" " if result.get("info") else "") + "Test Tampering (detect_tt) requires erasure data (initial and final responses/distractors), which is not collected in this workflow; results above are from other selected functions."
-            elif run_rg and not result.get("rapid_guessing"):
-                has_rt = (state.get("rt_data") or []) and len(state.get("rt_data") or []) == (resp_df[keep_cols].shape[0] if keep_cols else 0)
-                if not has_rt:
-                    result["info"] = (result.get("info") or "") + (" " if result.get("info") else "") + "Rapid Guessing (detect_rg) requires response-time data; upload RT data and run again."
-                else:
-                    err_detail = result.get("rapid_guessing_error") or ""
-                    msg = "Rapid Guessing (detect_rg) could not be completed."
-                    if err_detail:
-                        msg += f" R reported: {err_detail}"
-                    else:
-                        msg += " Check that RT values are numeric and column count/layout matches responses."
-                    result["info"] = (result.get("info") or "") + (" " if result.get("info") else "") + msg
+                        pass
+                    records = [dict(zip(methods, row)) for row in arr.tolist()]
+            if records:
+                df_nm = pd.DataFrame(records)
+                if "ZU3_S" in df_nm.columns:
+                    zu3 = pd.to_numeric(df_nm["ZU3_S"], errors="coerce")
+                    if zu3.notna().any():
+                        flagged_persons.extend(np.where(zu3 < -2)[0].tolist())
+                if "HT_S" in df_nm.columns:
+                    ht = pd.to_numeric(df_nm["HT_S"], errors="coerce")
+                    if ht.notna().any():
+                        q05 = ht.quantile(0.05)
+                        if pd.notna(q05):
+                            flagged_persons.extend(np.where(ht <= q05)[0].tolist())
+                flagged_persons = sorted(set(flagged_persons))
+        n_persons = len(records) if records else resp_df[keep_cols].shape[0]
+        # methods: only include nonparametric method names when we actually ran detect_nm
+        result = {
+            "nonparametric_misfit": records or [],
+            "methods": list(methods) if (records or []) else [],
+            "n_persons": n_persons,
+            "flagged_persons": flagged_persons,
+            "n_flagged": len(flagged_persons),
+        }
+        if run_nm and not records:
             return {
-                "aberrance_results": result,
+                "aberrance_results": {"error": "aberrance detect_nm returned no stat matrix."},
                 "next_step": "end",
             }
+        # When run_nm was False (only pm/ac/pk selected), initialize result so run_pm/run_pk can run
+        if not run_nm:
+            n_persons = resp_df[keep_cols].shape[0]
+            result = {
+                "nonparametric_misfit": [],
+                "methods": [],
+                "n_persons": n_persons,
+                "flagged_persons": [],
+                "n_flagged": 0,
+            }
+        # Parametric person-fit (detect_pm) when selected and IRT item params available
+        item_params = state.get("item_params")
+            # Create psi in R when any of pm/ac/pk need it (so detect_ac and detect_pk can use psi even if detect_pm is not selected)
+        psi_ready = False
+        if (run_pm or run_ac or run_pk) and item_params and len(item_params) == len(keep_cols):
+            try:
+                ip_df = pd.DataFrame(item_params)
+                a_col = "a1" if "a1" in ip_df.columns else "a"
+                b_col = "b"
+                # detect_pm requires psi with columns a, b, c (guessing)
+                # IRT (mirt IRTpars=TRUE) returns: a, b, g, u — 'g' is the guessing param → map to 'c'
+                c_col = "g" if "g" in ip_df.columns else ("c" if "c" in ip_df.columns else None)
+                if a_col in ip_df.columns and b_col in ip_df.columns:
+                    a_vals = [float(v) for v in ip_df[a_col].tolist()]
+                    b_vals = [float(v) for v in ip_df[b_col].tolist()]
+                    ro.globalenv["psi_a"] = ro.FloatVector(a_vals)
+                    ro.globalenv["psi_b"] = ro.FloatVector(b_vals)
+                    if c_col and c_col in ip_df.columns:
+                        c_vals = [float(v) for v in ip_df[c_col].tolist()]
+                    else:
+                        # 2PL: guessing = 0 for all items
+                        c_vals = [0.0] * len(a_vals)
+                    ro.globalenv["psi_c"] = ro.FloatVector(c_vals)
+                    ro.r("psi <- as.matrix(cbind(a = psi_a, b = psi_b, c = psi_c))")
+                    # Verify psi was created correctly
+                    psi_ncol = int(ro.r("ncol(psi)")[0])
+                    psi_nrow = int(ro.r("nrow(psi)")[0])
+                    if psi_nrow == len(keep_cols) and psi_ncol == 3:
+                        psi_ready = True
+                    else:
+                        result["info"] = (result.get("info") or "") + f" ψ matrix has unexpected dimensions [{psi_nrow}, {psi_ncol}]; expected [{len(keep_cols)}, 3]."
+                else:
+                    avail_cols = list(ip_df.columns)
+                    result["info"] = (result.get("info") or "") + f" Item params missing '{a_col}' or '{b_col}'. Available columns: {avail_cols}."
+            except Exception as e:
+                result["info"] = (result.get("info") or "") + f" Could not build ψ: {e}"
+        elif (run_pm or run_ac or run_pk) and not item_params:
+            result["info"] = (result.get("info") or "") + " No item parameters available; IRT may not have run. Model misfit / answer copying / preknowledge skipped."
+        elif (run_pm or run_ac or run_pk) and item_params and len(item_params) != len(keep_cols):
+            result["info"] = (result.get("info") or "") + f" Item params ({len(item_params)}) vs response columns ({len(keep_cols)}) mismatch; cannot build ψ."
+        if run_pm and psi_ready:
+            try:
+                # detect_pm requires psi with columns a, b, c, alpha, beta AND y (log RT)
+                # Estimate alpha/beta from RT data if available; otherwise score-only fallback
+                pm_rt_data = state.get("rt_data") or []
+                pm_n_persons = resp_df[keep_cols].shape[0]
+                pm_has_rt = bool(pm_rt_data) and len(pm_rt_data) == pm_n_persons
+                if pm_has_rt:
+                    # Build log-RT matrix y and estimate alpha/beta per item
+                    pm_rt_df = pd.DataFrame(pm_rt_data)
+                    pm_rt_block = pm_rt_df.iloc[:, :len(keep_cols)].apply(pd.to_numeric, errors="coerce").fillna(0.01)
+                    # y = log response time matrix
+                    y_flat = np.log(pm_rt_block.values.clip(min=0.001)).flatten().tolist()
+                    ro.globalenv["y_vec"] = ro.FloatVector(y_flat)
+                    ro.r(f"y <- matrix(y_vec, nrow={pm_n_persons}, ncol={len(keep_cols)}, byrow=FALSE)")
+                    # Estimate alpha (time discrimination) and beta (time intensity) per item
+                    ro.r("""
+                        pm_beta_est  <- apply(y, 2, mean)
+                        pm_alpha_est <- 1 / apply(y, 2, sd)
+                        pm_alpha_est[!is.finite(pm_alpha_est)] <- 1.0
+                        psi <- cbind(psi, alpha = pm_alpha_est, beta = pm_beta_est)
+                    """)
+                    # Call detect_pm with x AND y
+                    ro.r("""
+                        assign('pm_err', NULL, envir = .GlobalEnv)
+                        pm_out <- tryCatch(
+                            detect_pm(method = c('L_S_TS', 'L_T', 'Q_ST_TS', 'L_ST_TS'), psi = psi, x = x, y = y, alpha = 0.05),
+                            error = function(e) { assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL }
+                        )
+                    """)
+                else:
+                    # No RT data: try score-only call (psi = a, b, c only)
+                    ro.r("""
+                        assign('pm_err', NULL, envir = .GlobalEnv)
+                        pm_out <- tryCatch(
+                            detect_pm(method = c('L_S_TS', 'L_T', 'Q_ST_TS', 'L_ST_TS'), psi = psi, x = x, alpha = 0.05),
+                            error = function(e) { assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL }
+                        )
+                    """)
+                has_pm_r = ro.r("!is.null(pm_out)")
+                # Convert has_pm to Python bool safely
+                try:
+                    has_pm_py = ro.conversion.rpy2py(has_pm_r)
+                    has_pm = bool(list(has_pm_py)[0]) if hasattr(has_pm_py, '__iter__') else bool(has_pm_py)
+                except Exception:
+                    has_pm = False
+                if has_pm:
+                    # $stat is matrix [n_persons, n_methods]; $pval same; $flag is [n_persons, n_methods, 1]
+                    # Extract dimensions and method names entirely in R, return as single strings/ints
+                    ro.r("""
+                        pm_stat_mat  <- pm_out$stat
+                        pm_pval_mat  <- pm_out$pval
+                        pm_flag_arr  <- pm_out$flag
+                        pm_n         <- as.integer(nrow(pm_stat_mat))
+                        pm_methods   <- colnames(pm_stat_mat)
+                        pm_n_methods <- as.integer(length(pm_methods))
+                        pm_methods_str <- paste(pm_methods, collapse = '|')
+                    """)
+                    pm_n = int(ro.r("pm_n")[0])
+                    pm_n_methods = int(ro.r("pm_n_methods")[0])
+                    pm_methods_str = str(ro.r("pm_methods_str")[0])
+                    pm_methods_r = pm_methods_str.split("|") if pm_methods_str else []
+                    if pm_n > 0 and pm_n_methods > 0 and len(pm_methods_r) == pm_n_methods:
+                        # Read each stat and pval column as a plain list via R indexing
+                        pm_data = {}
+                        for mi in range(pm_n_methods):
+                            mname = pm_methods_r[mi]
+                            stat_r = ro.r(f"as.numeric(pm_stat_mat[, {mi + 1}])")
+                            pm_data[mname] = [float(v) for v in stat_r]
+                            pval_r = ro.r(f"as.numeric(pm_pval_mat[, {mi + 1}])")
+                            pm_data[f"{mname}_pval"] = [float(v) for v in pval_r]
+                        pm_df = pd.DataFrame(pm_data)
+                        result["parametric_misfit"] = pm_df.to_dict(orient="records")
+                        # Flag: 3D array [n_persons, n_methods, 1]; person flagged if ANY method flags
+                        try:
+                            flag_any_r = ro.r("as.logical(apply(pm_flag_arr, 1, any))")
+                            pm_flagged = [i for i, v in enumerate(flag_any_r) if v]
+                            result["flagged_persons_pm"] = pm_flagged
+                            result["flagged_persons"] = sorted(set(flagged_persons + pm_flagged))
+                            result["n_flagged"] = len(result["flagged_persons"])
+                        except Exception:
+                            pass
+                    else:
+                        result["info"] = (result.get("info") or "") + f" detect_pm stat unexpected ({pm_n}×{pm_n_methods}, methods={pm_methods_r})."
+                else:
+                    pm_err_r = ro.r("get0('pm_err', envir = .GlobalEnv, ifnotfound = 'unknown error')")
+                    pm_err_msg = str(ro.conversion.rpy2py(pm_err_r)) if pm_err_r is not None else "unknown"
+                    result["info"] = (result.get("info") or "") + f" detect_pm failed. R: {pm_err_msg}"
+            except Exception as e:
+                result["info"] = (result.get("info") or "") + f" detect_pm error: {e}"
+        # Answer copying (detect_ac): needs psi, x; returns stat/pval/flag per (source, copier) pair
+        if run_ac and psi_ready:
+            try:
+                ro.r("ac_out <- tryCatch(detect_ac(method = c('OMG_S', 'GBT_S'), psi = psi, x = x, alpha = 0.05), error = function(e) NULL)")
+                has_ac = ro.r("!is.null(ac_out)")
+                if has_ac and ro.conversion.rpy2py(has_ac):
+                    ac_stat = ro.r("as.data.frame(ac_out$stat)")
+                    ac_stat_py = ro.conversion.rpy2py(ac_stat)
+                    ac_flag = ro.r("ac_out$flag")
+                    ac_flag_py = ro.conversion.rpy2py(ac_flag) if ac_flag is not None else None
+                    N = resp_df[keep_cols].shape[0]
+                    # R uses combn(N, 2) order: (1,2), (1,3), ..., (N-1,N) -> n_pairs = N*(N-1)/2
+                    pairs_0based = [(i, j) for i in range(N) for j in range(i + 1, N)]
+                    if ac_stat_py is not None and len(pairs_0based) > 0:
+                        if hasattr(ac_stat_py, "to_dict"):
+                            ac_records = ac_stat_py.to_dict(orient="records")
+                        else:
+                            arr = np.asarray(ac_stat_py)
+                            if arr.ndim == 2 and arr.shape[0] >= len(pairs_0based):
+                                cols = getattr(ac_stat_py, "columns", None) or [f"AC_{k}" for k in range(arr.shape[1])]
+                                ac_records = [dict(zip(cols, row)) for row in arr[: len(pairs_0based)].tolist()]
+                            else:
+                                ac_records = []
+                        pair_rows = []
+                        flagged_copiers = set()
+                        for idx, (i, j) in enumerate(pairs_0based):
+                            if idx >= len(ac_records):
+                                break
+                            row = {"Source": i + 1, "Copier": j + 1, **ac_records[idx]}
+                            pair_rows.append(row)
+                            if ac_flag_py is not None and hasattr(ac_flag_py, "__array__"):
+                                fl = np.asarray(ac_flag_py)
+                                if fl.ndim >= 2 and idx < fl.shape[0] and np.any(fl[idx] if fl.ndim == 2 else fl[idx]):
+                                    flagged_copiers.add(j)
+                        result["answer_copying_pairs"] = pair_rows
+                        result["flagged_copiers"] = sorted(flagged_copiers)
+                        result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + flagged_copiers))
+                        result["n_flagged"] = len(result["flagged_persons"])
+            except Exception:
+                pass
+        # Preknowledge (detect_pk): needs ci (compromised item indices, 1-based), psi, x; returns stat per person
+        # R requires at least one secure item (not in ci), so we cannot default to "all items"
+        compromised_items = state.get("compromised_items") or []
+        if not compromised_items and run_pk and psi_ready and len(keep_cols) > 1:
+            compromised_items = list(range(1, len(keep_cols)))  # default: items 1..n-1, leave last as secure
+        if run_pk and psi_ready and len(compromised_items) > 0:
+            try:
+                ci_1based = [int(i) for i in compromised_items if isinstance(i, (int, float))]
+                if not ci_1based:
+                    ci_1based = [int(x) for x in compromised_items]
+                ro.globalenv["ci"] = ro.r("c(" + ",".join(map(str, ci_1based)) + ")")
+                ro.r("pk_out <- tryCatch(detect_pk(method = c('L_S', 'S_S', 'W_S'), ci = ci, psi = psi, x = x, alpha = 0.05), error = function(e) NULL)")
+                has_pk = ro.r("!is.null(pk_out)")
+                if has_pk and ro.conversion.rpy2py(has_pk):
+                    pk_stat = ro.r("as.data.frame(pk_out$stat)")
+                    pk_stat_py = ro.conversion.rpy2py(pk_stat)
+                    pk_flag = ro.r("pk_out$flag")
+                    if pk_stat_py is not None and hasattr(pk_stat_py, "to_dict"):
+                        pk_records = pk_stat_py.to_dict(orient="records")
+                        result["preknowledge"] = pk_records
+                        if pk_flag is not None:
+                            flag_py = ro.conversion.rpy2py(pk_flag)
+                            if hasattr(flag_py, "__array__"):
+                                arr = np.asarray(flag_py)
+                                if arr.ndim >= 2:
+                                    pk_flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
+                                    result["flagged_persons_pk"] = pk_flagged
+                                    result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + pk_flagged))
+                                    result["n_flagged"] = len(result["flagged_persons"])
+            except Exception:
+                pass
+        # Rapid guessing (detect_rg): needs response time matrix t and optional scores x; method NT = normative threshold
+        rt_data = state.get("rt_data") or []
+        n_persons_resp = resp_df[keep_cols].shape[0]
+        n_items = len(keep_cols)
+        rg_error = None  # capture R or conversion error for user message
+        if run_rg and rt_data and len(rt_data) == n_persons_resp:
+            rt_df = pd.DataFrame(rt_data)
+            # Use first n_items columns by position; coerce to numeric, fill NA so R doesn't choke
+            try:
+                if rt_df.shape[1] >= n_items:
+                    block = rt_df.iloc[:, :n_items].apply(
+                        lambda s: pd.to_numeric(s, errors="coerce")
+                    )
+                    block = block.fillna(0.01)  # R often requires no NA; use small positive
+                    t_block = block.astype(np.float64)
+                else:
+                    t_block = None
+            except (ValueError, TypeError) as e:
+                rg_error = str(e)
+                t_block = None
+            if t_block is not None and t_block.shape[0] == n_persons_resp and t_block.shape[1] == n_items:
+                try:
+                    # Build RT matrix entirely in R to avoid all py2rpy numpy issues
+                    flat = t_block.values.flatten().tolist()  # plain Python list of floats
+                    ro.globalenv["t_vec"] = ro.FloatVector(flat)
+                    ro.r(f"t <- matrix(t_vec, nrow={int(t_block.shape[0])}, ncol={int(t_block.shape[1])}, byrow=TRUE)")
+                    # Capture R error message if detect_rg fails
+                    ro.r("assign('rg_err', NULL, envir = .GlobalEnv); rg_out <- tryCatch(detect_rg(method = 'NT', t = t, x = x, nt = 10), error = function(e) { assign('rg_err', conditionMessage(e), envir = .GlobalEnv); NULL })")
+                    has_rg = ro.r("!is.null(rg_out)")
+                    if not (has_rg and ro.conversion.rpy2py(has_rg)):
+                        re = ro.r("get0('rg_err', envir = .GlobalEnv, ifnotfound = NULL)")
+                        if re is not None:
+                            rg_error = ro.conversion.rpy2py(re)
+                    if has_rg and ro.conversion.rpy2py(has_rg):
+                        rg_flag = ro.r("rg_out$flag")
+                        if rg_flag is not None:
+                            flag_py = ro.conversion.rpy2py(rg_flag)
+                            if hasattr(flag_py, "__array__"):
+                                arr = np.asarray(flag_py)
+                                if arr.size > 0:
+                                    if arr.ndim == 1:
+                                        rg_flagged = np.where(arr)[0].tolist()
+                                    else:
+                                        rg_flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
+                                    result["flagged_persons_rg"] = rg_flagged
+                                    result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + rg_flagged))
+                                    result["n_flagged"] = len(result["flagged_persons"])
+                        rte = ro.r("rg_out$rte")
+                        if rte is not None:
+                            rte_py = ro.conversion.rpy2py(rte)
+                            if hasattr(rte_py, "__array__"):
+                                result["rapid_guessing_rte"] = np.asarray(rte_py).flatten().tolist()
+                        result["rapid_guessing"] = True
+                    else:
+                        r_err = ro.r("rg_err")
+                        if r_err is not None and str(r_err) != "NULL":
+                            rg_error = ro.conversion.rpy2py(r_err)
+                except Exception as e:
+                    rg_error = str(e)
+        if rg_error:
+            result["rapid_guessing_error"] = rg_error
+        # methods: list all method names from whatever functions actually ran (not just detect_nm)
+        all_methods = list(result.get("methods", []))
+        if result.get("parametric_misfit"):
+            # Get actual method names from the parametric_misfit records (e.g. L_S_TS, L_T, Q_ST_TS, L_ST_TS)
+            pm_cols = [k for k in result["parametric_misfit"][0].keys() if not k.endswith("_pval")]
+            all_methods.extend(pm_cols)
+        if result.get("answer_copying_pairs"):
+            all_methods.extend(["OMG_S", "GBT_S"])
+        if result.get("preknowledge"):
+            all_methods.extend(["L_S", "S_S", "W_S"])
+        if result.get("rapid_guessing"):
+            all_methods.extend(["RG_NT"])
+        result["methods"] = list(dict.fromkeys(all_methods))  # preserve order, no duplicates
+        if run_tt:
+            result["info"] = (result.get("info") or "") + (" " if result.get("info") else "") + "Test Tampering (detect_tt) requires erasure data (initial and final responses/distractors), which is not collected in this workflow; results above are from other selected functions."
+        elif run_rg and not result.get("rapid_guessing"):
+            has_rt = (state.get("rt_data") or []) and len(state.get("rt_data") or []) == (resp_df[keep_cols].shape[0] if keep_cols else 0)
+            if not has_rt:
+                result["info"] = (result.get("info") or "") + (" " if result.get("info") else "") + "Rapid Guessing (detect_rg) requires response-time data; upload RT data and run again."
+            else:
+                err_detail = result.get("rapid_guessing_error") or ""
+                msg = "Rapid Guessing (detect_rg) could not be completed."
+                if err_detail:
+                    msg += f" R reported: {err_detail}"
+                else:
+                    msg += " Check that RT values are numeric and column count/layout matches responses."
+                result["info"] = (result.get("info") or "") + (" " if result.get("info") else "") + msg
+        return {
+            "aberrance_results": result,
+            "next_step": "end",
+        }
     except Exception as exc:
         return {
             "aberrance_results": {"error": f"aberrance failed: {type(exc).__name__}: {exc}"},
@@ -1092,14 +1126,26 @@ def _forensic_keep_cols(resp_df: pd.DataFrame) -> list[str]:
 
 
 def _forensic_init_r(resp_df: pd.DataFrame, keep_cols: list[str]):
-    """Import rpy2, push x matrix into R, return (ro, pandas2ri, np)."""
+    """Import rpy2, push x matrix into R (pure Python list only — no numpy). return (ro, pandas2ri, np)."""
     import rpy2.robjects as ro
     from rpy2.robjects import pandas2ri
     import numpy as np
-    with (ro.default_converter + pandas2ri.converter).context():
-        ro.globalenv["df"] = resp_df[keep_cols]
-        ro.r("library(aberrance)")
-        ro.r("x <- as.matrix(df)")
+    try:
+        from rpy2.robjects import numpy2ri
+        numpy2ri.activate()
+    except Exception:
+        pass
+    ro.r("library(aberrance)")
+    # Build x in R from pure Python list only (no numpy types) to avoid py2rpy numpy.ndarray
+    block = resp_df[keep_cols]
+    nrow, ncol = int(block.shape[0]), int(block.shape[1])
+    x_flat = []
+    for i in range(nrow):
+        for j in range(ncol):
+            v = block.iloc[i, j]
+            x_flat.append(int(v) if v is not None and str(v) not in ("nan", "NaN", "") else 0)
+    ro.globalenv["x_vec"] = ro.IntVector(x_flat)
+    ro.r(f"x <- matrix(x_vec, nrow={nrow}, ncol={ncol}, byrow=TRUE)")
     return ro, pandas2ri, np
 
 
@@ -1123,8 +1169,11 @@ def _forensic_build_psi(ro, ip_df: pd.DataFrame, n_items: int):
 
 # ---------- 1. nm_agent (Nonparametric Fit) -----------------------------------
 def nm_agent(state: State) -> dict:
-    """detect_nm: ZU3_S and HT_S nonparametric person-fit."""
+    """detect_nm: full set of nonparametric person-fit indices (G_S, NC_S, U1_S, U3_S, ZU3_S, A_S, D_S, E_S, C_S, MC_S, PC_S, HT_S)."""
     print("--- FORENSIC nm_agent: detect_nm ---")
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_nm" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     if not keep_cols:
@@ -1136,7 +1185,10 @@ def nm_agent(state: State) -> dict:
             ro.r("""
                 assign('nm_err', NULL, envir = .GlobalEnv)
                 nm_out <- tryCatch(
-                    detect_nm(method = c('ZU3_S', 'HT_S'), x = x),
+                    detect_nm(
+                        method = c('G_S','NC_S','U1_S','U3_S','ZU3_S','A_S','D_S','E_S','C_S','MC_S','PC_S','HT_S'),
+                        x = x
+                    ),
                     error = function(e) { assign('nm_err', conditionMessage(e), envir = .GlobalEnv); NULL })
             """)
             has_nm = ro.r("!is.null(nm_out)")
@@ -1187,6 +1239,9 @@ def nm_agent(state: State) -> dict:
 def pm_agent(state: State) -> dict:
     """detect_pm: L_S_TS, L_T, Q_ST_TS, L_ST_TS parametric person-fit."""
     print("--- FORENSIC pm_agent: detect_pm ---")
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_pm" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     psi_src = state.get("psi_data") or state.get("item_params") or []
@@ -1272,6 +1327,9 @@ def pm_agent(state: State) -> dict:
 def ac_agent(state: State) -> dict:
     """detect_ac: OMG_S and GBT_S answer-copying detection."""
     print("--- FORENSIC ac_agent: detect_ac ---")
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_ac" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     psi_src = state.get("psi_data") or state.get("item_params") or []
@@ -1356,6 +1414,9 @@ def ac_agent(state: State) -> dict:
 def as_agent(state: State) -> dict:
     """detect_as: M4_S answer-similarity cluster detection."""
     print("--- FORENSIC as_agent: detect_as ---")
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_as" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     if not keep_cols:
@@ -1438,6 +1499,9 @@ def as_agent(state: State) -> dict:
 def rg_agent(state: State) -> dict:
     """detect_rg: NT method rapid-guessing detection."""
     print("--- FORENSIC rg_agent: detect_rg ---")
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_rg" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     rt_data = state.get("rt_data") or []
@@ -1501,6 +1565,10 @@ def rg_agent(state: State) -> dict:
 def cp_agent(state: State) -> dict:
     """detect_cp: change-point detection per person."""
     print("--- FORENSIC cp_agent: detect_cp ---")
+    selected = state.get("aberrance_functions") or []
+    # Only run CP when rapid-guessing / low-effort analysis is selected.
+    if selected and "detect_rg" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     if not keep_cols:
@@ -1552,60 +1620,110 @@ def cp_agent(state: State) -> dict:
 def tt_agent(state: State) -> dict:
     """detect_tt: requires erasure data (stub)."""
     print("--- FORENSIC tt_agent: detect_tt (stub) ---")
-    return {"flags": {"tt_agent": {
-        "info": "Test Tampering (detect_tt) requires erasure data (initial and final responses/distractors), which is not collected in this workflow.",
-        "flagged": [], "methods": ["EDI_SD"],
-    }}}
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_tt" not in selected:
+        return {"flags": {}}
+    return {
+        "flags": {
+            "tt_agent": {
+                "info": "Test Tampering (detect_tt) requires erasure data (initial and final responses/distractors), which is not collected in this workflow.",
+                "flagged": [],
+                "methods": ["EDI_SD"],
+            }
+        }
+    }
 
 
 # ---------- 8. pk_agent (Preknowledge) ----------------------------------------
 def pk_agent(state: State) -> dict:
-    """detect_pk: L_S, S_S, W_S preknowledge detection."""
-    print("--- FORENSIC pk_agent: detect_pk ---")
+    """detect_pk: L_S, S_S, W_S preknowledge. Uses file I/O only: no Python arrays passed to R (avoids py2rpy)."""
+    print("--- FORENSIC pk_agent: detect_pk (file-based R) ---")
+    selected = state.get("aberrance_functions") or []
+    if selected and "detect_pk" not in selected:
+        return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
     psi_src = state.get("psi_data") or state.get("item_params") or []
     ci = state.get("compromised_items") or []
     if not keep_cols or not psi_src or len(psi_src) != len(keep_cols):
         return {"flags": {"pk_agent": {"error": "Missing response columns or item parameters."}}}
+    # R requires at least one secure item (not in ci); cannot use "all items" as compromised
     if not ci:
-        return {"flags": {"pk_agent": {"info": "No compromised items specified; skipping preknowledge detection.", "flagged": [], "methods": ["L_S", "S_S", "W_S"]}}}
+        if len(keep_cols) < 2:
+            return {"flags": {"pk_agent": {"error": "Preknowledge requires at least 2 items (one compromised, one secure)."}}}
+        ci = list(range(1, len(keep_cols)))  # default: items 1..n-1, leave last as secure
     try:
-        import numpy as np
-        ro, pandas2ri, _ = _forensic_init_r(resp_df, keep_cols)
-        ip_df = pd.DataFrame(psi_src)
-        with (ro.default_converter + pandas2ri.converter).context():
-            if not _forensic_build_psi(ro, ip_df, len(keep_cols)):
-                return {"flags": {"pk_agent": {"error": "Could not build psi matrix."}}}
-            ci_1based = [int(i) for i in ci]
-            ro.globalenv["ci"] = ro.r("c(" + ",".join(map(str, ci_1based)) + ")")
+        import rpy2.robjects as ro
+        ro.r("library(aberrance)")
+        n_items = len(keep_cols)
+        ci_1based = [int(i) for i in ci]
+        ci_r_str = "c(" + ",".join(map(str, ci_1based)) + ")"
+        tmpdir = tempfile.mkdtemp(prefix="pk_agent_")
+        path_x = str(Path(tmpdir) / "x.csv")
+        path_psi = str(Path(tmpdir) / "psi.csv")
+        path_stat = str(Path(tmpdir) / "pk_stat.csv")
+        path_flag = str(Path(tmpdir) / "pk_flag.csv")
+        try:
+            block = resp_df[keep_cols].fillna(0).astype(int)
+            block.to_csv(path_x, index=False, header=False)
+            psi_rows = []
+            for d in psi_src:
+                a = float(d.get("a1", d.get("a", 0)))
+                b = float(d.get("b", 0))
+                c = float(d.get("g", d.get("c", 0))) if ("g" in d or "c" in d) else 0.0
+                psi_rows.append({"a": a, "b": b, "c": c})
+            pd.DataFrame(psi_rows).to_csv(path_psi, index=False)
+            path_x_r = path_x.replace("\\", "/")
+            path_psi_r = path_psi.replace("\\", "/")
+            path_stat_r = path_stat.replace("\\", "/")
+            path_flag_r = path_flag.replace("\\", "/")
+            ro.globalenv["path_x"] = path_x_r
+            ro.globalenv["path_psi"] = path_psi_r
+            ro.globalenv["path_stat"] = path_stat_r
+            ro.globalenv["path_flag"] = path_flag_r
+            ro.r("ci_r <- " + ci_r_str)
             ro.r("""
+                x <- as.matrix(read.csv(path_x, header = FALSE))
+                psi_df <- read.csv(path_psi, header = TRUE)
+                psi <- as.matrix(psi_df[, c('a','b','c')])
+                ci <- ci_r
                 assign('pk_err', NULL, envir = .GlobalEnv)
                 pk_out <- tryCatch(
                     detect_pk(method = c('L_S','S_S','W_S'), ci = ci, psi = psi, x = x, alpha = 0.05),
                     error = function(e) { assign('pk_err', conditionMessage(e), envir = .GlobalEnv); NULL })
+                if (!is.null(pk_out)) {
+                    write.csv(pk_out$stat, path_stat, row.names = FALSE)
+                    flag_any <- as.logical(apply(pk_out$flag, 1, any))
+                    write.csv(data.frame(flagged = flag_any), path_flag, row.names = FALSE)
+                }
             """)
-            has_pk = ro.r("!is.null(pk_out)")
-            if not (has_pk and ro.conversion.rpy2py(has_pk)):
-                err = str(ro.r("get0('pk_err', envir = .GlobalEnv, ifnotfound = 'unknown')"))
-                return {"flags": {"pk_agent": {"error": f"detect_pk failed: {err}"}}}
-            pk_stat = ro.r("as.data.frame(pk_out$stat)")
-            pk_stat_py = ro.conversion.rpy2py(pk_stat)
-            records = pk_stat_py.to_dict(orient="records") if hasattr(pk_stat_py, "to_dict") else []
-            flagged = []
+            err_msg = str(ro.r("get0('pk_err', envir = .GlobalEnv, ifnotfound = '')"))
+            if err_msg:
+                return {"flags": {"pk_agent": {"error": f"detect_pk failed: {err_msg}"}}}
+            if not Path(path_stat).exists():
+                return {"flags": {"pk_agent": {"error": "detect_pk returned no output (no stat file)."}}}
+            stat_df = pd.read_csv(path_stat)
+            flag_df = pd.read_csv(path_flag)
+            methods = list(stat_df.columns)
+            records = []
+            for _, row in stat_df.iterrows():
+                records.append({k: float(row[k]) for k in methods})
+            flagged = [i for i, v in enumerate(flag_df["flagged"]) if v]
+            return {"flags": {"pk_agent": {
+                "stat": records,
+                "flagged": flagged,
+                "methods": methods or ["L_S", "S_S", "W_S"],
+            }}}
+        finally:
+            for p in (path_x, path_psi, path_stat, path_flag):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except Exception:
+                    pass
             try:
-                pk_flag = ro.r("pk_out$flag")
-                if pk_flag is not None:
-                    fl = ro.conversion.rpy2py(pk_flag)
-                    if hasattr(fl, "__array__"):
-                        arr = np.asarray(fl)
-                        if arr.ndim >= 2:
-                            flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
+                Path(tmpdir).rmdir()
             except Exception:
                 pass
-            return {"flags": {"pk_agent": {
-                "stat": records, "flagged": flagged, "methods": ["L_S", "S_S", "W_S"],
-            }}}
     except Exception as e:
         return {"flags": {"pk_agent": {"error": str(e)}}}
 
@@ -1648,8 +1766,22 @@ def manager_synthesizer(state: State) -> dict:
     # Build a textual summary of all specialist results for the LLM
     specialist_summary_parts = []
     all_flagged_persons = {}  # person_idx -> list of agents that flagged them
+    # Restrict to agents corresponding to the aberrance_functions actually used.
+    fn_selected = state.get("aberrance_functions") or []
+    fn_to_agent = {
+        "detect_nm": "nm_agent",
+        "detect_pm": "pm_agent",
+        "detect_ac": "ac_agent",
+        "detect_as": "as_agent",
+        "detect_rg": "rg_agent",
+        "detect_tt": "tt_agent",
+        "detect_pk": "pk_agent",
+    }
+    allowed_agents = {fn_to_agent[fn] for fn in fn_selected if fn in fn_to_agent} if fn_selected else set(flags.keys())
 
     for agent_name, data in flags.items():
+        if allowed_agents and agent_name not in allowed_agents:
+            continue
         if isinstance(data, dict):
             err = data.get("error")
             info = data.get("info")
@@ -1693,17 +1825,25 @@ def manager_synthesizer(state: State) -> dict:
 
     specialist_report = "\n\n".join(specialist_summary_parts) if specialist_summary_parts else "No specialist results available."
 
+    # Human-readable list of agents used in this run for the prompt header.
+    agent_labels = {
+        "nm_agent": "Nonparametric misfit (detect_nm)",
+        "pm_agent": "Parametric misfit (detect_pm)",
+        "ac_agent": "Answer copying (detect_ac)",
+        "as_agent": "Answer similarity / clusters (detect_as)",
+        "rg_agent": "Rapid guessing / low effort (detect_rg)",
+        "cp_agent": "Change-point in behavior (detect_cp)",
+        "tt_agent": "Tampering / erasures (detect_tt)",
+        "pk_agent": "Preknowledge on compromised items (detect_pk)",
+    }
+    used_agent_lines = [
+        f"- {agent_labels[a]}" for a in agent_labels.keys() if a in allowed_agents
+    ] or ["- (No specialist agents ran successfully.)"]
+
     prompt = f"""You are a test-security data forensics expert writing a short, professional report.
 
-You are given the outputs from multiple aberrance detectors for a single exam administration:
-- Parametric misfit (detect_pm)
-- Nonparametric misfit / Guttman errors (detect_nm)
-- Answer copying (detect_ac)
-- Answer similarity / clusters (detect_as)
-- Rapid guessing and effort (detect_rg)
-- Change-point in behavior (detect_cp)
-- Tampering / erasures (detect_tt)
-- Preknowledge on compromised items (detect_pk)
+You are given the outputs from the following aberrance detectors for a single exam administration:
+{chr(10).join(used_agent_lines)}
 
 Below is a compact summary of the specialist agents' outputs and a ranking of high-risk examinees.
 
