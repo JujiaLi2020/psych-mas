@@ -42,20 +42,20 @@ From the repo root:
 
 ```bash
 docker build -t psych-mas-backend .
-> docker run --rm -p 8000:8000 -e PORT=8000 psych-mas-backend
+> docker run --rm -p 4000:4000 -e PORT=8000 psych-mas-backend
 ```
 
 Verify:
 
-- `http://localhost:8000/health` → `{"status":"ok"}`
-- `http://localhost:8000/docs` → FastAPI docs (should include `/irt` and `/detect`)
+- `http://localhost:4000/health` → `{"status":"ok"}`
+- `http://localhost:4000/docs` → FastAPI docs (should include `/irt` and `/detect`)
 
 ### 2) Configure local environment
 
 Create/update `.env` in the repo root (do **not** commit it):
 
 ```env
-PSYMAS_BACKEND_URL=http://localhost:8000
+PSYMAS_BACKEND_URL=http://localhost:4000
 OPENROUTER_API_KEY=...
 GOOGLE_API_KEY=...
 ```
@@ -68,10 +68,11 @@ In another terminal:
 
 ```bash
 uv sync
-uv run streamlit run ui.py --server.port 4000
+uv run -- python -m streamlit run .\ui.py --server.port 4000
+
 ```
 
-Use any free port (don’t use `8000` — that’s the backend).
+Use any free port (don’t use `4000` — that’s the backend).
 
 ---
 
