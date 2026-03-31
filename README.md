@@ -41,8 +41,8 @@ Why split it?
 From the repo root:
 
 ```bash
-docker build -t psych-mas .
-docker run --rm -p 8000:8000 psych-mas uvicorn backend_service:app --host 0.0.0.0 --port 8000
+docker build -t psych-mas-backend .
+docker run --rm -p 8000:8000 psych-mas-backend uvicorn backend_service:app --host 0.0.0.0 --port 8000
 ```
 
 Verify:
