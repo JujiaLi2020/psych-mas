@@ -47,8 +47,8 @@ docker run --rm -p 8000:8000 -e PORT=8000 psych-mas-backend uvicorn backend_serv
 
 Verify:
 
-- `http://localhost:4000/health` → `{"status":"ok"}`
-- `http://localhost:4000/docs` → FastAPI docs (should include `/irt` and `/detect`)
+- `http://localhost:8000/health` → `{"status":"ok"}`
+- `http://localhost:8000/docs` → FastAPI docs (should include `/irt` and `/detect`)
 
 ### 2) Configure local environment
 
