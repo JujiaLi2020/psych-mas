@@ -42,7 +42,7 @@ From the repo root:
 
 ```bash
 docker build -t psych-mas-backend .
-> docker run --rm -p 4000:4000 -e PORT=8000 psych-mas-backend
+docker run --rm -p 8000:8000 -e PORT=8000 psych-mas-backend uvicorn backend_service:app --host 0.0.0.0 --port 8000
 ```
 
 Verify:
