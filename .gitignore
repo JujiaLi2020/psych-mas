@@ -16,8 +16,7 @@ __pycache__/
 
 
 # Others
-R_Secmin/.RData
-R_Secmin/.Rhistory
+R_Secmin/
 .langgraph_api/*.pckl
 
 
