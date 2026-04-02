@@ -45,6 +45,9 @@ EXPOSE 8501
 ENV PYTHONWARNINGS="ignore::UserWarning:rpy2.rinterface"
 # Avoid R JIT initialization issues in some container environments.
 ENV R_ENABLE_JIT=0
+# Shared detect job files so multiple Gunicorn workers in ONE container see the same run_id (no Redis required).
+# For multiple Railway replicas, add Redis — job_store priority is Redis > this directory > in-memory.
+ENV PSYMAS_JOB_DIR=/tmp/psymas_detect_jobs
 
 # Railway sets PORT; Streamlit must listen on 0.0.0.0 for external access
 #CMD ["sh", "-c", "streamlit run ui.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true"]
