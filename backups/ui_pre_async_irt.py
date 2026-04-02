@@ -4249,26 +4249,9 @@ def _render_backend_test() -> None:
         st.json(payload)
 
     st.divider()
-    st.markdown("**IRT backend — async (`/irt/start`) or sync (`/irt`)**")
+    st.markdown("**Run IRT in backend (/irt) and store ψ into session**")
     with col_b:
-        if st.button("POST /irt/start", disabled=not bool(responses)):
-            try:
-                irt_payload = _json_safe(
-                    {
-                        "responses": responses,
-                        "rt_data": rt_data,
-                        "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
-                        "model_settings": st.session_state.get("model_settings") or {},
-                    }
-                )
-                r = requests.post(f"{BACKEND_URL}/irt/start", json=irt_payload, timeout=30)
-                r.raise_for_status()
-                js = r.json()
-                st.json(js)
-                st.caption("Then poll `GET /irt/{job_id}/status` and `GET /irt/{job_id}/result`.")
-            except Exception as e:
-                st.error(f"/irt/start failed: {e}")
-        if st.button("POST /irt (sync, legacy)", disabled=not bool(responses)):
+        if st.button("POST /irt", disabled=not bool(responses)):
             try:
                 irt_payload = _json_safe(
                     {
@@ -4662,90 +4645,41 @@ elif run_mode == "Preparation":
                         st.error(st.session_state["last_irt_error"])
                     else:
                         st.session_state["last_irt_error"] = None
-                        try:
-                            payload = _json_safe(
-                                {
-                                    "responses": responses,
-                                    "rt_data": rt_data,
-                                    "itemtype": itemtype,
-                                    "model_settings": st.session_state.get("model_settings") or {},
-                                }
-                            )
-                            r = requests.post(f"{BACKEND_URL}/irt/start", json=payload, timeout=30)
-                            r.raise_for_status()
-                            js = r.json()
-                            jid = js.get("job_id")
-                            if not jid:
-                                st.error("Backend did not return a job_id for IRT.")
-                            else:
-                                st.session_state["prep_irt_job_id"] = jid
-                                st.session_state["_nav_request"] = "Preparation"
-                                st.rerun()
-                        except Exception as e:
-                            st.session_state["last_irt_error"] = f"Failed to start IRT: {e}"
-                            st.error(st.session_state["last_irt_error"])
-
-                prep_irt_jid = st.session_state.get("prep_irt_job_id")
-                if prep_irt_jid:
-                    st.caption(f"IRT job running — `{prep_irt_jid[:8]}…` (async). This page will refresh until it finishes.")
-                    _irt_prog = st.progress(0)
-                    try:
-                        irt_st_resp = requests.get(f"{BACKEND_URL}/irt/{prep_irt_jid}/status", timeout=25)
-                        irt_st_resp.raise_for_status()
-                        irt_js = irt_st_resp.json()
-                    except Exception as e:
-                        st.session_state["last_irt_error"] = str(e)
-                        st.session_state.pop("prep_irt_job_id", None)
-                        st.error(f"IRT status request failed: {e}")
-                        st.rerun()
-                    irt_backend_status = irt_js.get("status", "pending")
-                    irt_prog = int(irt_js.get("progress") or 0)
-                    _irt_prog.progress(min(100, max(0, irt_prog)))
-                    if irt_backend_status == "error":
-                        err = irt_js.get("error") or "IRT failed."
-                        st.session_state["last_irt_error"] = err
-                        st.session_state.pop("prep_irt_job_id", None)
-                        st.error(f"IRT failed: {err}")
-                        st.rerun()
-                    if irt_backend_status == "unknown":
-                        err = irt_js.get("error") or "job_id not found"
-                        st.session_state["last_irt_error"] = err
-                        st.session_state.pop("prep_irt_job_id", None)
-                        st.error(f"IRT job lost: {err}")
-                        st.rerun()
-                    if irt_backend_status == "done":
-                        try:
-                            irt_rr = requests.get(f"{BACKEND_URL}/irt/{prep_irt_jid}/result", timeout=60)
-                            irt_rr.raise_for_status()
-                            irt_res_js = irt_rr.json()
-                            irt_result = irt_res_js.get("result") or {}
-                        except Exception as e:
-                            st.session_state["last_irt_error"] = str(e)
-                            st.session_state.pop("prep_irt_job_id", None)
-                            st.error(f"Failed to fetch IRT result: {e}")
-                            st.rerun()
-                        st.session_state.pop("prep_irt_job_id", None)
+                        with st.spinner(f"Running IRT ({itemtype}) to estimate item parameters…"):
+                            try:
+                                payload = _json_safe(
+                                    {
+                                        "responses": responses,
+                                        "rt_data": rt_data,
+                                        "itemtype": itemtype,
+                                        "model_settings": st.session_state.get("model_settings") or {},
+                                    }
+                                )
+                                r = requests.post(f"{BACKEND_URL}/irt", json=payload, timeout=180)
+                                r.raise_for_status()
+                                js = r.json()
+                                if js.get("status") != "done":
+                                    raise RuntimeError(js.get("error") or "IRT backend failed.")
+                                irt_result = js.get("result") or {}
+                            except Exception as e:
+                                irt_result = {}
+                                st.session_state["last_irt_error"] = f"IRT estimation failed: {e}"
                         if irt_result.get("item_params"):
                             psi_data = irt_result["item_params"]
                             st.session_state["last_irt_item_params"] = psi_data
                             st.session_state["item_params"] = psi_data
                             if irt_result.get("person_params"):
                                 st.session_state["forensic_person_params"] = irt_result["person_params"]
-                            st.session_state["last_irt_error"] = None
-                            st.success(f"IRT finished — stored ψ for {len(psi_data)} items.")
                             st.session_state["_nav_request"] = "Preparation"
                             st.rerun()
                         else:
                             st.session_state["last_irt_error"] = (
-                                irt_result.get("icc_error") or "IRT returned no item parameters."
+                                st.session_state.get("last_irt_error")
+                                or irt_result.get("icc_error")
+                                or "IRT returned no item parameters."
                             )
                             st.error(st.session_state["last_irt_error"])
-                            st.rerun()
-                    else:
-                        time.sleep(2)
-                        st.rerun()
-
-                if st.session_state.get("last_irt_error") and not prep_irt_jid:
+                if st.session_state.get("last_irt_error"):
                     st.caption(st.session_state["last_irt_error"])
         else:
             with st.container(border=True):

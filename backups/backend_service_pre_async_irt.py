@@ -47,20 +47,11 @@ _mp_ctx = multiprocessing.get_context("spawn")
 _manager: Any = None
 JOBS: Dict[str, Dict[str, Any]] = {}
 PROCS: Dict[str, multiprocessing.Process] = {}
-IRT_PROCS: Dict[str, multiprocessing.Process] = {}
 _redis_client: Any = None
 
 
 def _job_key(run_id: str) -> str:
     return f"psymas:detect:{run_id}"
-
-
-def _irt_redis_key(job_id: str) -> str:
-    return f"psymas:irt:{job_id}"
-
-
-def _irt_memory_key(job_id: str) -> str:
-    return f"irt:{job_id}"
 
 
 def _job_ttl_sec() -> int:
@@ -154,10 +145,6 @@ def _default_job_shell() -> Dict[str, Any]:
     }
 
 
-def _irt_job_shell() -> Dict[str, Any]:
-    return {"status": "pending", "progress": 0, "error": None, "result": None}
-
-
 def _apply_job_patch(job: Dict[str, Any], updates: Dict[str, Any]) -> None:
     for k, v in updates.items():
         if k == "node_states" and isinstance(v, dict):
@@ -172,12 +159,6 @@ def _job_file_path(run_id: str) -> str:
     base = _job_dir_from_env()
     assert base
     return os.path.join(os.path.abspath(base), f"{run_id}.json")
-
-
-def _irt_file_path(job_id: str) -> str:
-    base = _job_dir_from_env()
-    assert base
-    return os.path.join(os.path.abspath(base), f"irt-{job_id}.json")
 
 
 def _atomic_write_json(path: str, obj: Any) -> None:
@@ -217,15 +198,14 @@ class MemoryJobSink:
 
 
 class RedisJobSink:
-    __slots__ = ("_r", "_key", "_kind")
+    __slots__ = ("_r", "_rid")
 
-    def __init__(self, r: Any, redis_key: str, *, kind: Literal["detect", "irt"] = "detect") -> None:
+    def __init__(self, r: Any, run_id: str) -> None:
         self._r = r
-        self._key = redis_key
-        self._kind = kind
+        self._rid = run_id
 
     def _load(self) -> Dict[str, Any]:
-        raw = self._r.get(self._key)
+        raw = self._r.get(_job_key(self._rid))
         if not raw:
             return {}
         return json.loads(raw)
@@ -233,20 +213,19 @@ class RedisJobSink:
     def patch(self, updates: Dict[str, Any]) -> None:
         job = self._load()
         if not job:
-            job = _irt_job_shell() if self._kind == "irt" else _default_job_shell()
+            job = _default_job_shell()
         _apply_job_patch(job, updates)
-        self._r.set(self._key, _json_safe_dumps(job), ex=_job_ttl_sec())
+        self._r.set(_job_key(self._rid), _json_safe_dumps(job), ex=_job_ttl_sec())
 
 
 class DiskJobSink:
     """Shared directory in the container — visible to all Gunicorn workers (not across separate replicas)."""
 
-    __slots__ = ("_path", "_lock_path", "_kind")
+    __slots__ = ("_path", "_lock_path")
 
-    def __init__(self, json_path: str, *, kind: Literal["detect", "irt"] = "detect") -> None:
-        self._path = json_path
+    def __init__(self, run_id: str) -> None:
+        self._path = _job_file_path(run_id)
         self._lock_path = self._path + ".lock"
-        self._kind = kind
 
     def _load(self) -> Dict[str, Any]:
         if not os.path.isfile(self._path):
@@ -258,7 +237,7 @@ class DiskJobSink:
         with _disk_lock(self._lock_path):
             job = self._load()
             if not job:
-                job = _irt_job_shell() if self._kind == "irt" else _default_job_shell()
+                job = _default_job_shell()
             _apply_job_patch(job, updates)
             _atomic_write_json(self._path, job)
 
@@ -449,9 +428,9 @@ def _child_detect_entry(
     req = DetectRequest(**req_dict)
     if use_redis:
         r = backend_service._get_redis()
-        sink: Any = RedisJobSink(r, backend_service._job_key(run_id))
+        sink: Any = RedisJobSink(r, run_id)
     elif use_disk:
-        sink = DiskJobSink(backend_service._job_file_path(run_id))
+        sink = DiskJobSink(run_id)
     else:
         backend_service.JOBS = jobs_proxy
         job = jobs_proxy[run_id]
@@ -504,116 +483,14 @@ def _mark_worker_crashed(run_id: str) -> None:
     if not rec or rec.get("status") not in (None, "pending", "running"):
         return
     if mode == "redis":
-        RedisJobSink(_get_redis(), _job_key(run_id)).patch({"status": "error", "error": msg})
+        RedisJobSink(_get_redis(), run_id).patch({"status": "error", "error": msg})
     elif mode == "disk":
-        DiskJobSink(_job_file_path(run_id)).patch({"status": "error", "error": msg})
+        DiskJobSink(run_id).patch({"status": "error", "error": msg})
     else:
         j = JOBS.get(run_id)
         if j is not None:
             j["status"] = "error"
             j["error"] = msg
-
-
-def _get_irt_job_record(job_id: str) -> Dict[str, Any] | None:
-    mode = _job_store_mode()
-    if mode == "redis":
-        raw = _get_redis().get(_irt_redis_key(job_id))
-        if not raw:
-            return None
-        return json.loads(raw)
-    if mode == "disk":
-        path = _irt_file_path(job_id)
-        if not os.path.isfile(path):
-            return None
-        with open(path, encoding="utf-8") as f:
-            return json.loads(f.read())
-    j = JOBS.get(_irt_memory_key(job_id))
-    if j is None:
-        return None
-    return dict(j)
-
-
-def _mark_irt_worker_crashed(job_id: str) -> None:
-    msg = "IRT worker crashed or exited unexpectedly."
-    mode = _job_store_mode()
-    rec = _get_irt_job_record(job_id)
-    if not rec or rec.get("status") not in (None, "pending", "running"):
-        return
-    if mode == "redis":
-        RedisJobSink(_get_redis(), _irt_redis_key(job_id), kind="irt").patch({"status": "error", "error": msg})
-    elif mode == "disk":
-        DiskJobSink(_irt_file_path(job_id), kind="irt").patch({"status": "error", "error": msg})
-    else:
-        j = JOBS.get(_irt_memory_key(job_id))
-        if j is not None:
-            j["status"] = "error"
-            j["error"] = msg
-
-
-def _run_irt_job(job_id: str, req: IrtRequest, sink: Any) -> None:
-    try:
-        sink.patch({"status": "running", "progress": 25})
-        try:
-            from rpy2.robjects import numpy2ri, pandas2ri
-
-            numpy2ri.activate()
-            pandas2ri.activate()
-        except Exception:
-            pass
-        from graph import irt_agent
-
-        sink.patch({"progress": 50})
-        irt_state = {
-            "responses": req.responses,
-            "rt_data": req.rt_data,
-            "theta": 0.0,
-            "latency_flags": [],
-            "next_step": "start",
-            "model_settings": {**(req.model_settings or {}), "itemtype": req.itemtype},
-            "is_verified": True,
-        }
-        result = irt_agent(irt_state) or {}
-        sink.patch({"progress": 85})
-        item_params = result.get("item_params") or []
-        if not item_params:
-            sink.patch(
-                {
-                    "status": "error",
-                    "error": result.get("icc_error") or "IRT returned no item parameters.",
-                    "result": result,
-                    "progress": 100,
-                }
-            )
-            return
-        sink.patch({"status": "done", "progress": 100, "result": result})
-    except Exception as e:
-        try:
-            sink.patch({"status": "error", "error": str(e), "progress": 0})
-        except Exception:
-            pass
-
-
-def _child_irt_entry(
-    *,
-    job_id: str,
-    req_dict: dict,
-    jobs_proxy: Any | None = None,
-    memory_key: str | None = None,
-    use_redis: bool = False,
-    use_disk: bool = False,
-) -> None:
-    import backend_service
-
-    req = IrtRequest(**req_dict)
-    if use_redis:
-        sink = RedisJobSink(backend_service._get_redis(), backend_service._irt_redis_key(job_id), kind="irt")
-    elif use_disk:
-        sink = DiskJobSink(backend_service._irt_file_path(job_id), kind="irt")
-    else:
-        assert jobs_proxy is not None and memory_key is not None
-        backend_service.JOBS = jobs_proxy
-        sink = MemoryJobSink(jobs_proxy[memory_key])
-    backend_service._run_irt_job(job_id, req, sink)
 
 
 @app.post("/detect")
@@ -663,95 +540,6 @@ def start_detect(req: DetectRequest) -> dict:
     p.start()
     PROCS[run_id] = p
     return {"run_id": run_id, "job_store": mode}
-
-
-@app.post("/irt/start")
-def start_irt_async(req: IrtRequest) -> dict:
-    """Queue IRT in a subprocess; poll GET /irt/{job_id}/status then GET /irt/{job_id}/result."""
-    load_dotenv()
-    job_id = str(uuid.uuid4())
-    mode = _job_store_mode()
-    initial = _irt_job_shell()
-    if mode == "redis":
-        _get_redis().set(_irt_redis_key(job_id), _json_safe_dumps(initial), ex=_job_ttl_sec())
-        p = _mp_ctx.Process(
-            target=_child_irt_entry,
-            kwargs={
-                "job_id": job_id,
-                "req_dict": req.model_dump(),
-                "use_redis": True,
-                "use_disk": False,
-            },
-            daemon=True,
-        )
-        p.start()
-        IRT_PROCS[job_id] = p
-        return {"job_id": job_id, "job_store": mode}
-    if mode == "disk":
-        _atomic_write_json(_irt_file_path(job_id), initial)
-        p = _mp_ctx.Process(
-            target=_child_irt_entry,
-            kwargs={
-                "job_id": job_id,
-                "req_dict": req.model_dump(),
-                "use_redis": False,
-                "use_disk": True,
-            },
-            daemon=True,
-        )
-        p.start()
-        IRT_PROCS[job_id] = p
-        return {"job_id": job_id, "job_store": mode}
-    assert _manager is not None
-    jr = _manager.dict()
-    jr.update(initial)
-    mk = _irt_memory_key(job_id)
-    JOBS[mk] = jr
-    p = _mp_ctx.Process(
-        target=_child_irt_entry,
-        kwargs={
-            "job_id": job_id,
-            "req_dict": req.model_dump(),
-            "jobs_proxy": JOBS,
-            "memory_key": mk,
-            "use_redis": False,
-            "use_disk": False,
-        },
-        daemon=True,
-    )
-    p.start()
-    IRT_PROCS[job_id] = p
-    return {"job_id": job_id, "job_store": mode}
-
-
-@app.get("/irt/{job_id}/status")
-def get_irt_job_status(job_id: str) -> dict:
-    proc = IRT_PROCS.get(job_id)
-    if proc is not None and not proc.is_alive():
-        _mark_irt_worker_crashed(job_id)
-        IRT_PROCS.pop(job_id, None)
-    rec = _get_irt_job_record(job_id)
-    if not rec:
-        err = "job_id not found"
-        mode = _job_store_mode()
-        if mode == "memory":
-            err += " (set PSYMAS_JOB_DIR or REDIS_URL for multi-worker; see GET /health)"
-        elif mode == "disk":
-            err += " (multiple API replicas need REDIS_URL)"
-        return {"status": "unknown", "progress": 0, "error": err}
-    return {
-        "status": rec.get("status", "pending"),
-        "progress": int(rec.get("progress") or 0),
-        "error": rec.get("error"),
-    }
-
-
-@app.get("/irt/{job_id}/result")
-def get_irt_job_result(job_id: str) -> dict:
-    rec = _get_irt_job_record(job_id)
-    if not rec or rec.get("status") != "done":
-        return {"status": rec.get("status") if rec else "unknown", "result": None, "error": rec.get("error") if rec else None}
-    return {"status": "done", "result": rec.get("result")}
 
 
 @app.post("/irt")
@@ -832,6 +620,4 @@ def health() -> dict:
         "status": "ok",
         "job_store": mode,
         "shared_detect_jobs": _multi_worker_safe(),
-        "async_irt": True,
-        "irt_endpoints": ["/irt/start", "/irt/{job_id}/status", "/irt/{job_id}/result"],
     }
