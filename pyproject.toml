@@ -24,6 +24,7 @@ dependencies = [
     "reportlab>=4.0.0",
     "fastapi",
     "uvicorn[standard]",
+    "redis>=5.0.0",
 ]
 
 [tool.setuptools]

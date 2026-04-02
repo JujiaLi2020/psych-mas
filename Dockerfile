@@ -48,5 +48,8 @@ ENV R_ENABLE_JIT=0
 
 # Railway sets PORT; Streamlit must listen on 0.0.0.0 for external access
 #CMD ["sh", "-c", "streamlit run ui.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true"]
-CMD ["sh", "-c", "gunicorn backend_service:app --workers 8 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
+#
+# Without REDIS_URL, job state is per-process — keep PSYMAS_GUNICORN_WORKERS at 1 (default).
+# Add Redis (plugin) + REDIS_URL, then raise PSYMAS_GUNICORN_WORKERS (e.g. 4–8) to spread HTTP load.
+CMD ["sh", "-c", "gunicorn backend_service:app --workers ${PSYMAS_GUNICORN_WORKERS:-1} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --timeout 120"]
 

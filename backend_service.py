@@ -1,3 +1,4 @@
+import json
 import multiprocessing
 import os
 import uuid
@@ -9,6 +10,11 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from graph import FORENSIC_SPECIALIST_AGENT_ORDER
+
+try:
+    import redis as redis_lib
+except ImportError:  # pragma: no cover
+    redis_lib = None
 
 JobStatus = Literal["pending", "running", "done", "error"]
 
@@ -31,61 +37,147 @@ class IrtRequest(BaseModel):
     model_settings: dict = {}
 
 
-# Job registry. When using subprocess (Windows R fix), JOBS is a Manager().dict()
-# and each job value is a Manager().dict() so the worker can update status/result.
+# Job registry (in-process). When REDIS_URL is unset, each Gunicorn worker has its own JOBS;
+# use PSYMAS_GUNICORN_WORKERS=1 or results will not round-trip for /detect.
 #
-# IMPORTANT: On Linux (Docker/Railway), rpy2/R is not fork-safe. We MUST use the
-# "spawn" start method for worker processes to avoid memory corruption / crashes.
+# When REDIS_URL is set, job payloads are stored in Redis so any worker/replica can read them.
+#
+# On Linux (Docker/Railway), rpy2/R is not fork-safe. We use the "spawn" start method.
 _mp_ctx = multiprocessing.get_context("spawn")
 _manager: Any = None
 JOBS: Dict[str, Dict[str, Any]] = {}
-# Track worker processes so we can detect crashes (e.g., R/rpy2 segfaults on Windows).
 PROCS: Dict[str, multiprocessing.Process] = {}
+_redis_client: Any = None
+
+
+def _job_key(run_id: str) -> str:
+    return f"psymas:detect:{run_id}"
+
+
+def _job_ttl_sec() -> int:
+    try:
+        return int(os.getenv("PSYMAS_JOB_TTL_SEC", "604800"))
+    except ValueError:
+        return 604800
+
+
+def _redis_url_from_env() -> str | None:
+    for key in ("REDIS_URL", "RAILWAY_REDIS_URL", "RAILWAY_REDIS_PRIVATE_URL"):
+        v = os.getenv(key, "").strip()
+        if v:
+            return v
+    return None
+
+
+def _redis_jobs_enabled() -> bool:
+    return bool(redis_lib and _redis_url_from_env())
+
+
+def _get_redis() -> Any:
+    global _redis_client
+    if _redis_client is None:
+        if redis_lib is None:
+            raise RuntimeError("redis package is not installed")
+        url = _redis_url_from_env()
+        if not url:
+            raise RuntimeError("REDIS_URL is not set")
+        _redis_client = redis_lib.from_url(url, decode_responses=True, socket_connect_timeout=5)
+    return _redis_client
+
+
+def _json_safe_dumps(obj: Any) -> str:
+    def _default(o: Any) -> Any:
+        if hasattr(o, "item"):
+            try:
+                return o.item()
+            except Exception:
+                return str(o)
+        if isinstance(o, bytes):
+            return o.decode("utf-8", errors="replace")
+        raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+    return json.dumps(obj, default=_default)
+
+
+class MemoryJobSink:
+    """Writes detect job fields into a Manager.dict() (same process tree only)."""
+
+    __slots__ = ("_job",)
+
+    def __init__(self, job: Any) -> None:
+        self._job = job
+
+    def patch(self, updates: Dict[str, Any]) -> None:
+        for k, v in updates.items():
+            if k == "node_states" and isinstance(v, dict):
+                ns = dict(self._job.get("node_states") or {})
+                ns.update(v)
+                self._job["node_states"] = ns
+            else:
+                self._job[k] = v
+
+
+class RedisJobSink:
+    """Persists job state to Redis for multi-worker / multi-replica APIs."""
+
+    __slots__ = ("_r", "_rid")
+
+    def __init__(self, r: Any, run_id: str) -> None:
+        self._r = r
+        self._rid = run_id
+
+    def _load(self) -> Dict[str, Any]:
+        raw = self._r.get(_job_key(self._rid))
+        if not raw:
+            return {}
+        return json.loads(raw)
+
+    def patch(self, updates: Dict[str, Any]) -> None:
+        job = self._load()
+        if not job:
+            return
+        for k, v in updates.items():
+            if k == "node_states" and isinstance(v, dict):
+                ns = dict(job.get("node_states") or {})
+                ns.update(v)
+                job["node_states"] = ns
+            else:
+                job[k] = v
+        self._r.set(_job_key(self._rid), _json_safe_dumps(job), ex=_job_ttl_sec())
+
+
+def _update_node_states(sink: Any, updates: dict) -> None:
+    sink.patch({"node_states": updates})
+
+
+def _set_node(sink: Any, name: str, state: str) -> None:
+    _update_node_states(sink, {name: state})
 
 
 app = FastAPI(title="PsyMAS LangGraph Backend")
 
 
-def _run_detect_job(job_id: str, req: DetectRequest) -> None:
-    """Worker process: run IRT + forensic_workflow and update JOBS[job_id].
-
-    When the env var PSYMAS_STUB_LANGGRAPH=1, this function runs in a
-    lightweight stub mode that *skips* R / LangGraph entirely and simulates
-    agent progress. This is mainly for local Windows development where rpy2/R
-    are unstable; production (Railway) should run with the real workflow.
-    """
+def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
+    """Worker process: run forensic workflow and persist status via *sink*."""
     try:
-        job = JOBS[job_id]
-        job["status"] = "running"
-        job["progress"] = 5
+        sink.patch({"status": "running", "progress": 5})
         _initial_nodes = [
             "router",
             *FORENSIC_SPECIALIST_AGENT_ORDER,
             "synthesizer",
             "reporter",
         ]
+        _update_node_states(sink, {k: "pending" for k in _initial_nodes})
 
-        def _update_node_states(updates: dict) -> dict:
-            # IMPORTANT: job is a Manager().dict(); nested dicts don't propagate if mutated in-place.
-            # Always reassign job["node_states"] with a fresh dict copy.
-            ns = dict(job.get("node_states") or {})
-            ns.update(updates or {})
-            job["node_states"] = ns
-            return ns
-
-        def _set_node(name: str, state: str) -> None:
-            _update_node_states({name: state})
-
-        _update_node_states({k: "pending" for k in _initial_nodes})
-
-        # Optional stub mode for local Windows development (skips R + LangGraph).
         use_stub = os.getenv("PSYMAS_STUB_LANGGRAPH", "").lower() in ("1", "true", "yes")
         if use_stub:
             psi_data = req.psi_data or []
-            job["psi_data"] = psi_data
-            job["irt_status"] = "skipped" if psi_data else "stub"
-            job["progress"] = 35
-
+            sink.patch(
+                {
+                    "irt_status": "skipped" if psi_data else "stub",
+                    "progress": 35,
+                }
+            )
             result: Dict[str, Any] = {
                 "responses": req.responses,
                 "rt_data": req.rt_data,
@@ -96,7 +188,6 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                 "is_verified": True,
                 "psi_data": psi_data,
                 "compromised_items": req.compromised_items,
-                 # Carry selected agents through even in stub mode
                 "aberrance_functions": req.aberrance_functions or [],
                 "flags": {
                     "stub": {
@@ -109,40 +200,31 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                 ),
                 "reporter_brief": "Stub run — no specialist outputs to summarize.",
             }
-
-            # Mark all nodes as done so the UI graph turns green.
-            _update_node_states({k: "done" for k in _initial_nodes})
-
-            job["status"] = "done"
-            job["progress"] = 100
-            job["result"] = result
+            _update_node_states(sink, {k: "done" for k in _initial_nodes})
+            sink.patch({"status": "done", "progress": 100, "result": result})
             return
 
-        # ---- Real mode: Aberrance workflow (ψ must be provided by Preparation) ----
-        # Activate numpy->R conversion so any numpy in state never triggers "py2rpy not defined"
         try:
             from rpy2.robjects import numpy2ri
+
             numpy2ri.activate()
         except Exception:
             pass
-        # Import here so stub mode can avoid importing heavy R / LangGraph stack.
-        from graph import forensic_workflow
 
-        # We do NOT estimate IRT parameters in the backend.
-        # The UI is responsible for generating ψ in Preparation and passing it here.
         psi_data = req.psi_data or []
         if not psi_data:
-            job["irt_status"] = "missing"
-            job["status"] = "error"
-            job["error"] = "Missing psi_data. Generate item parameters (ψ) on Preparation page and retry."
-            job["progress"] = 0
+            sink.patch(
+                {
+                    "irt_status": "missing",
+                    "status": "error",
+                    "error": "Missing psi_data. Generate item parameters (ψ) on Preparation page and retry.",
+                    "progress": 0,
+                }
+            )
             return
 
-        job["psi_data"] = psi_data
-        job["irt_status"] = "provided"
-        job["progress"] = 35
+        sink.patch({"psi_data": psi_data, "irt_status": "provided", "progress": 35})
 
-        # Aberrance detection workflow (run SEQUENTIALLY to avoid concurrent rpy2/R calls)
         forensic_state = {
             "responses": req.responses,
             "rt_data": req.rt_data,
@@ -170,10 +252,8 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                 else:
                     result[key] = value
 
-        # Mark router as done (we always run all agents in backend mode)
-        _set_node("router", "done")
+        _set_node(sink, "router", "done")
 
-        # Import agent functions (avoid LangGraph fan-out concurrency).
         from graph import (
             ac_agent,
             as_agent,
@@ -187,126 +267,159 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
             tt_agent,
         )
 
+        _agent_fn = {
+            "nm_agent": nm_agent,
+            "pm_agent": pm_agent,
+            "ac_agent": ac_agent,
+            "as_agent": as_agent,
+            "pk_agent": pk_agent,
+            "rg_agent": rg_agent,
+            "cp_agent": cp_agent,
+            "tt_agent": tt_agent,
+        }
+        agent_steps = [(n, _agent_fn[n]) for n in FORENSIC_SPECIALIST_AGENT_ORDER]
+
+        for idx, (name, fn) in enumerate(agent_steps, start=1):
+            _set_node(sink, name, "running")
+            sink.patch({"progress": 35 + int(55 * (idx - 1) / max(1, len(agent_steps) + 1))})
+            try:
+                frag = fn(dict(result))
+            except Exception as e:
+                _set_node(sink, name, "error")
+                sink.patch({"status": "error", "error": f"{name} failed: {e}"})
+                return
+            _merge_fragment(frag or {})
+            _set_node(sink, name, "done")
+            sink.patch({"progress": 35 + int(55 * idx / max(1, len(agent_steps) + 1))})
+
+        _set_node(sink, "synthesizer", "running")
         try:
-            # Execute each agent sequentially. Each returns a partial state dict.
-            _agent_fn = {
-                "nm_agent": nm_agent,
-                "pm_agent": pm_agent,
-                "ac_agent": ac_agent,
-                "as_agent": as_agent,
-                "pk_agent": pk_agent,
-                "rg_agent": rg_agent,
-                "cp_agent": cp_agent,
-                "tt_agent": tt_agent,
-            }
-            agent_steps = [(n, _agent_fn[n]) for n in FORENSIC_SPECIALIST_AGENT_ORDER]
-
-            for idx, (name, fn) in enumerate(agent_steps, start=1):
-                _set_node(name, "running")
-                job["progress"] = 35 + int(55 * (idx - 1) / max(1, len(agent_steps) + 1))
-                try:
-                    frag = fn(dict(result))
-                except Exception as e:
-                    _set_node(name, "error")
-                    job["status"] = "error"
-                    job["error"] = f"{name} failed: {e}"
-                    return
-                _merge_fragment(frag or {})
-                _set_node(name, "done")
-                job["progress"] = 35 + int(55 * idx / max(1, len(agent_steps) + 1))
-
-            # Synthesizer (LLM)
-            _set_node("synthesizer", "running")
-            try:
-                synth = manager_synthesizer(dict(result))
-            except Exception as e:
-                _set_node("synthesizer", "error")
-                job["status"] = "error"
-                job["error"] = f"synthesizer failed: {e}"
-                return
-            _merge_fragment(synth or {})
-            _set_node("synthesizer", "done")
-
-            _set_node("reporter", "running")
-            try:
-                rep = forensic_reporter(dict(result))
-            except Exception as e:
-                _set_node("reporter", "error")
-                job["status"] = "error"
-                job["error"] = f"reporter failed: {e}"
-                return
-            _merge_fragment(rep or {})
-            _set_node("reporter", "done")
-
-            job["status"] = "done"
-            job["progress"] = 100
-            job["result"] = result
+            synth = manager_synthesizer(dict(result))
         except Exception as e:
-            job["status"] = "error"
-            job["error"] = str(e)
+            _set_node(sink, "synthesizer", "error")
+            sink.patch({"status": "error", "error": f"synthesizer failed: {e}"})
+            return
+        _merge_fragment(synth or {})
+        _set_node(sink, "synthesizer", "done")
+
+        _set_node(sink, "reporter", "running")
+        try:
+            rep = forensic_reporter(dict(result))
+        except Exception as e:
+            _set_node(sink, "reporter", "error")
+            sink.patch({"status": "error", "error": f"reporter failed: {e}"})
+            return
+        _merge_fragment(rep or {})
+        _set_node(sink, "reporter", "done")
+
+        sink.patch({"status": "done", "progress": 100, "result": result})
     except Exception as e:
-        job = JOBS.get(job_id)
-        if job is not None:
-            job["status"] = "error"
-            job["error"] = str(e)
-            job["progress"] = 0
-        else:
-            JOBS[job_id] = {"status": "error", "error": str(e), "progress": 0}
+        try:
+            sink.patch({"status": "error", "error": str(e), "progress": 0})
+        except Exception:
+            pass
 
 
-def _child_detect_entry(run_id: str, req_dict: dict, jobs_proxy: Any) -> None:
+def _child_detect_entry(
+    *,
+    run_id: str,
+    req_dict: dict,
+    jobs_proxy: Any | None = None,
+    use_redis: bool = False,
+) -> None:
     """Run in subprocess so R/rpy2 runs in this process's main thread (avoids Windows errors)."""
     import backend_service
 
-    backend_service.JOBS = jobs_proxy
     req = DetectRequest(**req_dict)
-    backend_service._run_detect_job(run_id, req)
+    if use_redis:
+        r = backend_service._get_redis()
+        sink = RedisJobSink(r, run_id)
+        backend_service._run_detect_job(run_id, req, sink)
+    else:
+        backend_service.JOBS = jobs_proxy
+        job = jobs_proxy[run_id]
+        sink = MemoryJobSink(job)
+        backend_service._run_detect_job(run_id, req, sink)
 
 
 @app.on_event("startup")
 def _startup_manager() -> None:
-    global _manager, JOBS
-    _manager = _mp_ctx.Manager()
-    JOBS = _manager.dict()
+    global _manager, JOBS, _redis_client
+    load_dotenv()
+    _redis_client = None
+    if _redis_jobs_enabled():
+        _get_redis().ping()
+        JOBS = {}
+        _manager = None
+    else:
+        _manager = _mp_ctx.Manager()
+        JOBS = _manager.dict()
+
+
+def _get_job_record(run_id: str) -> Dict[str, Any] | None:
+    if _redis_jobs_enabled():
+        raw = _get_redis().get(_job_key(run_id))
+        if not raw:
+            return None
+        return json.loads(raw)
+    j = JOBS.get(run_id)
+    if j is None:
+        return None
+    return dict(j)
 
 
 @app.post("/detect")
 def start_detect(req: DetectRequest) -> dict:
     load_dotenv()
     run_id = str(uuid.uuid4())
-    # Per-job dict must be a manager.dict() so the worker subprocess's updates are visible.
+    if _redis_jobs_enabled():
+        initial = {
+            "status": "pending",
+            "progress": 0,
+            "irt_status": "pending",
+            "node_states": {},
+            "error": None,
+            "result": None,
+        }
+        _get_redis().set(_job_key(run_id), _json_safe_dumps(initial), ex=_job_ttl_sec())
+        p = _mp_ctx.Process(
+            target=_child_detect_entry,
+            kwargs={"run_id": run_id, "req_dict": req.model_dump(), "use_redis": True},
+            daemon=True,
+        )
+        p.start()
+        PROCS[run_id] = p
+        return {"run_id": run_id}
+
+    assert _manager is not None
     job_ref = _manager.dict()
-    job_ref.update({
-        "status": "pending",
-        "progress": 0,
-        "irt_status": "pending",
-        "node_states": {},
-        "error": None,
-    })
+    job_ref.update(
+        {
+            "status": "pending",
+            "progress": 0,
+            "irt_status": "pending",
+            "node_states": {},
+            "error": None,
+        }
+    )
     JOBS[run_id] = job_ref
     p = _mp_ctx.Process(
         target=_child_detect_entry,
-        args=(run_id, req.model_dump(), JOBS),
+        kwargs={"run_id": run_id, "req_dict": req.model_dump(), "jobs_proxy": JOBS, "use_redis": False},
         daemon=True,
     )
     p.start()
-    # Remember the worker so /status can see if it crashed.
     PROCS[run_id] = p
     return {"run_id": run_id}
 
 
 @app.post("/irt")
 def run_irt(req: IrtRequest) -> dict:
-    """Run IRT in the backend (Docker/Linux) and return ψ item parameters.
-
-    This is used by the Streamlit Preparation page so Windows clients do not need
-    local R/rpy2 for ψ estimation.
-    """
+    """Run IRT in the backend (Docker/Linux) and return ψ item parameters."""
     load_dotenv()
-    # Activate rpy2 conversion in this thread so ro.conversion.rpy2py works
-    # (uvicorn may run handlers in worker threads where contextvars are not set).
     try:
         from rpy2.robjects import numpy2ri, pandas2ri
+
         numpy2ri.activate()
         pandas2ri.activate()
     except Exception:
@@ -325,46 +438,55 @@ def run_irt(req: IrtRequest) -> dict:
     result = irt_agent(irt_state) or {}
     item_params = result.get("item_params") or []
     if not item_params:
-        return {"status": "error", "error": result.get("icc_error") or "IRT returned no item parameters.", "result": result}
+        return {
+            "status": "error",
+            "error": result.get("icc_error") or "IRT returned no item parameters.",
+            "result": result,
+        }
     return {"status": "done", "result": result}
 
 
 @app.get("/detect/{run_id}/status")
 def get_status(run_id: str) -> dict:
-    job = JOBS.get(run_id)
-    # If the worker process died unexpectedly and the job never updated its status,
-    # surface this as an error so the UI doesn't stay "running" forever.
     proc = PROCS.get(run_id)
+    job = JOBS.get(run_id) if not _redis_jobs_enabled() else None
+
     if proc is not None and not proc.is_alive():
-        if job and job.get("status") in (None, "pending", "running"):
+        if _redis_jobs_enabled():
+            rec = _get_job_record(run_id)
+            if rec and rec.get("status") in (None, "pending", "running"):
+                RedisJobSink(_get_redis(), run_id).patch(
+                    {
+                        "status": "error",
+                        "error": "Detection worker crashed or exited unexpectedly.",
+                    }
+                )
+        elif job is not None and job.get("status") in (None, "pending", "running"):
             job["status"] = "error"
             job["error"] = "Detection worker crashed or exited unexpectedly."
-        # Optionally remove from registry to avoid repeated checks.
         PROCS.pop(run_id, None)
 
-    if not job:
+    job_dict = _get_job_record(run_id)
+    if not job_dict:
         return {"status": "unknown", "progress": 0, "node_states": {}, "error": "run_id not found"}
     return {
-        "status": job.get("status", "pending"),
-        "progress": job.get("progress", 0),
-        "irt_status": job.get("irt_status", "pending"),
-        "node_states": dict(job.get("node_states") or {}),
-        "error": job.get("error"),
+        "status": job_dict.get("status", "pending"),
+        "progress": job_dict.get("progress", 0),
+        "irt_status": job_dict.get("irt_status", "pending"),
+        "node_states": dict(job_dict.get("node_states") or {}),
+        "error": job_dict.get("error"),
     }
 
 
 @app.get("/detect/{run_id}/result")
 def get_result(run_id: str) -> dict:
-    job = JOBS.get(run_id)
-    if not job or job.get("status") != "done":
-        return {"status": job.get("status") if job else "unknown", "result": None}
-    return {"status": "done", "result": job.get("result")}
+    job_dict = _get_job_record(run_id)
+    if not job_dict or job_dict.get("status") != "done":
+        return {"status": job_dict.get("status") if job_dict else "unknown", "result": None}
+    return {"status": "done", "result": job_dict.get("result")}
 
 
 @app.get("/health")
 def health() -> dict:
-    """Lightweight backend/graph health check for the UI."""
-    # We deliberately avoid touching R or running a workflow here; this just confirms
-    # that the FastAPI backend is up and importable.
-    return {"status": "ok"}
-
+    load_dotenv()
+    return {"status": "ok", "shared_detect_jobs": _redis_jobs_enabled()}
