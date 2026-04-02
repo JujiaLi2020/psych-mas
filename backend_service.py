@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from graph import FORENSIC_SPECIALIST_AGENT_ORDER
 
 JobStatus = Literal["pending", "running", "done", "error"]
 
@@ -59,15 +60,9 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
         job["progress"] = 5
         _initial_nodes = [
             "router",
-            "pm_agent",
-            "nm_agent",
-            "ac_agent",
-            "as_agent",
-            "rg_agent",
-            "cp_agent",
-            "tt_agent",
-            "pk_agent",
+            *FORENSIC_SPECIALIST_AGENT_ORDER,
             "synthesizer",
+            "reporter",
         ]
 
         def _update_node_states(updates: dict) -> dict:
@@ -112,6 +107,7 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                     "This is a stubbed detect run for UI development. "
                     "LangGraph agents and R-based aberrance analysis were not executed."
                 ),
+                "reporter_brief": "Stub run — no specialist outputs to summarize.",
             }
 
             # Mark all nodes as done so the UI graph turns green.
@@ -182,6 +178,7 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
             ac_agent,
             as_agent,
             cp_agent,
+            forensic_reporter,
             manager_synthesizer,
             nm_agent,
             pk_agent,
@@ -192,16 +189,17 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
 
         try:
             # Execute each agent sequentially. Each returns a partial state dict.
-            agent_steps = [
-                ("pm_agent", pm_agent),
-                ("nm_agent", nm_agent),
-                ("ac_agent", ac_agent),
-                ("as_agent", as_agent),
-                ("rg_agent", rg_agent),
-                ("cp_agent", cp_agent),
-                ("tt_agent", tt_agent),
-                ("pk_agent", pk_agent),
-            ]
+            _agent_fn = {
+                "nm_agent": nm_agent,
+                "pm_agent": pm_agent,
+                "ac_agent": ac_agent,
+                "as_agent": as_agent,
+                "pk_agent": pk_agent,
+                "rg_agent": rg_agent,
+                "cp_agent": cp_agent,
+                "tt_agent": tt_agent,
+            }
+            agent_steps = [(n, _agent_fn[n]) for n in FORENSIC_SPECIALIST_AGENT_ORDER]
 
             for idx, (name, fn) in enumerate(agent_steps, start=1):
                 _set_node(name, "running")
@@ -228,6 +226,17 @@ def _run_detect_job(job_id: str, req: DetectRequest) -> None:
                 return
             _merge_fragment(synth or {})
             _set_node("synthesizer", "done")
+
+            _set_node("reporter", "running")
+            try:
+                rep = forensic_reporter(dict(result))
+            except Exception as e:
+                _set_node("reporter", "error")
+                job["status"] = "error"
+                job["error"] = f"reporter failed: {e}"
+                return
+            _merge_fragment(rep or {})
+            _set_node("reporter", "done")
 
             job["status"] = "done"
             job["progress"] = 100

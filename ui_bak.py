@@ -40,17 +40,12 @@ except Exception:
     pass
 
 # Model engine options for Psych-MAS Summary (display label, API model name)
-GEMINI_MODEL_OPTIONS = [
-    ("Gemini 1.5 Flash (latest)", "models/gemini-1.5-flash-latest"),
-    ("Gemini 1.5 Flash 002", "models/gemini-1.5-flash-002"),
-    ("Gemini 1.5 Flash 001", "models/gemini-1.5-flash-001"),
-    ("Gemini 2.0 Flash", "models/gemini-2.0-flash"),
-    ("Gemini 2.5 Flash", "models/gemini-2.5-flash"),
-]
-DEFAULT_GEMINI_MODEL_IDS = [api_id for _, api_id in GEMINI_MODEL_OPTIONS]
-
-# OpenRouter: model list lives in openrouter_models.py
-from openrouter_models import OPENROUTER_FREE_MODEL_IDS, OPENROUTER_FREE_MODELS
+from mmls import (
+    DEFAULT_GEMINI_MODEL_IDS,
+    GEMINI_MODEL_OPTIONS,
+    OPENROUTER_FREE_MODEL_IDS,
+    OPENROUTER_FREE_MODELS,
+)
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 BACKEND_URL = os.getenv("PSYMAS_BACKEND_URL", "http://localhost:8000")

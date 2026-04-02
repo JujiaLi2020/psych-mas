@@ -34,3 +34,9 @@ if (exists("RT") && exists("Resp")) {
   dv(RT, Resp)
 }
 
+
+library(mirt)
+model <- mirt(Resp, 1, itemtype='2PL')
+png(icc_path)
+plot(model, type="trace")
+dev.off()

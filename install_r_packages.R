@@ -10,3 +10,10 @@ for (p in pkgs) {
     install.packages(p, repos = repos)
   }
 }
+
+# Fail the image build if any required package is still missing.
+missing <- pkgs[!vapply(pkgs, function(p) requireNamespace(p, quietly = TRUE), logical(1))]
+if (length(missing) > 0) {
+  message("ERROR: Missing required R packages after install: ", paste(missing, collapse = ", "))
+  quit(status = 1)
+}

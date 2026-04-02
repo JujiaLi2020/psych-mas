@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import pandas as pd
+import numpy as np
 import requests
 from dotenv import load_dotenv
 
@@ -432,6 +433,7 @@ class State(TypedDict):
     psi_data: NotRequired[list[dict]]   # uploaded or IRT-computed item parameters (a, b, c, ...)
     flags: Annotated[dict, _merge_flags]  # results from each specialist keyed by agent name — uses reducer for parallel writes
     final_report: NotRequired[str]      # Markdown forensic verdict from Manager LLM
+    reporter_brief: NotRequired[str]   # Short audit-style summary after synthesizer
 
 
 def _dv_python(rt_df: pd.DataFrame, resp_df: pd.DataFrame, color: str = "lightgray") -> str:
@@ -476,6 +478,38 @@ def _dv_python(rt_df: pd.DataFrame, resp_df: pd.DataFrame, color: str = "lightgr
     if out_path is None:
         raise RuntimeError("Could not save rt_hist.png to project data/ or temp dir")
     return str(out_path)
+
+
+def _records(obj) -> list[dict]:
+    """Best-effort conversion to list[dict] for JSON responses."""
+    if obj is None:
+        return []
+    # pandas DataFrame
+    if hasattr(obj, "to_dict"):
+        try:
+            return obj.to_dict(orient="records")  # type: ignore[arg-type]
+        except TypeError:
+            # some objects have to_dict but not orient
+            pass
+    # numpy structured/record arrays from rpy2 conversions
+    try:
+        if isinstance(obj, (np.recarray, np.ndarray)) and getattr(obj, "dtype", None) is not None:
+            if obj.dtype.names:
+                return pd.DataFrame(obj).to_dict(orient="records")
+    except Exception:
+        pass
+    # already list of dicts
+    if isinstance(obj, list):
+        if all(isinstance(x, dict) for x in obj):
+            return obj
+        try:
+            return pd.DataFrame(obj).to_dict(orient="records")
+        except Exception:
+            return [{"value": x} for x in obj]
+    # fallback: single mapping / object
+    if isinstance(obj, dict):
+        return [obj]
+    return [{"value": obj}]
 
 
 # def _plot_icc(resp_df: pd.DataFrame) -> str:
@@ -650,9 +684,9 @@ def irt_agent(state):
 
     return {
         "icc_plot_path": str(icc_path),
-        "item_params": item_pars.to_dict(orient="records"),
-        "person_params": person_pars.to_dict(orient="records"),
-        "item_fit": item_fit.to_dict(orient="records"),
+        "item_params": _records(item_pars),
+        "person_params": _records(person_pars),
+        "item_fit": _records(item_fit),
         "model_fit": model_fit,
         "next_step": "analyze_timing",
     }
@@ -1983,9 +2017,37 @@ STYLE REQUIREMENTS:
     }
 
 
+def forensic_reporter(state: State) -> dict:
+    """Record a brief, deterministic audit summary after the LLM synthesizer (for traceability / UI)."""
+    print("--- FORENSIC Reporter: compiling brief ---")
+    flags = state.get("flags") or {}
+    report = (state.get("final_report") or "").strip()
+    n_keys = len(flags)
+    n_err = sum(1 for v in flags.values() if isinstance(v, dict) and v.get("error"))
+    n_info = sum(1 for v in flags.values() if isinstance(v, dict) and v.get("info") and not v.get("error"))
+    wc = len(report.split()) if report else 0
+    brief = (
+        f"Specialist channels: {n_keys}; errors: {n_err}; info-only: {n_info}; "
+        f"verdict ~{wc} words."
+    )
+    return {"reporter_brief": brief}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FORENSIC WORKFLOW (StateGraph)
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Left → right order in LangGraph Studio (router fans out in parallel; register nodes in this order).
+FORENSIC_SPECIALIST_AGENT_ORDER: tuple[str, ...] = (
+    "nm_agent",
+    "pm_agent",
+    "ac_agent",
+    "as_agent",
+    "pk_agent",
+    "rg_agent",
+    "cp_agent",
+    "tt_agent",
+)
 
 _forensic_wf = StateGraph(State)
 
@@ -1994,20 +2056,22 @@ _forensic_wf.add_node("nm_agent", nm_agent)
 _forensic_wf.add_node("pm_agent", pm_agent)
 _forensic_wf.add_node("ac_agent", ac_agent)
 _forensic_wf.add_node("as_agent", as_agent)
+_forensic_wf.add_node("pk_agent", pk_agent)
 _forensic_wf.add_node("rg_agent", rg_agent)
 _forensic_wf.add_node("cp_agent", cp_agent)
 _forensic_wf.add_node("tt_agent", tt_agent)
-_forensic_wf.add_node("pk_agent", pk_agent)
 _forensic_wf.add_node("synthesizer", manager_synthesizer)
+_forensic_wf.add_node("reporter", forensic_reporter)
 
 _forensic_wf.set_entry_point("router")
 
 # Router broadcasts to all 8 specialists
-for _agent in ["nm_agent", "pm_agent", "ac_agent", "as_agent", "rg_agent", "cp_agent", "tt_agent", "pk_agent"]:
+for _agent in FORENSIC_SPECIALIST_AGENT_ORDER:
     _forensic_wf.add_edge("router", _agent)
     _forensic_wf.add_edge(_agent, "synthesizer")
 
-_forensic_wf.add_edge("synthesizer", END)
+_forensic_wf.add_edge("synthesizer", "reporter")
+_forensic_wf.add_edge("reporter", END)
 
 forensic_workflow = _forensic_wf.compile()
 

@@ -1,5 +1,14 @@
 
-#### data preparation 
+#### JAGS setup (required for prim())
+## If you see "Unable to call JAGS", either:
+## 1. Install JAGS: https://sourceforge.net/projects/mcmc-jags/files/JAGS/ (e.g. JAGS-4.3.0.exe for Windows)
+## 2. Then tell runjags where it is. Run once in R before calling prim():
+##    runjags.options(jagspath = "C:/Program Files/JAGS/JAGS-4.3.0/x64/bin")   # Windows 64-bit
+##    runjags.options(jagspath = "C:/Program Files/JAGS/JAGS-4.3.0/i386/bin")  # Windows 32-bit
+##    (Use the path where jags-terminal.exe lives; check with list.files("C:/Program Files/JAGS/"))
+## 3. Check: runjags::testjags()
+
+#### data preparation
 prepini <- function(RT, Resp) {
   RT.new <- as.matrix(RT)
   RT.new[RT.new== 0] <- NA
@@ -21,24 +30,42 @@ prepini <- function(RT, Resp) {
   
   ini <- list(ini)
   return(ini)
-  
+
 }
 
-Unsupervised.Summary <- (list(
-  "Detected Cheating Cases Using Kmeans" = det.A,
-  "Kmeas Results" = kmeans.cm,
-  "Detected Cheating Cases Using FMM" = det.m.A,
-  "FMM Results" = mixmul.cm))
-
-return(Unsupervised.Summary)
-
-### calculating IRT and RT based person-fit indexes 
+### calculating IRT and RT based person-fit indexes
 prim <- function(ini) {
+  if (!requireNamespace("runjags", quietly = TRUE)) stop("Please install.packages(\"runjags\") and ensure JAGS is installed.")
+  if (!requireNamespace("PerFit", quietly = TRUE)) stop("Please install.packages(\"PerFit\")")
+  library(runjags)
+  library(PerFit)
 
+  # Try to find JAGS on Windows if path not already set
+  jags_path <- tryCatch(runjags::runjags.getOption("jagspath"), error = function(e) NA_character_)
+  if (identical(.Platform$OS.type, "windows") && (is.na(jags_path) || !nzchar(jags_path))) {
+    prog <- Sys.getenv("ProgramFiles", "C:/Program Files")
+    prog64 <- Sys.getenv("ProgramW6432", prog)
+    for (root in c(prog64, prog)) {
+      jags_dir <- file.path(root, "JAGS")
+      if (!dir.exists(jags_dir)) next
+      for (ver in list.files(jags_dir, full.names = TRUE)) {
+        for (sub in c("x64/bin", "bin", "i386/bin")) {
+          p <- file.path(ver, sub)
+          if (dir.exists(p) && any(grepl("jags", list.files(p), ignore.case = TRUE))) {
+            runjags::runjags.options(jagspath = normalizePath(p, mustWork = FALSE))
+            break
+          }
+        }
+      }
+    }
+  }
+
+  # ini: named list with RT, Resp, ini.alpha, ini.beta, ini.speed, ini.prec.speed, ini.mu.ipar, ini.prec.ipar
+  RT_dat <- as.matrix(ini[["RT"]])
+  N <- nrow(RT_dat)
+  m <- ncol(RT_dat)
 
   model <- "
-  Poisson model...
-
 model {
 	for (i in 1:N) {
 		for (j in 1:m) {
@@ -46,8 +73,8 @@ model {
 		}
 		sp[i] ~ dnorm(0, prec.sp)
 	}
-		prec.sp ~ dgamma(.001,.001)
-		sd.sp <- sqrt(1/prec.sp)
+	prec.sp ~ dgamma(.001,.001)
+	sd.sp <- sqrt(1/prec.sp)
 
 	for (j in 1:m) {
 		al[j] <- ipar[j,1]
@@ -55,40 +82,43 @@ model {
 		ipar[j,1:2] ~ dmnorm(mu.ipar[1:2], prec.ipar[1:2,1:2])
 	}
 
-  mu <- c(1,3.5)
-  V[1,1] <- 5
-  V[2,1] <- 0
-  V[1,2] <- 0
-  V[2,2] <- 5
-
 	mu.ipar[1:2] ~ dmnorm(mu[1:2], prec.ipar[1:2,1:2])
 	prec.ipar[1:2,1:2] ~ dwish(V[1:2,1:2], 2)
 	var.ipar[1:2,1:2] <- inverse(prec.ipar[1:2,1:2])
 }
-
-Data{
-list(RT = structure(.Data = ini[[1]],
-.Dim = c(nrow(ini[[1]]), ncol(ini[[1]]))),N = nrow(ini[[1]]), m = ncol(ini[[1]]))
-}
-
-Inits{
-list( sp=ini[[5]], prec.sp=ini[[6]],ipar=cbind(ini[[3]], ini[[4]]), mu.ipar=ini[[7]], prec.ipar=ini[[8]])
-}
-
-Inits{
-list( sp=ini[[5]], prec.sp=ini[[6]],ipar=cbind(ini[[3]], ini[[4]]), mu.ipar=ini[[7]], prec.ipar=ini[[8]])
-
-}
-
 "
-out <- run.jags(model, n.chains = 2, burnin = 1000,
-                sample = 8000, adapt = 2000, monitor=c("al","be","mu.ipar","var.ipar","sp","sd.sp"),
-)
 
-RT <- ini[[1]]
-Resp <- ini[[2]]
+  jags_data <- list(
+    RT = RT_dat,
+    N = N,
+    m = m,
+    mu = c(1, 3.5),
+    V = matrix(c(5, 0, 0, 5), 2, 2)
+  )
 
-out.summary <- extract.runjags(add.summary(out),what = 'summary')
+  jags_inits <- list(
+    sp = ini[["ini.speed"]],
+    prec.sp = ini[["ini.prec.speed"]],
+    ipar = cbind(ini[["ini.alpha"]], ini[["ini.beta"]]),
+    mu.ipar = ini[["ini.mu.ipar"]],
+    prec.ipar = ini[["ini.prec.ipar"]]
+  )
+
+  out <- run.jags(
+    model,
+    data = jags_data,
+    inits = list(jags_inits, jags_inits),
+    n.chains = 2,
+    burnin = 1000,
+    sample = 8000,
+    adapt = 2000,
+    monitor = c("al", "be", "mu.ipar", "var.ipar", "sp", "sd.sp")
+  )
+
+RT <- as.matrix(ini[["RT"]])
+Resp <- as.data.frame(ini[["Resp"]])
+
+out.summary <- extract.runjags(add.summary(out), what = "summary")
 n.item <- ncol(RT)
 n.person <- nrow(RT)
 alpha.table <- out.summary[c(1:n.item),c(1,3:5,9,11)]
@@ -132,8 +162,8 @@ for(i in 1:I){
 }
 Z_sum.A <- apply(Z.A,1,sum)
 hist(Z_sum.A,col="grey",main = "Distribution of Person Estimates Based on LZ Index",xlab="Lz",breaks=20)
-abline(v=qchisq(0.95,ncol(ini[["Resp"]])))
-critical_value2 <- qchisq(0.95,ncol(ini[["Resp"]]))
+abline(v = qchisq(0.95, ncol(Resp)))
+critical_value2 <- qchisq(0.95, ncol(Resp))
 
 # KL index programming
 
@@ -145,9 +175,10 @@ w2 <- sum(average_cheating)
 w2
 w_average_cheat <- average_cheating*(1/w2)
 w_average_cheat
-w1 <- apply(Cheating,1,sum)
+w1 <- apply(Cheating, 1, sum)
+w1[w1 <= 0] <- 1  # avoid division by zero for persons with no RT
 
-KLdata <- diag(1/w1) %*% Cheating
+KLdata <- diag(1 / w1) %*% Cheating
 
 summary(KLdata)
 start.time <- Sys.time()
@@ -190,9 +221,10 @@ return(Estimates)
 
 }
 
-prepini(RT, Resp)
-install.packages(runjags)
-library(runjags)
-SecMin.obj <- prim(ini)
+# Example: run after loading data (Resp, RT) and library(runjags), library(PerFit)
+# ini <- prepini(RT, Resp)
+# SecMin.obj <- prim(ini[[1]])
+# install.packages("runjags")  # uncomment if needed
+# library(runjags)
 
 

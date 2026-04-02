@@ -13,3 +13,15 @@ wheels/
 __pycache__/
 *.py[cod]
 .DS_Store
+
+
+# Others
+R_Secmin/.RData
+R_Secmin/.Rhistory
+.langgraph_api/*.pckl
+
+
+# Files
+Presentation/
+document/
+.Rproj.user

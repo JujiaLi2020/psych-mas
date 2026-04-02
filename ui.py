@@ -34,25 +34,12 @@ from graph import analyze_prompt, psych_workflow, forensic_workflow, irt_agent, 
 # Load .env early so os.getenv() (keys, BACKEND_URL) works everywhere.
 load_dotenv()
 
-# Initialize R early so it is ready when needed
-try:
-    import rpy2.robjects as _ro
-    _ro.r("1+1")
-except Exception:
-    pass
-
-# Model engine options for Psych-MAS Summary (display label, API model name)
-GEMINI_MODEL_OPTIONS = [
-    ("Gemini 1.5 Flash (latest)", "models/gemini-1.5-flash-latest"),
-    ("Gemini 1.5 Flash 002", "models/gemini-1.5-flash-002"),
-    ("Gemini 1.5 Flash 001", "models/gemini-1.5-flash-001"),
-    ("Gemini 2.0 Flash", "models/gemini-2.0-flash"),
-    ("Gemini 2.5 Flash", "models/gemini-2.5-flash"),
-]
-DEFAULT_GEMINI_MODEL_IDS = [api_id for _, api_id in GEMINI_MODEL_OPTIONS]
-
-# OpenRouter: model list lives in openrouter_models.py
-from openrouter_models import OPENROUTER_FREE_MODEL_IDS, OPENROUTER_FREE_MODELS
+from mmls import (
+    DEFAULT_GEMINI_MODEL_IDS,
+    GEMINI_MODEL_OPTIONS,
+    OPENROUTER_FREE_MODEL_IDS,
+    OPENROUTER_FREE_MODELS,
+)
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 BACKEND_URL = os.getenv("PSYMAS_BACKEND_URL", "http://localhost:8000")
@@ -1100,18 +1087,79 @@ def _parse_scenario_suggestion(text: str) -> tuple[str, str]:
     return letter, (explanation[:400] if explanation else "Suggested based on your description.")
 
 
+def _parse_scenario_json_or_legacy(text: str) -> tuple[str, str]:
+    """
+    Prefer parsing a structured JSON reply of the form:
+      {"scenario_letter": "A|B|C", "agents": [...], "rationale": "..."}
+    Fallback to the original two-line A/B parser when JSON is not present.
+    Returns (letter, rationale_or_explanation).
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return "", "Describe your testing situation (e.g. classroom quiz, certification exam, at-home test)."
+    try:
+        start = raw.index("{")
+        end = raw.rfind("}")
+        obj = json.loads(raw[start : end + 1])
+        letter = (obj.get("scenario_letter") or "").strip().upper()
+        if letter not in ("A", "B", "C"):
+            letter = ""
+        rationale = (obj.get("rationale") or "").strip()
+        # Store agents list in session for callers that want to use it.
+        agents = obj.get("agents") or []
+        if isinstance(agents, list):
+            agents = [a for a in agents if isinstance(a, str)]
+        else:
+            agents = []
+        st.session_state["_llm_suggested_agents"] = agents
+        if letter or rationale:
+            return letter, (rationale[:400] if rationale else "Suggested based on your description.")
+    except Exception:
+        # Fall back to legacy plain-text parsing.
+        pass
+    letter, explanation = _parse_scenario_suggestion(raw)
+    # Legacy parser had no agent list; clear any previous suggestion.
+    st.session_state["_llm_suggested_agents"] = []
+    return letter, explanation
+
+
 def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
-    """Use LLM (same provider/model as Psych-MAS Assistant) to suggest scenario A or B. Returns (letter 'A'|'B'|'', explanation)."""
+    """Use LLM (same provider/model as Psych-MAS Assistant) to suggest scenario and agents.
+
+    Returns (scenario_letter 'A'|'B'|'C'|'', rationale). Also stores a list of
+    suggested agents in st.session_state['_llm_suggested_agents'] when the
+    model replies with structured JSON.
+    """
     if not (user_description or "").strip():
         return "", "Describe your testing situation (e.g. classroom quiz, certification exam, at-home test)."
     load_dotenv()
+    desc = user_description.strip()[:800]
     prompt = (
-        "You are helping choose an aberrant-behavior detection scenario for a psychometric test.\n\n"
-        "Scenarios:\n"
-        "A = Quality Assurance: identifies non-substantive noise to ensure high-quality data utility. Examples: course evaluations, pilot surveys, classroom quizzes. Uses: detect_rg, detect_pm.\n"
-        "B = Certification Security: protects high-stakes credentials and intellectual property from theft. Examples: medical licensing, answer copying, brain-dump exposure. Uses: detect_ac, detect_pk, detect_pm.\n\n"
-        f"User's situation: {user_description.strip()[:500]}\n\n"
-        "Reply with exactly two lines. Line 1: only one letter, A or B. Line 2: one short sentence explaining why that scenario fits."
+        "You are a psychometrics assistant recommending aberrance-detection scenarios and agents."
+        "\n\nGoal:\n"
+        "Given a short description of a testing situation, choose one scenario letter and a subset of detection agents."
+        "\n\nScenarios:\n"
+        "- A: Low-stakes / Quality Assurance — focuses on data quality and non-substantive noise (e.g., course evaluations, pilot surveys, classroom quizzes).\n"
+        "- B: High-stakes / Certification Security — focuses on test security and credential protection (e.g., licensure, certification, proctored exams).\n"
+        "- C: Custom — when neither A nor B clearly fits or needs are very specialized.\n\n"
+        "Available agents (IDs in parentheses):\n"
+        "- Nonparametric Misfit (detect_nm): Guttman/HT person-fit, no IRT required.\n"
+        "- Model Misfit (detect_pm): parametric person-fit under IRT models.\n"
+        "- Answer Similarity (detect_as): similarity clusters / collusion.\n"
+        "- Answer Copying (detect_ac): source–copier pairs.\n"
+        "- Preknowledge (detect_pk): success on compromised/leaked items.\n"
+        "- Test Tampering (detect_tt): erasures / overwriting patterns.\n"
+        "- Rapid Guessing (detect_rg): unusually fast, low-effort responding.\n\n"
+        "Rules:\n"
+        "- Always pick exactly one scenario_letter in ['A','B','C'].\n"
+        "- agents must be a non-empty subset of the IDs above.\n"
+        "- Map obvious low-stakes surveys/quizzes to A by default.\n"
+        "- Map obvious high-stakes licensure/certification/proctored tests to B by default.\n"
+        "- Use C only when A or B do not clearly apply.\n\n"
+        "User description:\n"
+        f"{desc}\n\n"
+        "Respond with a single JSON object and nothing else, of the form:\n"
+        '{\"scenario_letter\": \"A\", \"agents\": [\"detect_rg\", \"detect_pm\"], \"rationale\": \"Short explanation.\"}'
     )
     # Use same provider and model as Psych-MAS Assistant (Model engine tab)
     if _llm_provider() == "openrouter":
@@ -1121,8 +1169,8 @@ def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
             text, err = _call_openrouter(api_key, model_id, [{"role": "user", "content": prompt}], timeout=60)
             if err or not text:
                 continue
-            letter, explanation = _parse_scenario_suggestion(text)
-            return letter, (explanation[:400] if explanation else "Suggested based on your description.")
+            letter, explanation = _parse_scenario_json_or_legacy(text)
+            return letter, explanation
         return "", "OpenRouter: no model returned a response. Try another model in Model engine or set OPENROUTER_API_KEY in .env."
     # Google (Gemini): try each model variant (same as Psych-MAS Summary)
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -1136,9 +1184,16 @@ def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
             url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
             resp = requests.post(url, params={"key": api_key}, json=body, timeout=60)
             resp.raise_for_status()
-            text = (resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "") or "").strip()
-            letter, explanation = _parse_scenario_suggestion(text)
-            return letter, (explanation[:400] if explanation else "Suggested based on your description.")
+            text = (
+                resp.json()
+                .get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+                or ""
+            ).strip()
+            letter, explanation = _parse_scenario_json_or_legacy(text)
+            return letter, explanation
         except requests.exceptions.HTTPError as e:
             last_err = f"{e.response.status_code if e.response is not None else 'HTTP'}: {e}"
             if e.response is not None and e.response.status_code == 404:
@@ -1734,7 +1789,7 @@ def _analyze_wright_map_image(image_path: str) -> str:
         return f"Error parsing LLM response: {type(e).__name__}: {e}"
 
 
-def _plot_response_for_pdf(resp_row: dict) -> bytes | None:
+def _plot_response_for_pdf(resp_row: dict, *, compact: bool = False) -> bytes | None:
     """Draw response by item (green=correct, red=incorrect) as a bar chart; return PNG bytes."""
     if not resp_row:
         return None
@@ -1743,26 +1798,29 @@ def _plot_response_for_pdf(resp_row: dict) -> bytes | None:
     if n == 0:
         return None
     try:
-        fig, ax = plt.subplots(figsize=(6, 1.8))
+        figsize = (7.0, 1.05) if compact else (6, 1.8)
+        dpi = 100 if compact else 120
+        fig, ax = plt.subplots(figsize=figsize)
         items = list(range(1, n + 1))
         colors_list = ["#40916c" if v == 1 else "#ef4444" for v in vals[:n]]
         ax.bar(items, [1] * n, color=colors_list, width=0.7, edgecolor="none")
         ax.set_ylim(0, 1.2)
         ax.set_yticks([0.5])
         ax.set_yticklabels(["Correct / Incorrect"])
-        ax.set_xlabel("Item")
-        ax.set_title("Response by item (green = correct, red = incorrect)")
+        ax.set_xlabel("Item", fontsize=8 if compact else 10)
+        ax.set_title("Response by item (green = correct, red = incorrect)", fontsize=9 if compact else 11)
+        ax.tick_params(axis="both", labelsize=7 if compact else 9)
         ax.set_xticks(items[:: max(1, n // 20)])
         fig.tight_layout()
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         return buf.getvalue()
     except Exception:
         return None
 
 
-def _plot_rt_for_pdf(rt_row: list, rt_medians: list, student_id: int) -> bytes | None:
+def _plot_rt_for_pdf(rt_row: list, rt_medians: list, student_id: int, *, compact: bool = False) -> bytes | None:
     """Draw response time by item as Forensic Timeline (line + shaded area, white background); return PNG bytes."""
     if not rt_row or not rt_medians or len(rt_row) != len(rt_medians):
         return None
@@ -1770,10 +1828,13 @@ def _plot_rt_for_pdf(rt_row: list, rt_medians: list, student_id: int) -> bytes |
     if n == 0:
         return None
     try:
-        fig, ax = plt.subplots(figsize=(6, 2.2))
+        figsize = (7.0, 1.15) if compact else (6, 2.2)
+        dpi = 100 if compact else 120
+        lbl = 7 if compact else 9
+        fig, ax = plt.subplots(figsize=figsize)
         fig.patch.set_facecolor("white")
         ax.set_facecolor("white")
-        ax.tick_params(colors="black", labelsize=9)
+        ax.tick_params(colors="black", labelsize=lbl)
         ax.spines["bottom"].set_color("black")
         ax.spines["left"].set_color("black")
         ax.spines["top"].set_visible(False)
@@ -1783,16 +1844,16 @@ def _plot_rt_for_pdf(rt_row: list, rt_medians: list, student_id: int) -> bytes |
         ax.title.set_color("black")
         rt_vals = [float(x) for x in rt_row[:n]]
         items = list(range(1, n + 1))
-        ax.plot(items, rt_vals, color="#0d9488", linewidth=2, solid_capstyle="round")
+        ax.plot(items, rt_vals, color="#0d9488", linewidth=1.4 if compact else 2, solid_capstyle="round")
         ax.fill_between(items, 0, rt_vals, alpha=0.3, color="#0d9488")
-        ax.set_xlabel("Item Number")
-        ax.set_ylabel("Response Time")
-        ax.set_title(f"Response Time Across Test — Student {student_id}")
+        ax.set_xlabel("Item Number", fontsize=lbl)
+        ax.set_ylabel("Response Time", fontsize=lbl)
+        ax.set_title(f"Response Time Across Test — Student {student_id}", fontsize=9 if compact else 11)
         ax.set_xticks(items[:: max(1, n // 15)])
         ax.set_ylim(0, max(rt_vals) * 1.1 if rt_vals else 1)
         fig.tight_layout()
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white", edgecolor="none")
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white", edgecolor="none")
         plt.close(fig)
         return buf.getvalue()
     except Exception:
@@ -1805,14 +1866,19 @@ def _plot_percentile_for_pdf(
     all_scores: list[int] | None,
     student_score: int,
     total_items: int,
+    *,
+    compact: bool = False,
 ) -> bytes | None:
     """Draw score distribution (histogram) with student's position marked; return PNG bytes. White background."""
     try:
         pct = min(100, max(0, float(percentile)))
-        fig, ax = plt.subplots(figsize=(6, 2.2))
+        figsize = (7.0, 1.15) if compact else (6, 2.2)
+        dpi = 100 if compact else 120
+        lbl = 7 if compact else 9
+        fig, ax = plt.subplots(figsize=figsize)
         fig.patch.set_facecolor("white")
         ax.set_facecolor("white")
-        ax.tick_params(colors="black", labelsize=9)
+        ax.tick_params(colors="black", labelsize=lbl)
         ax.spines["bottom"].set_color("black")
         ax.spines["left"].set_color("black")
         ax.spines["top"].set_visible(False)
@@ -1830,10 +1896,13 @@ def _plot_percentile_for_pdf(
             )
             ax.axvline(x=student_score, color="#d97706", linewidth=2, linestyle="-", label=f"Student {student_id} (score {student_score})")
             ax.set_xlim(low, high)
-            ax.set_xlabel("Total Score")
-            ax.set_ylabel("Count")
-            ax.set_title(f"Score Distribution — Student {student_id}: {student_score}/{total_items} ({pct:.0f}th percentile)")
-            ax.legend(loc="upper right", fontsize=8, labelcolor="black", facecolor="white", edgecolor="gray")
+            ax.set_xlabel("Total Score", fontsize=lbl)
+            ax.set_ylabel("Count", fontsize=lbl)
+            ax.set_title(
+                f"Score Distribution — Student {student_id}: {student_score}/{total_items} ({pct:.0f}th percentile)",
+                fontsize=9 if compact else 11,
+            )
+            ax.legend(loc="upper right", fontsize=6 if compact else 8, labelcolor="black", facecolor="white", edgecolor="gray")
         else:
             # Fallback: horizontal bar at percentile
             ax.barh(0, pct, left=0, height=0.5, color="#0d9488", alpha=0.8, edgecolor="none")
@@ -1841,11 +1910,11 @@ def _plot_percentile_for_pdf(
             ax.set_ylim(-0.6, 0.6)
             ax.set_yticks([])
             ax.set_xlabel("Percentile (0–100)")
-            ax.set_title(f"Percentile — Student {student_id}: {pct:.0f}th percentile")
+            ax.set_title(f"Percentile — Student {student_id}: {pct:.0f}th percentile", fontsize=9 if compact else 11)
             ax.set_xticks([0, 25, 50, 75, 100])
         fig.tight_layout()
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="white", edgecolor="none")
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white", edgecolor="none")
         plt.close(fig)
         return buf.getvalue()
     except Exception:
@@ -1861,15 +1930,22 @@ def _markdown_to_reportlab(text: str) -> str:
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     # Headings: ### or ## or # at start of line → bold
     s = re.sub(r"^#{1,3}\s*(.+)$", r"<b>\1</b>", s, flags=re.MULTILINE)
-    # Bold: **...** and __...__
+    # Bold: **...** (intentionally do NOT treat underscores as markup; they commonly appear in ids like nm_agent)
     s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
-    s = re.sub(r"__(.+?)__", r"<b>\1</b>", s)
-    # Italic: *...* and _..._ (single; avoid matching inside words)
+    # Italic: *...* (intentionally do NOT treat underscores as markup; they commonly appear in ids like L_S_NO)
     s = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", s)
-    s = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", s)
     # Line breaks
     s = s.replace("\n", "<br/>")
     return s
+
+
+def _escape_reportlab_text(text: str) -> str:
+    """Escape text for ReportLab Paragraph (no inline markup)."""
+    if text is None:
+        return ""
+    s = str(text)
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return s.replace("\n", "<br/>")
 
 
 def _build_test_taker_report_pdf(
@@ -1885,8 +1961,10 @@ def _build_test_taker_report_pdf(
     report_text: str | None,
     all_scores: list[int] | None = None,
 ) -> tuple[bytes, str | None]:
-    """Build a letter-size PDF for the Test-Taker Report (white background). Returns (pdf_bytes, error_message)."""
+    """Build a letter-size PDF for the Test-Taker Report (PsyMAS branding, 12pt body). Returns (pdf_bytes, error_message)."""
     try:
+        import datetime
+
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1899,130 +1977,293 @@ def _build_test_taker_report_pdf(
     lightgrey = colors.HexColor("#e5e7eb")
     green = colors.HexColor("#40916c")
     red = colors.HexColor("#ef4444")
+    navy = colors.HexColor("#1a1a2e")
+    accent = colors.HexColor("#0d9488")
+    muted = colors.HexColor("#64748b")
+    footer_bg = colors.HexColor("#f1f5f9")
 
     temp_files = []
     try:
         buffer = io.BytesIO()
-        margin = 0.75 * inch
+        margin = 0.45 * inch
         doc = SimpleDocTemplate(
             buffer, pagesize=letter,
             rightMargin=margin, leftMargin=margin,
             topMargin=margin, bottomMargin=margin,
         )
+        content_w = letter[0] - 2 * margin
+        gen_date = datetime.date.today().strftime("%Y-%m-%d")
 
         styles = getSampleStyleSheet()
         styles.add(ParagraphStyle(
+            name="TtrBrandTitle",
+            parent=styles["Normal"],
+            fontName="Helvetica-Bold",
+            textColor=colors.white,
+            fontSize=22,
+            leading=26,
+            alignment=1,
+            spaceAfter=2,
+        ))
+        styles.add(ParagraphStyle(
+            name="TtrBrandSub",
+            parent=styles["Normal"],
+            textColor=colors.HexColor("#c4c9d4"),
+            fontSize=11,
+            leading=13,
+            alignment=1,
+            spaceAfter=2,
+        ))
+        styles.add(ParagraphStyle(
+            name="TtrBrandTag",
+            parent=styles["Normal"],
+            textColor=accent,
+            fontSize=10,
+            leading=12,
+            alignment=1,
+            spaceAfter=0,
+        ))
+        styles.add(ParagraphStyle(
             name="TtrHeading1",
             parent=styles["Heading1"],
+            fontName="Helvetica-Bold",
             textColor=black,
-            fontSize=14,
-            spaceAfter=6,
+            fontSize=15,
+            leading=18,
+            spaceAfter=4,
         ))
         styles.add(ParagraphStyle(
             name="TtrHeading2",
             parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
             textColor=black,
-            fontSize=11,
-            spaceBefore=12,
-            spaceAfter=6,
+            fontSize=12,
+            leading=14,
+            spaceBefore=6,
+            spaceAfter=4,
         ))
         styles.add(ParagraphStyle(
             name="TtrNormal",
             parent=styles["Normal"],
             textColor=black,
+            fontSize=12,
+            leading=14,
+            spaceAfter=2,
+        ))
+        styles.add(ParagraphStyle(
+            name="TtrFooter",
+            parent=styles["Normal"],
+            textColor=muted,
             fontSize=9,
-            spaceAfter=4,
+            leading=11,
+            alignment=1,
+            spaceBefore=4,
+            spaceAfter=0,
         ))
         story = []
 
-        story.append(Paragraph("Test-Taker Report", styles["TtrHeading1"]))
-        story.append(Paragraph(f"Student {student_id}", styles["TtrNormal"]))
-        story.append(Spacer(1, 0.15 * inch))
+        # ── PsyMAS header band ──
+        banner_rows = [
+            [Paragraph("PsyMAS", styles["TtrBrandTitle"])],
+            [Paragraph("Psychometric Modeling Assistant System", styles["TtrBrandSub"])],
+            [Paragraph("Forensic drill-down · Individual examinee report", styles["TtrBrandTag"])],
+        ]
+        banner = Table(banner_rows, colWidths=[content_w])
+        banner.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), navy),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, 0), 16),
+            ("BOTTOMPADDING", (0, -1), (-1, -1), 14),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ]))
+        story.append(banner)
+        accent_bar = Table([[""]], colWidths=[content_w], rowHeights=[3])
+        accent_bar.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), accent)]))
+        story.append(accent_bar)
+        story.append(Spacer(1, 0.12 * inch))
 
-        # ── Response Record (iraw.1..iraw.N, TOTAL, red/green cells) ──
+        story.append(Paragraph(
+            f"<b>Test-Taker Report</b> — Student {student_id}",
+            styles["TtrHeading1"],
+        ))
+        story.append(Paragraph(
+            "Response pattern, score placement, response-time profile, and narrative summary "
+            "(when generated in the app). Green / red cells = correct / incorrect.",
+            styles["TtrNormal"],
+        ))
+        story.append(Spacer(1, 0.06 * inch))
+
+        pct = 100 * correct / total_items if total_items else 0
+        summary_line = Paragraph(
+            f"Score {correct}/{total_items} ({pct:.1f}%) · Percentile {percentile:.0f}th",
+            styles["TtrNormal"],
+        )
+
+        # ── Response Record: chunk columns so table width ≤ page (avoids overflow) ──
         if resp_row:
             story.append(Paragraph("Response Record", styles["TtrHeading2"]))
             vals = list(resp_row.values())
-            n = min(len(vals), 40)
-            header_row = [f"iraw.{i + 1}" for i in range(n)] + ["TOTAL"]
-            data_row = [str(int(v)) if v in (0, 1) else str(v) for v in vals[:n]] + [f"{correct}/{total_items}"]
-            col_widths = [0.28 * inch] * n + [0.6 * inch]
-            cell_data = [header_row, data_row]
-            t = Table(cell_data, colWidths=col_widths)
-            style_list = [
-                ("FONTSIZE", (0, 0), (-1, -1), 7),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("TEXTCOLOR", (0, 0), (-1, 0), black),
-                ("TEXTCOLOR", (0, 1), (n - 1, 1), colors.white),
-                ("TEXTCOLOR", (n, 1), (n, 1), black),
-                ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
-                ("BACKGROUND", (n, 1), (n, 1), lightgrey),
-            ]
-            for j in range(n):
-                if j < len(vals) and vals[j] == 1:
-                    style_list.append(("BACKGROUND", (j, 1), (j, 1), green))
-                elif j < len(vals) and vals[j] == 0:
-                    style_list.append(("BACKGROUND", (j, 1), (j, 1), red))
-            t.setStyle(TableStyle(style_list))
-            story.append(t)
-            pct = 100 * correct / total_items if total_items else 0
-            story.append(Paragraph(f"Total Score: {correct} / {total_items} ({pct:.1f}%)", styles["TtrNormal"]))
-            story.append(Spacer(1, 0.12 * inch))
+            max_items = min(len(vals), 48)
+            chunk = 16
+            tbl_font = 9
+            tot_w = 0.45 * inch
+            for start in range(0, max_items, chunk):
+                end = min(start + chunk, max_items)
+                n = end - start
+                slice_vals = vals[start:end]
+                last_chunk = end >= max_items
+                if last_chunk:
+                    header_row = [f"{start + i + 1}" for i in range(n)] + ["Tot"]
+                    data_row = [str(int(v)) if v in (0, 1) else str(v) for v in slice_vals] + [
+                        f"{correct}/{total_items}"
+                    ]
+                    col_w = (content_w - tot_w) / n
+                    col_widths = [col_w] * n + [tot_w]
+                    tot_col = n
+                else:
+                    header_row = [f"{start + i + 1}" for i in range(n)]
+                    data_row = [str(int(v)) if v in (0, 1) else str(v) for v in slice_vals]
+                    col_w = content_w / n
+                    col_widths = [col_w] * n
+                    tot_col = None
+                cell_data = [header_row, data_row]
+                t = Table(cell_data, colWidths=col_widths)
+                style_list = [
+                    ("FONTSIZE", (0, 0), (-1, -1), tbl_font),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 1),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 1),
+                    ("TOPPADDING", (0, 0), (-1, -1), 1),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), black),
+                    ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
+                ]
+                last_col = len(data_row) - 1
+                style_list.append(("TEXTCOLOR", (0, 1), (last_col - 1, 1), colors.white))
+                if tot_col is not None:
+                    style_list.append(("BACKGROUND", (tot_col, 1), (tot_col, 1), lightgrey))
+                    style_list.append(("TEXTCOLOR", (tot_col, 1), (tot_col, 1), black))
+                for j in range(n):
+                    gi = start + j
+                    if gi < len(vals) and vals[gi] == 1:
+                        style_list.append(("BACKGROUND", (j, 1), (j, 1), green))
+                    elif gi < len(vals) and vals[gi] == 0:
+                        style_list.append(("BACKGROUND", (j, 1), (j, 1), red))
+                t.setStyle(TableStyle(style_list))
+                story.append(t)
+                story.append(Spacer(1, 0.02 * inch))
+            story.append(summary_line)
+            story.append(Spacer(1, 0.04 * inch))
+        else:
+            story.append(summary_line)
+            story.append(Spacer(1, 0.04 * inch))
 
-        # ── Percentile (distribution plot) ──
-        story.append(Paragraph("Percentile", styles["TtrHeading2"]))
-        png_pct = _plot_percentile_for_pdf(percentile, student_id, all_scores, correct, total_items)
+        # ── Percentile (compact plot) + Forensic Timeline side-by-side in one row ──
+        png_pct = _plot_percentile_for_pdf(
+            percentile, student_id, all_scores, correct, total_items, compact=True
+        )
+        png_rt = None
+        if rt_row and rt_medians:
+            png_rt = _plot_rt_for_pdf(rt_row, rt_medians, student_id, compact=True)
+
+        plot_h = 0.92 * inch
+        half_w = (content_w - 0.08 * inch) / 2
+        row_cells = []
         if png_pct:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp:
                 fp.write(png_pct)
                 fp.flush()
                 temp_files.append(fp.name)
-            story.append(RLImage(temp_files[-1], width=5.5 * inch, height=2.0 * inch))
-        story.append(Paragraph(f"Percentile: {percentile:.0f}th (position in total score distribution).", styles["TtrNormal"]))
-        story.append(Spacer(1, 0.12 * inch))
+            row_cells.append(RLImage(temp_files[-1], width=half_w, height=plot_h))
+        else:
+            row_cells.append(Paragraph("—", styles["TtrNormal"]))
+        if png_rt:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp_rt:
+                fp_rt.write(png_rt)
+                fp_rt.flush()
+                temp_files.append(fp_rt.name)
+            row_cells.append(RLImage(temp_files[-1], width=half_w, height=plot_h))
+        elif rt_row and rt_medians and len(rt_row) <= 20:
+            rt_vals = [float(x) for x in rt_row[:20]]
+            meds = rt_medians[:20]
+            rows = [["#", "RT", "Δ"]]
+            for i, (rv, m) in enumerate(zip(rt_vals, meds)):
+                rows.append([str(i + 1), f"{rv:.1f}", ">" if rv >= m else "<"])
+            t2 = Table(rows, colWidths=[0.32 * inch, 0.5 * inch, 0.28 * inch])
+            t2.setStyle(TableStyle([
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            row_cells.append(t2)
+        else:
+            row_cells.append(Paragraph("—", styles["TtrNormal"]))
 
-        # ── Forensic Timeline (response time by item) ──
-        if rt_row and rt_medians:
-            story.append(Paragraph("Forensic Timeline", styles["TtrHeading2"]))
-            png_rt = _plot_rt_for_pdf(rt_row, rt_medians, student_id)
-            if png_rt:
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp_rt:
-                    fp_rt.write(png_rt)
-                    fp_rt.flush()
-                    temp_files.append(fp_rt.name)
-                story.append(RLImage(temp_files[-1], width=5.5 * inch, height=2.0 * inch))
-                story.append(Spacer(1, 0.1 * inch))
-            elif len(rt_row) <= 30:
-                rt_vals = [float(x) for x in rt_row[:30]]
-                meds = rt_medians[:30]
-                rows = [["Item", "RT", "vs median"]]
-                for i, (rv, m) in enumerate(zip(rt_vals, meds)):
-                    rows.append([str(i + 1), f"{rv:.2f}", "slower" if rv >= m else "faster"])
-                t2 = Table(rows, colWidths=[0.6 * inch, 0.8 * inch, 1 * inch])
-                t2.setStyle(TableStyle([
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                ]))
-                story.append(t2)
-            story.append(Spacer(1, 0.1 * inch))
+        story.append(Paragraph("Score distribution · Response time", styles["TtrHeading2"]))
+        plot_table = Table([row_cells], colWidths=[half_w, half_w])
+        plot_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        story.append(plot_table)
 
-        # ── Report (LLM-generated) ──
-        story.append(Paragraph("Report", styles["TtrHeading2"]))
+        # ── Report (LLM): length cap (large type uses more vertical space) ──
+        story.append(Paragraph("Narrative summary (LLM)", styles["TtrHeading2"]))
         llm_style = ParagraphStyle(
             name="TtrReport",
             parent=styles["TtrNormal"],
-            fontSize=9,
-            leading=11,
-            spaceAfter=6,
+            fontSize=12,
+            leading=15,
+            spaceAfter=4,
         )
+        max_report_chars = 1600
         if report_text and report_text.strip():
-            for para in report_text.strip().split("\n\n")[:12]:
-                safe = _markdown_to_reportlab(para.strip())
+            full_rt = report_text.strip()
+            remaining = max_report_chars
+            consumed = 0
+            for para in full_rt.split("\n\n")[:8]:
+                if remaining <= 0:
+                    break
+                raw = para.strip()
+                chunk = raw[:remaining]
+                consumed += len(chunk)
+                remaining -= len(chunk)
+                safe = _markdown_to_reportlab(chunk)
                 if safe.strip():
-                    story.append(Paragraph(safe[:2500], llm_style))
+                    try:
+                        story.append(Paragraph(safe, llm_style))
+                    except Exception:
+                        story.append(Paragraph(_escape_reportlab_text(chunk), llm_style))
+            if consumed < len(full_rt):
+                story.append(Paragraph("<i>[Summary truncated for one-page PDF.]</i>", llm_style))
         else:
-            story.append(Paragraph("No report generated. Generate the Test-Taker Report in the app to produce an LLM summary.", styles["TtrNormal"]))
+            story.append(Paragraph("No LLM summary (generate the report in the app).", styles["TtrNormal"]))
+
+        story.append(Spacer(1, 0.14 * inch))
+        footer_para = Paragraph(
+            f"<b>PsyMAS</b> · Psychometric Modeling Assistant System · Ver. 0.5.0<br/>"
+            f"Confidential forensic analysis artifact · Generated {gen_date} · Not for high-stakes decisions without review",
+            styles["TtrFooter"],
+        )
+        foot_table = Table([[footer_para]], colWidths=[content_w])
+        foot_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), footer_bg),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+            ("LINEABOVE", (0, 0), (-1, 0), 2, accent),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        story.append(foot_table)
 
         doc.build(story)
         return buffer.getvalue(), None
@@ -2837,7 +3078,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
             "A": {
                 "title": "Scenario A: Low-Stakes",
                 "icon": "🧹",
-                "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes",
+                "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\n \n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes",
                 "selects": ["detect_rg", "detect_pm"],
             },
             "B": {
@@ -2879,9 +3120,16 @@ def _render_results(final: dict, response_only: bool = False) -> None:
             suggest_btn = st.button("Suggest scenario from description", key="aberrance_suggest_scenario")
         if suggest_btn and (llm_req or st.session_state.get("aberrance_llm_requirement", "")):
             with st.spinner("Asking LLM..."):
-                letter, explanation = _suggest_aberrance_scenario(llm_req.strip() or st.session_state.get("aberrance_llm_requirement", ""))
+                letter, explanation = _suggest_aberrance_scenario(
+                    llm_req.strip() or st.session_state.get("aberrance_llm_requirement", "")
+                )
+            suggested_agents = st.session_state.get("_llm_suggested_agents") or []
             if letter and letter in SCENARIO_PRESETS:
                 _apply_aberrance_scenario(letter)
+                # If the model also proposed explicit agents, sync the checkboxes to that list.
+                if suggested_agents:
+                    for fn in ABERRANCE_FUNCTIONS:
+                        st.session_state[f"aberrance_cb_{fn}"] = fn in suggested_agents
                 st.session_state["aberrance_llm_suggestion"] = explanation
                 st.rerun()
             elif explanation:
@@ -3173,11 +3421,9 @@ st.markdown("""
 NAV_OPTIONS = [
     "Scenario",
     "Preparation",
-    "Detect Progress",
     "Data review",
     "Aberrance Summary",
     "Student Profile",
-    "Tools",
     "Settings",
 ]
 if "run_mode" not in st.session_state:
@@ -3192,18 +3438,20 @@ run_mode = st.session_state.get("run_mode", "Scenario")
 
 # Allow safe programmatic navigation without fighting the sidebar radio widget.
 # Any code can set st.session_state["_nav_request"] = "<page>" and st.rerun().
+# On the same run, st.radio can still report a stale value; do not let that overwrite run_mode
+# (see _psymas_just_nav_programmatic below).
 _nav_req = st.session_state.pop("_nav_request", None)
 if _nav_req in NAV_OPTIONS:
     st.session_state.run_mode = _nav_req
-    # Sync the sidebar selection BEFORE the widget is created (avoids StreamlitAPIException).
     st.session_state["sidebar_nav"] = _nav_req
     run_mode = _nav_req
+    st.session_state["_psymas_just_nav_programmatic"] = True
 
-# Back-compat: older sessions may still point to removed pages
+# Back-compat: older sessions may still point to removed tool pages
 _LEGACY_TOOL_PAGES = {"Aberrance only": "Aberrance", "IRT only": "IRT", "RT only": "RT", "Full workflow": "Aberrance"}
 if run_mode in _LEGACY_TOOL_PAGES:
-    st.session_state["tools_mode"] = _LEGACY_TOOL_PAGES[run_mode]
-    st.session_state.run_mode = "Tools"
+    # Route legacy tool pages to the main Aberrance dashboard instead of the removed Tools page.
+    st.session_state.run_mode = "Aberrance Summary"
     st.rerun()
 if run_mode == "Command Center":
     st.session_state.run_mode = "Aberrance Summary"
@@ -3221,46 +3469,34 @@ with st.sidebar:
     _nav_ready = {
         "Scenario": True,
         "Preparation": True,
-        "Detect Progress": _detect_status == "done",
         "Data review": _has_resp,
         "Aberrance Summary": _has_forensic,
         "Student Profile": _has_forensic,
-        "Tools": _has_resp,
         "Settings": True,
     }
     def _nav_label(x: str) -> str:
         base = {
             "Scenario": "🧭 Scenario",
             "Preparation": "🧪 Preparation",
-            "Detect Progress": "⏳ Detect Progress",
             "Data review": "📋 Data review",
-            "Tools": "🧰 Tools",
             "Aberrance Summary": "🧾 Aberrance Summary",
             "Student Profile": "👤 Student Profile",
             "Settings": "⚙️ Settings",
         }.get(x, x)
-        # Show a dot for every option (clearer readiness affordance)
-        if x == "Detect Progress":
-            if _detect_status == "running":
-                dot = "🟡 "
-            elif _detect_status == "done" and _has_forensic:
-                dot = "🟢 "
-            else:
-                dot = "⚪ "
-        else:
-            dot = "🟢 " if _nav_ready.get(x) else "⚪ "
+        dot = "🟢 " if _nav_ready.get(x) else "⚪ "
         return dot + base
     sidebar_choice = st.radio(
         "Navigate",
         options=NAV_OPTIONS,
         format_func=_nav_label,
         key="sidebar_nav",
-                label_visibility="visible",
-            )
-    if sidebar_choice != run_mode:
+        label_visibility="visible",
+    )
+    _prog_nav = st.session_state.pop("_psymas_just_nav_programmatic", False)
+    if not _prog_nav and sidebar_choice != run_mode:
         st.session_state.run_mode = sidebar_choice
         st.rerun()
-    st.caption("Start on **Scenario** to choose presets, then go to **Preparation** to upload data / generate ψ. Use **Settings** to configure the LLM provider and model.")
+    st.caption("Start on **Scenario**, then **Preparation** to upload data and run Detect. Use **Settings** for the LLM.")
     st.divider()
 
     # Compact session status overview in the sidebar (no upload widgets here)
@@ -3351,8 +3587,7 @@ def _render_tool_aberrance() -> None:
     SCENARIO_PRESETS_AB = {
         "A": {"title": "Scenario A: Quality Assurance (Low-Stakes)", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes", "selects": ["detect_rg", "detect_pm"]},
         "B": {"title": "Scenario B: Certification Security (High-Stakes/Proctored)", "description": "Protects high-stakes credentials and intellectual property from theft.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure", "selects": ["detect_ac", "detect_pk", "detect_pm"]},
-        "C": {"title": "Scenario C: Behavioral Forensics (Online/Unproctored)", "description": "Monitors interaction anomalies within the multimodal process data.\n\nExamples: Rapid guessing; Suspicious latencies; Student collusion", "selects": ["detect_as", "detect_rg", "detect_nm"]},
-        "D": {"title": "Scenario D: Custom", "description": "Choose detection agents manually (no preset).", "selects": []},
+        "C": {"title": "Scenario C: Custom", "description": "Choose detection agents manually (no preset).", "selects": []},
     }
     for fn in ABERRANCE_FUNCTIONS:
         if f"ab_only_cb_{fn}" not in st.session_state:
@@ -3373,7 +3608,7 @@ def _render_tool_aberrance() -> None:
 
     # Scenario controls moved to the dedicated "Scenario" page.
     scenario_choice_ab = st.session_state.get("ab_only_scenario_select") or ""
-    if scenario_choice_ab in ("A", "B", "D"):
+    if scenario_choice_ab in ("A", "B", "C"):
         st.markdown(f"**Scenario preset:** {SCENARIO_PRESETS_AB[scenario_choice_ab]['title']}")
         st.caption(SCENARIO_PRESETS_AB[scenario_choice_ab]["description"])
     else:
@@ -3381,6 +3616,62 @@ def _render_tool_aberrance() -> None:
     if st.button("Change scenario", key="ab_only_change_scenario"):
         st.session_state["_nav_request"] = "Scenario"
         st.rerun()
+
+    # Inline chat-style helper on Preparation page to suggest agents from description.
+    with st.container(border=True):
+        helper_label = "Describe your testing situation for agent suggestions"
+        if scenario_choice_ab != "C":
+            helper_label += " (works best with Scenario C: Custom)"
+        st.markdown(
+            f"<div><span>{helper_label}</span>"
+            "<span style='margin-left:auto;'>Ctrl+Enter to send</span></div>",
+            unsafe_allow_html=True,
+        )
+        prep_llm_req = st.text_area(
+            "Describe your testing situation",
+            value=st.session_state.get("prep_llm_requirement", ""),
+            placeholder="Describe stakes, modality, security concerns…",
+            height=80,
+            key="prep_llm_requirement",
+            label_visibility="collapsed",
+        )
+        suggest_agents_btn = st.button("Suggest agents from description", key="prep_suggest_agents")
+        # Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger suggestion
+        st.markdown(
+            """
+            <script>
+            (function() {
+              if (window._psymasPrepHotkeyBound) return;
+              window._psymasPrepHotkeyBound = true;
+              document.addEventListener('keydown', function(e) {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  const target = Array.from(document.querySelectorAll('button'))
+                    .find(b => b.innerText.trim() === 'Suggest agents from description');
+                  if (target) { e.preventDefault(); target.click(); }
+                }
+              });
+            })();
+            </script>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if suggest_agents_btn and (prep_llm_req or st.session_state.get("prep_llm_requirement", "")):
+        with st.spinner("Asking LLM for agent suggestions…"):
+            letter_prep, explanation_prep = _suggest_aberrance_scenario(
+                prep_llm_req.strip() or st.session_state.get("prep_llm_requirement", "")
+            )
+        # For suggestions here we only borrow the preset's agent list — we keep scenario as Custom if already set.
+        if letter_prep in SCENARIO_PRESETS_AB and letter_prep != "C":
+            _apply_ab_only_scenario(letter_prep, update_select=False)
+        if explanation_prep:
+            st.session_state["prep_llm_suggestion"] = explanation_prep
+        st.rerun()
+    if st.session_state.get("prep_llm_suggestion"):
+        st.info(st.session_state["prep_llm_suggestion"])
+        if st.button("Clear suggestion", key="prep_clear_suggestion"):
+            st.session_state["prep_llm_suggestion"] = ""
+            st.rerun()
 
     st.caption("Select which detection functions to run. Scenario and LLM above update these; changing reflects as Custom.")
     ab_fns = []
@@ -3393,7 +3684,7 @@ def _render_tool_aberrance() -> None:
         ("detect_nm", ("Guttman Errors (detect_nm)", "Detects hard-right but easy-wrong patterns.")),
         ("detect_tt", ("Test Tampering (detect_tt)", "Requires erasure data.")),
     ]:
-        if st.checkbox(label_help[0], value=st.session_state.get(f"ab_only_cb_{fn}", False), key=f"ab_only_cb_{fn}", help=label_help[1]):
+        if st.checkbox(label_help[0], key=f"ab_only_cb_{fn}", help=label_help[1]):
             ab_fns.append(fn)
     st.divider()
 
@@ -3611,9 +3902,9 @@ def _render_scenario_page() -> None:
     st.subheader("🧭 Scenario Selection")
     # Scenario A = Low-stakes (effort/quality); B = High-stakes (full detection set per table).
     SCENARIO_PRESETS_AB = {
-        "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Low-stakes"},
-        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, and tampering detection.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
-        "D": {"title": "Scenario D: Custom", "description": "Choose detection agents manually in **Tools → Aberrance**.", "icon": "✏️", "selects": [], "image": "https://placehold.co/320x160/2d2d4a/94a3b8?text=Custom"},
+        "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\n Examples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Low-stakes"},
+        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, and tampering detection.\n Examples: Medical licensing; Answer copying; Brain-dump", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
+        "C": {"title": "Scenario C: Custom", "description": "Choose detection agents manually on the Preparation page.\n\n\n", "icon": "✏️", "selects": [], "image": "https://placehold.co/320x160/2d2d4a/94a3b8?text=Custom"},
     }
     # CSS: card container (relative, left-aligned), overlay button on top, image left-aligned, equal height
     st.markdown("""
@@ -3707,9 +3998,9 @@ def _render_scenario_page() -> None:
     if "ab_only_scenario_select_previous" not in st.session_state:
         st.session_state["ab_only_scenario_select_previous"] = None
     if "ab_only_scenario_select" not in st.session_state:
-        st.session_state["ab_only_scenario_select"] = "D"
-    elif st.session_state.get("ab_only_scenario_select") == "C":
-        st.session_state["ab_only_scenario_select"] = "D"
+        st.session_state["ab_only_scenario_select"] = "C"
+    elif st.session_state.get("ab_only_scenario_select") == "D":
+        st.session_state["ab_only_scenario_select"] = "C"
 
     def _apply_ab_only_scenario(letter: str) -> None:
         if letter in SCENARIO_PRESETS_AB:
@@ -3718,13 +4009,13 @@ def _render_scenario_page() -> None:
             for fn in ABERRANCE_FUNCTIONS:
                 st.session_state[f"ab_only_cb_{fn}"] = fn in SCENARIO_PRESETS_AB[letter]["selects"]
         else:
-            st.session_state["ab_only_scenario_select"] = "D"
-            st.session_state["ab_only_scenario_select_previous"] = "D"
+            st.session_state["ab_only_scenario_select"] = "C"
+            st.session_state["ab_only_scenario_select_previous"] = "C"
 
-    # Three cards in one row (A, B, D): image + title + description, whole card clickable via overlay button
+    # Three cards in one row (A, B, C): image + title + description, whole card clickable via overlay button
     st.markdown('<div id="scenario-cards-marker" style="display:none;" aria-hidden="true"></div>', unsafe_allow_html=True)
     cols = st.columns(3)
-    for i, letter in enumerate(["A", "B", "D"]):
+    for i, letter in enumerate(["A", "B", "C"]):
         with cols[i]:
             preset = SCENARIO_PRESETS_AB[letter]
             title = preset["title"]
@@ -3738,10 +4029,10 @@ def _render_scenario_page() -> None:
                     st.markdown(f"<div style='height:80px;background:linear-gradient(135deg,#1e3a5f,#2d4a3e);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:2rem;'>{icon}</div>", unsafe_allow_html=True)
                 # Fixed-height content block so all four cards are the same height (title + description)
                 _desc_esc = (desc or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+                _desc_html = _desc_esc.replace("Examples:", "<strong>Examples:</strong>").replace("\n\n", "<br><br>")
                 st.markdown(
-                    f"<div style='min-height:70px;'><strong>{icon} {title}</strong>"
-                    f"<p style='font-size:0.88rem;color:rgba(255,255,255,0.85);line-height:1.45;margin:0.5em 0 0 0;white-space:pre-wrap;'>{_desc_esc}</p>"
-                    f"<div style='height:1em;'></div></div>",
+                    f"<div style='min-height:50px;'><strong>{icon} {title}</strong>"
+                    f"<p style='font-size:0.88rem;line-height:1.4;margin:0.35em 0 0.25em 0;white-space:pre-wrap;'>{_desc_html}</p></div>",
                     unsafe_allow_html=True,
                 )
                 if st.button("Select", key=f"scenario_card_{letter}"):
@@ -3749,33 +4040,6 @@ def _render_scenario_page() -> None:
                     st.session_state["prep_compromised_items"] = st.session_state.get("ab_only_compromised_items") or []
                     st.session_state["_nav_request"] = "Preparation"
                     st.rerun()
-
-    st.divider()
-
-    llm_req_ab = st.text_area(
-        "Describe your testing situation",
-        value=st.session_state.get("ab_only_llm_requirement", ""),
-        placeholder="Describe your testing context; the assistant will suggest a suitable scenario. Select LLM service from **Settings**.",
-        height=100,
-        key="ab_only_llm_requirement",
-        label_visibility="collapsed",
-    )
-    suggest_btn_ab = st.button("Suggest scenario from description", key="ab_only_suggest_scenario")
-    if suggest_btn_ab and (llm_req_ab or st.session_state.get("ab_only_llm_requirement", "")):
-        with st.spinner("Asking LLM…"):
-            letter_ab, explanation_ab = _suggest_aberrance_scenario(llm_req_ab.strip() or st.session_state.get("ab_only_llm_requirement", ""))
-        if letter_ab and letter_ab in SCENARIO_PRESETS_AB and letter_ab != "C":
-            _apply_ab_only_scenario(letter_ab)
-            st.session_state["ab_only_llm_suggestion"] = explanation_ab
-            st.rerun()
-        elif explanation_ab:
-            st.session_state["ab_only_llm_suggestion"] = explanation_ab
-            st.rerun()
-    if st.session_state.get("ab_only_llm_suggestion"):
-        st.info(st.session_state["ab_only_llm_suggestion"])
-        if st.button("Clear suggestion", key="ab_only_clear_suggestion"):
-            st.session_state["ab_only_llm_suggestion"] = ""
-            st.rerun()
 
     st.divider()
 
@@ -4009,7 +4273,6 @@ elif run_mode == "Settings":
 
 elif run_mode == "Preparation":
     load_dotenv()
-
     st.markdown(
         """
         <style>
@@ -4136,22 +4399,23 @@ elif run_mode == "Preparation":
     SCENARIO_PRESETS_AB_NAMES = {
         "A": "Scenario A: Low-Stakes",
         "B": "Scenario B: High-Stakes",
-        "D": "Scenario D: Custom",
-        "Custom": "Scenario D: Custom",  # backward compat
+        "C": "Scenario C: Custom",
+        "Custom": "Scenario C: Custom",  # backward compat
     }
     SCENARIO_PRESET_IMAGES = {
         "A": "https://placehold.co/480x120/1e3a5f/94a3b8?text=Low-stakes",
         "B": "https://placehold.co/480x120/3d1f1f/94a3b8?text=High-stakes",
+        "C": "https://placehold.co/480x120/2d2d4a/94a3b8?text=Custom",
     }
     for fn in ABERRANCE_FUNCTIONS:
         if f"ab_only_cb_{fn}" not in st.session_state:
             st.session_state[f"ab_only_cb_{fn}"] = False
     if "ab_only_scenario_select" not in st.session_state:
-        st.session_state["ab_only_scenario_select"] = "D"
-    scenario_letter = st.session_state.get("ab_only_scenario_select") or "D"
-    if scenario_letter == "C":
-        st.session_state["ab_only_scenario_select"] = "D"
-        scenario_letter = "D"
+        st.session_state["ab_only_scenario_select"] = "C"
+    scenario_letter = st.session_state.get("ab_only_scenario_select") or "C"
+    if scenario_letter in ("D", "Custom"):
+        st.session_state["ab_only_scenario_select"] = "C"
+        scenario_letter = "C"
 
     # Compact left-aligned banner at top (reuses Scenario page imagery)
     banner_img = SCENARIO_PRESET_IMAGES.get(scenario_letter)
@@ -4161,7 +4425,77 @@ elif run_mode == "Preparation":
             unsafe_allow_html=True,
         )
 
-    st.caption("Select which aberrance agents to include when you click **Detect**. Presets from **Scenario** pre-fill these; you can change them here.")
+    # When Custom is selected, show a compact helper card to ask the LLM for agent suggestions.
+    if scenario_letter == "C":
+        with st.container(border=True):
+            st.markdown(
+                "<div style='font-size:0.85rem;color:#64748b;display:flex;align-items:center;justify-content:space-between;'>"
+                "<span>Describe your testing situation; the assistant will suggest agents.</span>"
+                "<span>Ctrl+Enter to send</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            prep_llm_req_main = st.text_area(
+                "Describe your testing situation for Preparation agents",
+                value=st.session_state.get("prep_llm_requirement_main", ""),
+                placeholder="Describe stakes, modality, security risks, proctoring, etc.…",
+                height=80,
+                key="prep_llm_requirement_main",
+                label_visibility="collapsed",
+            )
+            suggest_btn_main = st.button("Suggest agents from description", key="prep_suggest_agents_main")
+            # Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger suggestion
+            st.markdown(
+                """
+                <script>
+                (function() {
+                  if (window._psymasPrepMainHotkeyBound) return;
+                  window._psymasPrepMainHotkeyBound = true;
+                  document.addEventListener('keydown', function(e) {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      const target = Array.from(document.querySelectorAll('button'))
+                        .find(b => b.innerText.trim() === 'Suggest agents from description');
+                      if (target) { e.preventDefault(); target.click(); }
+                    }
+                  });
+                })();
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        if suggest_btn_main and (prep_llm_req_main or st.session_state.get("prep_llm_requirement_main", "")):
+            # Reuse the same LLM helper as the Scenario page.
+            with st.spinner("Asking LLM for agent suggestions…"):
+                letter_main, explanation_main = _suggest_aberrance_scenario(
+                    prep_llm_req_main.strip() or st.session_state.get("prep_llm_requirement_main", "")
+                )
+            suggested_agents = st.session_state.get("_llm_suggested_agents") or []
+            # If agents were explicitly suggested, prefer them. Otherwise, fall back to scenario-based defaults.
+            if suggested_agents:
+                for fn in ABERRANCE_FUNCTIONS:
+                    st.session_state[f"ab_only_cb_{fn}"] = fn in suggested_agents
+            else:
+                SCENARIO_PRESETS_AB_PREP = {
+                    "A": ["detect_rg", "detect_pm"],
+                    "B": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"],
+                    "C": [],
+                }
+                if letter_main in SCENARIO_PRESETS_AB_PREP:
+                    st.session_state["ab_only_scenario_select"] = letter_main
+                    scenario_letter = letter_main
+                    for fn in ABERRANCE_FUNCTIONS:
+                        st.session_state[f"ab_only_cb_{fn}"] = fn in SCENARIO_PRESETS_AB_PREP[letter_main]
+            if explanation_main:
+                st.session_state["prep_llm_suggestion_main"] = explanation_main
+            st.rerun()
+        if st.session_state.get("prep_llm_suggestion_main"):
+            st.info(st.session_state["prep_llm_suggestion_main"])
+            if st.button("Clear suggestion", key="prep_clear_suggestion_main"):
+                st.session_state["prep_llm_suggestion_main"] = ""
+                st.rerun()
+
+    st.caption("Select agents to run, then upload data and click **Detect** below.")
 
     # Simple checkbox list of all agents on Preparation
     # Ordered to match index categories: nm, pm, as, pk, tt, (cp implicit), rg.
@@ -4175,7 +4509,7 @@ elif run_mode == "Preparation":
         ("detect_rg", "Rapid Guessing (detect_rg) — unusually fast, low-effort responding."),
     ]
     for fn, desc in prep_agent_labels:
-        st.checkbox(desc, value=st.session_state.get(f"ab_only_cb_{fn}", False), key=f"ab_only_cb_{fn}")
+        st.checkbox(desc, key=f"ab_only_cb_{fn}")
 
     prep_ab_fns = [fn for fn, _ in prep_agent_labels if st.session_state.get(f"ab_only_cb_{fn}")]
     if not prep_ab_fns:
@@ -4190,8 +4524,15 @@ elif run_mode == "Preparation":
     need_model = any(
         fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"]
     )  # IRT model needed when any IRT-based agent is selected
-
     st.divider()
+
+    if not need_model:
+        st.info(
+            "**Item parameters (ψ, psi)** are only required for **detect_pm**, **detect_pk**, **detect_ac**, "
+            "**detect_as**, or **detect_rg**. "
+            "**detect_nm** alone (the default if nothing is checked) does not use ψ—you can upload **Response** "
+            "and run **Detect** below. Add **detect_tt** only if you need tampering detection."
+        )
 
     # Same row, equal width: Upload Response | Model Estimation | Upload Item Parameter
     col_resp, col_model, col_psi = st.columns(3, gap="medium")
@@ -4292,7 +4633,9 @@ elif run_mode == "Preparation":
                     "<div class='psymas-card-head'><div class='psymas-card-title'>Model Estimation</div></div>",
                     unsafe_allow_html=True,
                 )
-                st.caption("Not required for selected agents.")
+                st.caption(
+                    "Select an IRT-based agent (pm, pk, ac, as, or rg) above to estimate or import ψ here."
+                )
 
     with col_psi:
         if need_model:
@@ -4351,7 +4694,9 @@ elif run_mode == "Preparation":
                     "<div class='psymas-card-head'><div class='psymas-card-title'>Upload Item Parameter</div></div>",
                     unsafe_allow_html=True,
                 )
-                st.caption("Not required for selected agents.")
+                st.caption(
+                    "Select an IRT-based agent (pm, pk, ac, as, or rg) above to upload a ψ file here."
+                )
 
     # RT upload shown when any RT-using agent is selected
     if need_rt:
@@ -4520,23 +4865,109 @@ elif run_mode == "Preparation":
                 st.session_state["detect_run_id"] = run_id
                 st.session_state["detect_job_status"] = "running"
                 st.session_state["detect_job_error"] = None
-                st.session_state["_nav_request"] = "Detect Progress"
+                st.session_state["_nav_request"] = "Preparation"
                 st.rerun()
         except Exception as e:
             st.error(f"Failed to start detection backend: {e}")
 
-elif run_mode == "Detect Progress":
-    load_dotenv()
-    st.subheader("⏳ Detect Progress")
-    st.caption("Running 8 aberrance agents (ψ provided from Preparation). Keep this page open until it finishes.")
+    # ── Run status (when a job was started) ──
+    run_id = st.session_state.get("detect_run_id")
+    if run_id and st.session_state.get("last_uploaded_responses"):
+        st.divider()
+        st.subheader("Run status")
+        if "detect_job_status" not in st.session_state:
+            st.session_state["detect_job_status"] = "pending"
+        _job_status = st.session_state.get("detect_job_status", "pending")
+        if _job_status == "done" and st.session_state.get("forensic_result"):
+            st.success("Detection completed.")
+            if st.button("Open Aberrance Summary", key="prep_open_summary", type="primary"):
+                st.session_state["_nav_request"] = "Aberrance Summary"
+                st.rerun()
+        elif _job_status == "error":
+            st.error("Detection failed: " + (st.session_state.get("detect_job_error") or "Unknown error."))
+            if st.button("Try again", key="prep_retry_detect"):
+                st.session_state["detect_run_id"] = None
+                st.session_state["detect_job_status"] = "pending"
+                st.session_state["detect_job_error"] = None
+                st.rerun()
+        else:
+            if _job_status != "done":
+                st.session_state["detect_job_status"] = "running"
+            _prog = st.progress(0)
+            _status = st.empty()
+            st.session_state["_detect_prog_current"] = 0
 
-    # Optional: force a fresh LangGraph rerun using current session data
-    with st.expander("Advanced controls", expanded=False):
-        st.caption("If a previous run stalled or you changed settings, you can force a fresh aberrance detection rerun.")
+            def _smooth_to(target: int, *, duration_s: float = 0.35) -> None:
+                target = max(0, min(100, int(target)))
+                try:
+                    start = int(st.session_state.get("_detect_prog_current", 0))
+                except Exception:
+                    start = 0
+                if target <= start:
+                    _prog.progress(target)
+                    st.session_state["_detect_prog_current"] = target
+                    return
+                steps = max(1, int(duration_s / 0.02))
+                for i in range(1, steps + 1):
+                    v = start + (target - start) * (i / steps)
+                    _prog.progress(int(v))
+                    time.sleep(0.02)
+                _prog.progress(target)
+                st.session_state["_detect_prog_current"] = target
+
+            responses = st.session_state["last_uploaded_responses"]
+            rt_data = st.session_state.get("last_uploaded_rt_data") or []
+            try:
+                status_resp = requests.get(f"{BACKEND_URL}/detect/{run_id}/status", timeout=20)
+                status_resp.raise_for_status()
+                js = status_resp.json()
+            except Exception as e:
+                st.session_state["detect_job_status"] = "error"
+                st.session_state["detect_job_error"] = str(e)
+                st.error(f"Failed to contact backend: {e}")
+                st.rerun()
+            backend_status = js.get("status", "pending")
+            backend_progress = int(js.get("progress", 0))
+            _smooth_to(min(backend_progress, 97), duration_s=0.20)
+
+            if backend_status == "error":
+                err_msg = js.get("error") or "Backend reported an error."
+                st.session_state["detect_job_status"] = "error"
+                st.session_state["detect_job_error"] = err_msg
+                st.error(f"Detection failed: {err_msg}")
+                st.rerun()
+            elif backend_status == "done":
+                try:
+                    res_resp = requests.get(f"{BACKEND_URL}/detect/{run_id}/result", timeout=20)
+                    res_resp.raise_for_status()
+                    res_js = res_resp.json()
+                    result = res_js.get("result") or {}
+                except Exception as e:
+                    st.session_state["detect_job_status"] = "error"
+                    st.session_state["detect_job_error"] = str(e)
+                    st.error(f"Failed to fetch result: {e}")
+                    st.rerun()
+                st.session_state["forensic_result"] = result
+                st.session_state["forensic_responses"] = responses
+                st.session_state["forensic_rt_data"] = rt_data
+                st.session_state["forensic_psi_data"] = result.get("psi_data") or []
+                st.session_state["detect_job_status"] = "done"
+                _smooth_to(100, duration_s=0.25)
+                st.success("Detection completed.")
+                if st.button("Open Aberrance Summary", key="prep_open_summary_done", type="primary"):
+                    st.session_state["_nav_request"] = "Aberrance Summary"
+                    st.rerun()
+            else:
+                _status.caption("Running… This page will refresh until the run finishes.")
+                time.sleep(3)
+                st.rerun()
+
+    # Re-run Detect (advanced)
+    with st.expander("Re-run Detect", expanded=False):
+        st.caption("Start a fresh detection run with current data and settings.")
         if st.button("Re-run Detect now", key="detect_force_rerun"):
             _resp = st.session_state.get("last_uploaded_responses") or []
             _ci = st.session_state.get("prep_compromised_items") or []
-            # Leave empty to let backend default to items 1..n-1 (R requires ≥1 secure item)
             raw_payload = {
                 "responses": _resp,
                 "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
@@ -4551,153 +4982,18 @@ elif run_mode == "Detect Progress":
                 resp = requests.post(f"{BACKEND_URL}/detect", json=payload, timeout=20)
                 resp.raise_for_status()
                 data = resp.json()
-                run_id = data.get("run_id")
-                if not run_id:
-                    st.error("Detection backend did not return a run_id.")
-                else:
-                    st.session_state["detect_run_id"] = run_id
+                run_id_new = data.get("run_id")
+                if run_id_new:
+                    st.session_state["detect_run_id"] = run_id_new
                     st.session_state["detect_job_status"] = "running"
                     st.session_state["detect_job_error"] = None
-                    # Clear previous forensic_result so summary reflects the new run
                     st.session_state.pop("forensic_result", None)
-                    st.session_state["_nav_request"] = "Detect Progress"
+                    st.session_state["_nav_request"] = "Preparation"
                     st.rerun()
-            except Exception as e:
-                st.error(f"Failed to start detection backend: {e}")
-
-    if not st.session_state.get("last_uploaded_responses"):
-        st.error("No Response data in session. Go back to **Preparation** and upload Response (and RT).")
-        if st.button("Back to Preparation"):
-            st.session_state.run_mode = "Preparation"
-            st.rerun()
-    else:
-        # Ensure there's a job record even if user navigates here directly.
-        if "detect_job_id" not in st.session_state:
-            st.session_state["detect_job_id"] = str(uuid.uuid4())
-        if "detect_job_status" not in st.session_state:
-            st.session_state["detect_job_status"] = "pending"
-        if "detect_job_started_at" not in st.session_state:
-            st.session_state["detect_job_started_at"] = time.time()
-
-        _job_status = st.session_state.get("detect_job_status", "pending")
-        if _job_status == "done" and st.session_state.get("forensic_result"):
-            st.success("Detection completed. Use the sidebar to open **Aberrance Summary**.")
-        elif _job_status == "error":
-            st.error(
-                "Detection failed: "
-                + (st.session_state.get("detect_job_error") or "Unknown error.")
-            )
-
-        # Poll backend job and visualize progress (also when re-opening after completion).
-        if _job_status not in ("done", "error"):
-            st.session_state["detect_job_status"] = "running"
-            st.session_state["detect_job_error"] = None
-
-        _prog = st.progress(0)
-        _status = st.empty()
-        st.session_state["_detect_prog_current"] = 0
-
-        def _smooth_to(target: int, *, duration_s: float = 0.35) -> None:
-            target = max(0, min(100, int(target)))
-            try:
-                start = int(st.session_state.get("_detect_prog_current", 0))
-            except Exception:
-                start = 0
-            if target <= start:
-                _prog.progress(target)
-                st.session_state["_detect_prog_current"] = target
-                return
-            steps = max(1, int(duration_s / 0.02))
-            for i in range(1, steps + 1):
-                v = start + (target - start) * (i / steps)
-                _prog.progress(int(v))
-                time.sleep(0.02)
-            _prog.progress(target)
-            st.session_state["_detect_prog_current"] = target
-
-        responses = st.session_state["last_uploaded_responses"]
-        rt_data = st.session_state.get("last_uploaded_rt_data") or []
-
-        st.markdown("**Working status**")
-        _left_spacer, tree_col, _right_spacer = st.columns([2, 7, 2])
-        with tree_col:
-            # Professional flow diagram on Detect Progress; colors updated later when backend node_states are known
-            st.markdown("*(Flow diagram appears after backend status is fetched.)*")
-
-            # IRT / RT status shown separately from the agent tree (driven by backend state)
-            left, right = st.columns(2, gap="small")
-            with left:
-                irt_box = st.status("IRT parameters (ψ)", state="running", expanded=False)
-            with right:
-                rt_box = st.status("Response Time data (RT)", state="complete" if rt_data else "error", expanded=False)
-            _smooth_to(5, duration_s=0.15)
-
-            # Poll backend once for this rerun to update progress + agent statuses.
-            run_id = st.session_state.get("detect_run_id")
-            if not run_id:
-                st.info("No active detection run. Go back to **Preparation** and start Detect again.")
-            else:
-                try:
-                    status_resp = requests.get(f"{BACKEND_URL}/detect/{run_id}/status", timeout=20)
-                    status_resp.raise_for_status()
-                    js = status_resp.json()
-                except Exception as e:
-                    st.session_state["detect_job_status"] = "error"
-                    st.session_state["detect_job_error"] = str(e)
-                    st.error(f"Failed to contact detection backend: {e}")
                 else:
-                    backend_status = js.get("status", "pending")
-                    backend_progress = int(js.get("progress", 0))
-                    backend_nodes = js.get("node_states") or {}
-                    irt_status = js.get("irt_status", "pending")
-
-                    # Update IRT / RT boxes
-                    if irt_status in ("done", "skipped", "provided"):
-                        irt_box.update(state="complete", expanded=False)
-                    elif irt_status in ("missing", "error"):
-                        irt_box.update(state="error", expanded=False)
-                    else:
-                        irt_box.update(state="running", expanded=False)
-                    rt_box.update(state="complete" if rt_data else "error", expanded=False)
-
-                    # Update progress bar
-                    _smooth_to(min(backend_progress, 97), duration_s=0.20)
-
-                    if backend_status == "error":
-                        err_msg = js.get("error") or "Backend reported an error."
-                        st.session_state["detect_job_status"] = "error"
-                        st.session_state["detect_job_error"] = err_msg
-                        if _job_status != "error":
-                            st.error(f"Detection failed: {err_msg}")
-
-                    elif backend_status == "done":
-                        try:
-                            res_resp = requests.get(f"{BACKEND_URL}/detect/{run_id}/result", timeout=20)
-                            res_resp.raise_for_status()
-                            res_js = res_resp.json()
-                            result = res_js.get("result") or {}
-                        except Exception as e:
-                            st.session_state["detect_job_status"] = "error"
-                            st.session_state["detect_job_error"] = str(e)
-                            st.error(f"Failed to fetch final result: {e}")
-                        else:
-                            st.session_state["forensic_result"] = result
-                            st.session_state["forensic_responses"] = responses
-                            st.session_state["forensic_rt_data"] = rt_data
-                            st.session_state["forensic_psi_data"] = result.get("psi_data") or []
-                            st.session_state["detect_job_status"] = "done"
-                            _smooth_to(100, duration_s=0.25)
-                            st.success("Detection completed.")
-                            if st.button("Generate Report", key="detect_generate_report", type="primary"):
-                                # Jump straight to the Aberrance Summary dashboard
-                                st.session_state["_nav_request"] = "Aberrance Summary"
-                                st.rerun()
-
-                    if backend_status in ("running", "pending"):
-                        _status.caption("Job still running. This page will refresh automatically until it finishes.")
-                        # Auto-poll backend every few seconds instead of requiring a manual Refresh click.
-                        time.sleep(3)
-                        st.rerun()
+                    st.error("Backend did not return a run_id.")
+            except Exception as e:
+                st.error(f"Failed to start detection: {e}")
 
 elif run_mode == "Data review":
     resp_data = st.session_state.get("last_uploaded_responses") or []
@@ -4762,31 +5058,6 @@ elif run_mode == "Data review":
             st.pyplot(fig)
         plt.close()
     st.caption("Use the **sidebar** to switch to another module.")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE: Tools (Aberrance / IRT / RT)
-# ══════════════════════════════════════════════════════════════════════════════
-elif run_mode == "Tools":
-    st.subheader("🧰 Tools")
-    st.caption("Run one module at a time: aberrant behavior detection (person-fit), IRT modeling, or response-time (RT) analysis.")
-    if "tools_mode" not in st.session_state:
-        st.session_state["tools_mode"] = "Aberrance"
-    _tools_mode = st.radio(
-        "Choose a tool",
-        options=["Aberrance", "IRT", "RT", "Backend test"],
-        key="tools_mode",
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    st.divider()
-    if _tools_mode == "Aberrance":
-        _render_tool_aberrance()
-    elif _tools_mode == "IRT":
-        _render_tool_irt()
-    elif _tools_mode == "RT":
-        _render_tool_rt()
-    else:
-        _render_backend_test()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: Aberrance Summary (dashboard)
@@ -5064,6 +5335,7 @@ elif run_mode == "Aberrance Summary":
 
         # ── Agent-by-agent narrative reports ──
         st.subheader("Agent-by-Agent Reports")
+        st.caption("Quick reference: [Summary of aberrant behavior detection indices](https://aberrant-indices.netlify.app/).")
         responses = st.session_state.get("forensic_responses", [])
         n_students = len(responses)
 

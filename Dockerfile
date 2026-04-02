@@ -12,6 +12,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     r-base \
     r-base-dev \
+    build-essential \
+    gfortran \
+    libuv1-dev \
+    cmake \
+    libmbedtls-dev \
     libcurl4-openssl-dev \
     libssl-dev \
     libxml2-dev \
@@ -20,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy app files needed for R and Python install
 COPY packages.txt install_r_packages.R r_packages.txt ./
 COPY pyproject.toml README.md ./
-COPY graph.py ui.py main.py openrouter_models.py backend_service.py ./
+COPY graph.py ui.py main.py mmls.py backend_service.py ./
 
 # Install R packages (mirt, WrightMap, psych) - can take several minutes
 RUN Rscript install_r_packages.R
