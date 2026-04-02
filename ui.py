@@ -71,33 +71,45 @@ BACKEND_URL = _normalize_backend_url(os.getenv("PSYMAS_BACKEND_URL"))
 ABERRANCE_FUNCTIONS = ["detect_rg", "detect_pm", "detect_ac", "detect_pk", "detect_as", "detect_nm", "detect_tt"]
 
 
-def _backend_status_summary() -> tuple[bool, str]:
-    """Check LangGraph backend reachability + last job status for compact UI badges."""
-    base_note = ""
-    ok = False
+def _one_line_ellipsis(text: str | None, max_len: int = 52) -> str:
+    if not text:
+        return ""
+    t = " ".join(str(text).split())
+    if len(t) <= max_len:
+        return t
+    return t[: max(1, max_len - 1)] + "…"
+
+
+def _backend_status_summary() -> tuple[bool, str, str]:
+    """Check LangGraph backend reachability + last Detect job status.
+
+    Returns (ok, short_label, tooltip) for pills and sidebar captions.
+    """
+    tip_ok_idle = "Backend /health OK. No Detect failure recorded in this session."
     # Network/health check (very lightweight).
     try:
         resp = requests.get(f"{BACKEND_URL}/health", timeout=3)
         resp.raise_for_status()
         js = resp.json()
-        if js.get("status") == "ok":
-            ok = True
-        else:
-            base_note = "backend health error"
+        if js.get("status") != "ok":
+            return False, "backend health error", "Backend /health did not return {\"status\":\"ok\"}."
     except Exception:
-        return False, "unreachable"
+        return (
+            False,
+            "unreachable",
+            f"Cannot reach {BACKEND_URL}/health. Set PSYMAS_BACKEND_URL and ensure the API process is running.",
+        )
 
     detect_status = st.session_state.get("detect_job_status", "pending")
     if detect_status == "running":
-        note = "running"
-    elif detect_status == "done":
-        note = "idle (last run ok)"
-    elif detect_status == "error":
-        ok = False
-        note = "last run error"
-    else:
-        note = base_note or "idle"
-    return ok, note
+        return True, "running", "Detect job is running; status updates on the Preparation page."
+    if detect_status == "done":
+        return True, "idle (last run ok)", "Last Detect finished successfully in this browser session."
+    if detect_status == "error":
+        err = (st.session_state.get("detect_job_error") or "").strip() or "Unknown error"
+        short = _one_line_ellipsis(err, 44)
+        return False, f"last run error — {short}", f"Last Detect failed: {err}"
+    return True, "idle", tip_ok_idle
 
 
 def _call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: int = 90) -> tuple[str | None, str | None]:
@@ -3569,7 +3581,7 @@ with st.sidebar:
     st.caption(_sb_line("Compromised items", comp_ok, comp_extra))
     st.caption(_sb_line("Tampering file", tt_loaded, tt_extra))
     st.caption(_sb_line(f"LLM ({provider_sb})", llm_configured_sb, "configured" if llm_configured_sb else "missing key"))
-    backend_ok, backend_note = _backend_status_summary()
+    backend_ok, backend_note, _backend_tip = _backend_status_summary()
     st.caption(_sb_line("LangGraph Agents", backend_ok, backend_note))
     st.divider()
 
@@ -4388,7 +4400,7 @@ elif run_mode == "Preparation":
     _dot = lambda ok: f"<span class='psymas-dot {'psymas-dot-ready' if ok else 'psymas-dot-bad'}'></span>"
     _esc = lambda s: (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
-    backend_ok, backend_note = _backend_status_summary()
+    backend_ok, backend_note, backend_status_tip = _backend_status_summary()
 
     # Detect button is always green; its enabled/disabled state is
     # recomputed later once we know which agents are selected and what
@@ -4862,7 +4874,7 @@ elif run_mode == "Preparation":
         f'{_dot(llm_configured)}LLM ({llm_short})</span>'
     )
     _pills_html.append(
-        f'<span class="psymas-pill" title="{_esc("LangGraph agents status")}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>'
+        f'<span class="psymas-pill" title="{_esc(backend_status_tip)}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>'
     )
 
     st.markdown(
