@@ -3487,7 +3487,8 @@ with st.sidebar:
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))
     _has_psi = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
-    _has_forensic = bool(st.session_state.get("forensic_result"))
+    # Use `is not None`: `{}` is a valid completed payload (API may return empty flags) but is falsy in Python.
+    _has_forensic = st.session_state.get("forensic_result") is not None
     _detect_status = st.session_state.get("detect_job_status", "pending")
     _nav_ready = {
         "Scenario": True,
@@ -4804,6 +4805,14 @@ elif run_mode == "Preparation":
                 st.session_state["prep_tt_data_name"] = tt_file.name
 
     st.divider()
+    # Upload handlers above may have updated session this same run; early `resp_loaded` / `rt_loaded` /
+    # `psi_loaded` are stale until the next rerun unless we refresh here (fixes RT needing two uploads for green + Detect).
+    resp_loaded = bool(st.session_state.get("last_uploaded_responses"))
+    rt_loaded = bool(st.session_state.get("last_uploaded_rt_data"))
+    psi_loaded = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
+    n_persons = len(st.session_state.get("last_uploaded_responses") or [])
+    n_items = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_persons else 0
+
     # Align readiness pills with what is actually required by the selected agents
     need_rt = any(fn in prep_ab_fns for fn in ["detect_rg", "detect_pm", "detect_pk", "detect_as", "detect_ac"])
     need_psi = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"])
@@ -4910,7 +4919,7 @@ elif run_mode == "Preparation":
         if "detect_job_status" not in st.session_state:
             st.session_state["detect_job_status"] = "pending"
         _job_status = st.session_state.get("detect_job_status", "pending")
-        if _job_status == "done" and st.session_state.get("forensic_result"):
+        if _job_status == "done" and st.session_state.get("forensic_result") is not None:
             st.success("Detection completed.")
             if st.button("Open Aberrance Summary", key="prep_open_summary", type="primary"):
                 st.session_state["_nav_request"] = "Aberrance Summary"
@@ -4967,6 +4976,12 @@ elif run_mode == "Preparation":
                 st.session_state["detect_job_status"] = "error"
                 st.session_state["detect_job_error"] = err_msg
                 st.error(f"Detection failed: {err_msg}")
+                st.rerun()
+            elif backend_status == "unknown":
+                err_msg = js.get("error") or "run_id not found on backend (job may have expired, or another server instance handled the request)."
+                st.session_state["detect_job_status"] = "error"
+                st.session_state["detect_job_error"] = err_msg
+                st.error(f"Detection status lost: {err_msg}")
                 st.rerun()
             elif backend_status == "done":
                 try:
@@ -5110,7 +5125,7 @@ elif run_mode == "Aberrance Summary":
     st.divider()
 
     # ── Dashboard (results) ──
-    if not st.session_state.get("forensic_result"):
+    if st.session_state.get("forensic_result") is None:
         st.info("Run **Detect** on the Preparation page to generate the dashboard.")
     else:
         fr = st.session_state["forensic_result"]
@@ -5590,7 +5605,7 @@ elif run_mode == "Student Profile":
     """, unsafe_allow_html=True)
     st.markdown('<div class="profile-header"><h2>👤 Student Profile</h2><p>Forensic drill-down for individual examinees</p></div>', unsafe_allow_html=True)
 
-    if not st.session_state.get("forensic_result"):
+    if st.session_state.get("forensic_result") is None:
         st.warning("No forensic results yet. Go to **Preparation** to run the analysis first.")
     else:
         fr = st.session_state["forensic_result"]
@@ -6139,7 +6154,7 @@ elif run_mode == "Collusion Network":
     """, unsafe_allow_html=True)
     st.markdown('<div class="colnet-header"><h2>Collusion Network</h2><p>Social graph of answer copying and answer similarity</p></div>', unsafe_allow_html=True)
 
-    if not st.session_state.get("forensic_result"):
+    if st.session_state.get("forensic_result") is None:
         st.warning("No forensic results yet. Go to **Preparation** to run the analysis first.")
     else:
         fr = st.session_state["forensic_result"]
@@ -6301,7 +6316,7 @@ elif run_mode == "Individual Aberrance":
     """, unsafe_allow_html=True)
     st.markdown('<div class="aberr-header"><h2>Individual Aberrance — Quad-Chart</h2><p>Ability vs Misfit colored by Response Time Effort</p></div>', unsafe_allow_html=True)
 
-    if not st.session_state.get("forensic_result"):
+    if st.session_state.get("forensic_result") is None:
         st.warning("No forensic results yet. Go to **Preparation** to run the analysis first.")
     else:
         import plotly.graph_objects as go
@@ -6464,7 +6479,7 @@ elif run_mode == "Temporal Forensics":
     """, unsafe_allow_html=True)
     st.markdown('<div class="temp-header"><h2>Temporal & Tampering Forensics</h2><p>Change points, erasure analysis, and preknowledge detection</p></div>', unsafe_allow_html=True)
 
-    if not st.session_state.get("forensic_result"):
+    if st.session_state.get("forensic_result") is None:
         st.warning("No forensic results yet. Go to **Preparation** to run the analysis first.")
     else:
         import plotly.graph_objects as go
