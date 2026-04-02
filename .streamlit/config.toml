@@ -4,9 +4,14 @@ port = 8501
 enableXsrfProtection = false
 # Proxies (e.g. Railway) sometimes break compressed WS; flaky first uploads are common without this.
 enableWebsocketCompression = false
+# Behind HTTPS-terminated proxies, CORS + XSRF checks often mis-match; Modal/Railway uploads return 400 without this.
+enableCORS = false
 
 [browser]
 gatherUsageStats = false
+# Set in Railway (UI service) so Streamlit matches the public URL the browser uses:
+# STREAMLIT_BROWSER_SERVER_ADDRESS = your-service.up.railway.app  (no https://)
+# STREAMLIT_BROWSER_SERVER_PORT = 443
 
 [theme]
 # Optional: use a built-in theme or leave defaults

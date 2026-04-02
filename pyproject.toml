@@ -17,7 +17,7 @@ dependencies = [
     "networkx",
     "plotly",
     "pyvis",
-    "streamlit",
+    "streamlit>=1.35.0",
     "matplotlib",
     "python-dotenv",
     "requests",

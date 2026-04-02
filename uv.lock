@@ -1875,7 +1875,7 @@ requires-dist = [
     { name = "reportlab", specifier = ">=4.0.0" },
     { name = "requests" },
     { name = "rpy2", marker = "sys_platform != 'win32'", specifier = "<3.6" },
-    { name = "streamlit" },
+    { name = "streamlit", specifier = ">=1.35.0" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 

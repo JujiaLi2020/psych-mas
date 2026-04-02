@@ -50,6 +50,12 @@ def _normalize_backend_url(raw: str | None) -> str:
         return "http://localhost:8000"
     u = str(raw).strip().rstrip("/")
     if "://" in u:
+        low = u.lower()
+        # Railway public domains redirect http→https; requests may turn POST into GET on 302 → 405 on POST /irt.
+        if low.startswith("http://") and (
+            ".up.railway.app" in low or low.endswith("railway.app")
+        ):
+            u = "https://" + u.split("://", 1)[1]
         return u
     host = u.split("/")[0]
     if "localhost" in host or host.startswith("127.0.0.1"):

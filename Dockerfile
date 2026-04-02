@@ -34,8 +34,10 @@ RUN Rscript install_r_packages.R
 RUN pip install --no-cache-dir . gunicorn uvicorn
 
 
-# Streamlit config (optional: bind to 0.0.0.0 is set in CMD)
+# Streamlit config + Railway UI launcher (backend image may still be used for a UI service with overridden CMD)
 COPY .streamlit .streamlit
+COPY scripts/run_ui_railway.sh scripts/run_ui_railway.sh
+RUN chmod +x scripts/run_ui_railway.sh
 
 EXPOSE 8501
 
