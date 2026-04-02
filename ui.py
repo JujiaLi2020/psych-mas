@@ -42,7 +42,24 @@ from mmls import (
 )
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-BACKEND_URL = os.getenv("PSYMAS_BACKEND_URL", "http://localhost:8000")
+
+
+def _normalize_backend_url(raw: str | None) -> str:
+    """Ensure PSYMAS_BACKEND_URL has a scheme (Railway / env often omits https://)."""
+    if not raw or not str(raw).strip():
+        return "http://localhost:8000"
+    u = str(raw).strip().rstrip("/")
+    if "://" in u:
+        return u
+    host = u.split("/")[0]
+    if "localhost" in host or host.startswith("127.0.0.1"):
+        return "http://" + u
+    if ".railway.internal" in host:
+        return "http://" + u
+    return "https://" + u
+
+
+BACKEND_URL = _normalize_backend_url(os.getenv("PSYMAS_BACKEND_URL"))
 
 # Aberrance tab: function list and payload key (used when building workflow payload)
 ABERRANCE_FUNCTIONS = ["detect_rg", "detect_pm", "detect_ac", "detect_pk", "detect_as", "detect_nm", "detect_tt"]
@@ -4551,7 +4568,13 @@ elif run_mode == "Preparation":
                 """,
                 unsafe_allow_html=True,
             )
-            up_resp = st.file_uploader("Response (CSV)", type=["csv"], key="main_resp_uploader")
+            up_resp = st.file_uploader(
+                "Response (CSV)",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="main_resp_uploader",
+                help="If the first try shows an error, wait until the file finishes uploading or pick it again—cloud cold starts can interrupt the first request.",
+            )
             resp_sig = (getattr(up_resp, "name", None), getattr(up_resp, "size", None)) if up_resp is not None else None
             if resp_sig and st.session_state.get("prep_last_resp_sig") != resp_sig:
                 try:
@@ -4562,7 +4585,7 @@ elif run_mode == "Preparation":
                     st.session_state.last_uploaded_responses = _r.to_dict(orient="records")
                     st.session_state["prep_last_resp_sig"] = resp_sig
                     st.session_state["_nav_request"] = "Preparation"
-                    st.rerun()
+                    # Do not st.rerun() here: file_uploader already triggers a rerun; a second rerun races the upload HTTP request and causes flaky failures on Railway.
                 except Exception as e:
                     st.error(f"{e}")
 
@@ -4655,6 +4678,7 @@ elif run_mode == "Preparation":
                 up_psi = st.file_uploader(
                     "ψ (JSON/CSV)",
                     type=["json", "csv"],
+                    accept_multiple_files=False,
                     key="main_psi_uploader",
                     help="Pre-estimated item parameters: JSON array of objects with a, b (and optionally c), or CSV with columns a, b [, c].",
                 )
@@ -4684,7 +4708,6 @@ elif run_mode == "Preparation":
                         st.session_state["item_params"] = psi_list
                         st.session_state["prep_last_psi_sig"] = _psi_sig
                         st.session_state["_nav_request"] = "Preparation"
-                        st.rerun()
                     except Exception as e:
                         st.session_state["last_irt_error"] = f"Upload ψ failed: {e}"
                         st.caption(st.session_state["last_irt_error"])
@@ -4711,7 +4734,12 @@ elif run_mode == "Preparation":
                 """,
                 unsafe_allow_html=True,
             )
-            up_rt = st.file_uploader("RT (CSV, optional)", type=["csv"], key="main_rt_uploader")
+            up_rt = st.file_uploader(
+                "RT (CSV, optional)",
+                type=["csv"],
+                accept_multiple_files=False,
+                key="main_rt_uploader",
+            )
             rt_sig = (getattr(up_rt, "name", None), getattr(up_rt, "size", None)) if up_rt is not None else None
             if rt_sig and st.session_state.get("prep_last_rt_sig") != rt_sig and st.session_state.get("last_uploaded_responses"):
                 try:
@@ -4724,9 +4752,7 @@ elif run_mode == "Preparation":
                         _rt = _align_rt_columns_to_response(_rt, _r_prev)
                     st.session_state.last_uploaded_rt_data = _rt.to_dict(orient="records")
                     st.session_state["prep_last_rt_sig"] = rt_sig
-                    # Keep the user on Preparation after upload-triggered reruns.
                     st.session_state["_nav_request"] = "Preparation"
-                    st.rerun()
                 except Exception as e:
                     st.error(f"{e}")
 

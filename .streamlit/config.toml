@@ -1,6 +1,9 @@
 [server]
 headless = true
 port = 8501
+enableXsrfProtection = false
+# Proxies (e.g. Railway) sometimes break compressed WS; flaky first uploads are common without this.
+enableWebsocketCompression = false
 
 [browser]
 gatherUsageStats = false
