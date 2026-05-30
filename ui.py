@@ -14,6 +14,7 @@ from pathlib import Path
 import io
 import json
 import math  # stdlib (not 'maths')
+import zipfile
 import os
 import re
 import base64
@@ -69,6 +70,15 @@ BACKEND_URL = _normalize_backend_url(os.getenv("PSYMAS_BACKEND_URL"))
 
 # Aberrance tab: function list and payload key (used when building workflow payload)
 ABERRANCE_FUNCTIONS = ["detect_rg", "detect_pm", "detect_ac", "detect_pk", "detect_as", "detect_nm", "detect_tt"]
+ABERRANCE_FN_TO_AGENT = {
+    "detect_nm": "nm_agent",
+    "detect_pm": "pm_agent",
+    "detect_ac": "ac_agent",
+    "detect_as": "as_agent",
+    "detect_rg": "rg_agent",
+    "detect_tt": "tt_agent",
+    "detect_pk": "pk_agent",
+}
 
 
 def _one_line_ellipsis(text: str | None, max_len: int = 52) -> str:
@@ -549,6 +559,240 @@ def _validate_binary_responses(resp_df: pd.DataFrame) -> pd.DataFrame:
             + ", ".join(invalid_cols)
         )
     return numeric_df
+
+
+def _parse_compromised_items_csv(comp_df: pd.DataFrame, *, n_items: int | None = None) -> list[int]:
+    """Parse a CSV listing 1-based compromised item IDs.
+
+    Preferred columns: item_id, item, item_number, compromised_item(s), id.
+    If a compromised/is_compromised column exists, rows marked 1 are used.
+    Legacy text labels such as exposed/secure are still accepted.
+    Otherwise the first numeric-looking column is treated as the item-id column.
+    """
+    if comp_df.empty:
+        return []
+    df = _drop_index_column(comp_df).copy()
+    if df.empty:
+        return []
+
+    normalized = {str(c).strip().lower().replace(" ", "_"): c for c in df.columns}
+    item_col = None
+    for name in (
+        "item_id",
+        "item",
+        "item_number",
+        "item_no",
+        "question_id",
+        "question",
+        "compromised_item",
+        "compromised_items",
+        "id",
+    ):
+        if name in normalized:
+            item_col = normalized[name]
+            break
+    if item_col is None:
+        for col in df.columns:
+            vals = pd.to_numeric(df[col], errors="coerce")
+            if vals.notna().any():
+                item_col = col
+                break
+    if item_col is None:
+        raise ValueError("Compromised-items CSV must include at least one numeric item-id column.")
+
+    mask = pd.Series([True] * len(df), index=df.index)
+    for flag_name in ("compromised", "is_compromised", "flag", "leaked"):
+        if flag_name in normalized:
+            raw = df[normalized[flag_name]]
+            if raw.dtype == bool:
+                mask = raw.fillna(False)
+            else:
+                mask = raw.astype(str).str.strip().str.lower().isin(
+                    {"1", "true", "t", "yes", "y", "exposed", "leaked", "compromised"}
+                )
+            break
+
+    raw_vals = df.loc[mask, item_col]
+    vals = pd.to_numeric(raw_vals, errors="coerce")
+    if vals.notna().any():
+        items = sorted({int(v) for v in vals.dropna().tolist() if int(v) > 0})
+    else:
+        found: list[int] = []
+        for cell in raw_vals.astype(str).tolist():
+            found.extend(int(x) for x in re.findall(r"\d+", cell))
+        items = sorted({i for i in found if i > 0})
+    if n_items and n_items > 0:
+        items = [i for i in items if i <= n_items]
+    return items
+
+
+def _validate_answer_changes_csv(changes_df: pd.DataFrame) -> pd.DataFrame:
+    """Validate long answer-change data for the lightweight detect_tt workflow."""
+    if changes_df.empty:
+        raise ValueError("Answer-change CSV is empty.")
+    df = _drop_index_column(changes_df).copy()
+    lowered = {str(c).strip().lower(): c for c in df.columns}
+    required = ["examinee_id", "item_id"]
+    missing = [c for c in required if c not in lowered]
+    has_changed = "changed" in lowered
+    has_initial_final = "initial_response" in lowered and "final_response" in lowered
+    if missing:
+        raise ValueError("Answer-change CSV must include columns: examinee_id, item_id.")
+    if not has_changed and not has_initial_final:
+        raise ValueError("Answer-change CSV must include changed, or initial_response and final_response.")
+    if has_changed:
+        ch_col = lowered["changed"]
+        ch_num = pd.to_numeric(df[ch_col], errors="coerce")
+        if ch_num.notna().any():
+            bad = sorted(set(ch_num.dropna().astype(int).tolist()) - {0, 1})
+            if bad:
+                raise ValueError("Column changed must use 0/1 values.")
+            df[ch_col] = ch_num.fillna(0).astype(int)
+    return df
+
+
+def _infer_prep_upload_kind(name: str, df: pd.DataFrame | None) -> str | None:
+    """Infer which Preparation data slot an uploaded file belongs to."""
+    stem = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    cols = {str(c).strip().lower().replace(" ", "_") for c in (df.columns if df is not None else [])}
+
+    if "answer_change" in stem or ("answer" in stem and "change" in stem):
+        return "answer_changes"
+    if "compromised" in stem or "leaked" in stem or "exposed" in stem:
+        return "compromised"
+    if stem in {"rt", "response_time", "response_times"} or "response_time" in stem or stem.endswith("_rt"):
+        return "rt"
+    if "psi" in stem or "item_param" in stem or "item_parameter" in stem:
+        return "psi"
+    if "response" in stem or stem in {"resp", "responses", "responses_matrix"}:
+        return "response"
+
+    if {"examinee_id", "item_id"}.issubset(cols) and (
+        "changed" in cols or {"initial_response", "final_response"}.issubset(cols)
+    ):
+        return "answer_changes"
+    if {"a", "b"}.issubset(cols) or {"a1", "b"}.issubset(cols):
+        return "psi"
+    if cols & {"compromised", "is_compromised", "leaked", "compromised_item", "compromised_items"}:
+        return "compromised"
+    if df is not None and not df.empty:
+        try:
+            numeric = _coerce_numeric(_drop_index_column(df), "Uploaded data")
+            values = set()
+            for col in numeric.columns:
+                values.update(numeric[col].dropna().unique().tolist())
+            if values and values.issubset({0, 1}):
+                return "response"
+            if values:
+                return "rt"
+        except Exception:
+            return None
+    return None
+
+
+def _load_psi_upload(uploaded_file) -> list[dict]:
+    uploaded_file.seek(0)
+    name = getattr(uploaded_file, "name", "") or ""
+    raw = uploaded_file.read()
+    if name.lower().endswith(".json"):
+        data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        if not isinstance(data, list):
+            data = data.get("item_params", data.get("result", data.get("items", [data])))
+        if not isinstance(data, list):
+            raise ValueError("JSON must be an array of item objects or an object with item_params/result/items.")
+        return [dict(x) for x in data]
+
+    df = pd.read_csv(io.BytesIO(raw) if isinstance(raw, bytes) else io.StringIO(raw))
+    df = _drop_index_column(df)
+    a_col = "a1" if "a1" in df.columns else "a"
+    if a_col not in df.columns or "b" not in df.columns:
+        raise ValueError("Item-parameter CSV must have columns a (or a1) and b; optional c or g.")
+    return df.to_dict(orient="records")
+
+
+def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[str]]:
+    """Load multiple Preparation files into the same session keys used by individual uploaders."""
+    loaded: list[str] = []
+    errors: list[str] = []
+    pending_rt: tuple[str, tuple, pd.DataFrame] | None = None
+    pending_comp: tuple[str, tuple, pd.DataFrame] | None = None
+
+    for f in uploaded_files or []:
+        name = getattr(f, "name", "uploaded file") or "uploaded file"
+        sig = (name, getattr(f, "size", None))
+        try:
+            df = None
+            if not name.lower().endswith(".json"):
+                f.seek(0)
+                df = pd.read_csv(f)
+                df = _drop_index_column(df)
+            kind = _infer_prep_upload_kind(name, df)
+            if kind == "response":
+                if df is None:
+                    raise ValueError("Response must be a CSV.")
+                resp = _validate_binary_responses(df)
+                st.session_state.last_uploaded_responses = resp.to_dict(orient="records")
+                st.session_state["prep_last_resp_sig"] = sig
+                loaded.append(f"Response: {name}")
+            elif kind == "rt":
+                if df is None:
+                    raise ValueError("RT must be a CSV.")
+                rt = _coerce_numeric(df, "RT")
+                pending_rt = (name, sig, rt)
+            elif kind == "compromised":
+                if df is None:
+                    raise ValueError("Compromised-items data must be a CSV.")
+                pending_comp = (name, sig, df)
+            elif kind == "answer_changes":
+                if df is None:
+                    raise ValueError("Answer-change data must be a CSV.")
+                changes = _validate_answer_changes_csv(df)
+                st.session_state["prep_answer_changes"] = changes.to_dict(orient="records")
+                st.session_state["prep_last_answer_changes_sig"] = sig
+                st.session_state["prep_answer_changes_file_name"] = name
+                loaded.append(f"Answer changes: {name}")
+            elif kind == "psi":
+                psi = _load_psi_upload(f)
+                if not psi:
+                    raise ValueError("No item parameters found.")
+                st.session_state["last_irt_item_params"] = psi
+                st.session_state["item_params"] = psi
+                st.session_state["prep_last_psi_sig"] = sig
+                loaded.append(f"Item parameters: {name}")
+            else:
+                errors.append(f"{name}: could not infer data type from file name or columns.")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+
+    if pending_rt is not None:
+        name, sig, rt = pending_rt
+        try:
+            resp_df = pd.DataFrame(st.session_state.get("last_uploaded_responses") or [])
+            if not resp_df.empty and resp_df.shape[1] == rt.shape[1]:
+                rt = _align_rt_columns_to_response(rt, resp_df)
+            st.session_state.last_uploaded_rt_data = rt.to_dict(orient="records")
+            st.session_state["prep_last_rt_sig"] = sig
+            loaded.append(f"RT: {name}")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+
+    if pending_comp is not None:
+        name, sig, comp_df = pending_comp
+        try:
+            n_items = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if st.session_state.get("last_uploaded_responses") else None
+            comp_items = _parse_compromised_items_csv(comp_df, n_items=n_items)
+            if not comp_items:
+                raise ValueError("No valid compromised item IDs found.")
+            st.session_state["prep_compromised_items"] = comp_items
+            st.session_state["prep_last_comp_sig"] = sig
+            st.session_state["prep_compromised_file_name"] = name
+            loaded.append(f"Compromised items: {name}")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+
+    if loaded:
+        st.session_state["_nav_request"] = "Preparation"
+    return loaded, errors
 
 
 def _interpret_prompt(
@@ -1407,6 +1651,971 @@ def _generate_student_abnormal_report(
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
     return None, (last_err or "No model responded. Check Settings and API keys.")
+
+
+# Agent keys for Aberrance Summary CSV export (agent_key → detect function label + primary indices).
+_AGENT_EXPORT_META: dict[str, dict] = {
+    "nm_agent": {
+        "fn": "detect_nm",
+        "label": "Nonparametric Misfit (detect_nm)",
+        "primary_indices": ["ZU3_S"],
+        "typical_indices": "G_S, NC_S, U1_S, U3_S, ZU3_S, A_S, D_S, E_S, C_S, MC_S, PC_S, HT_S",
+        "flag_rule": "ZU3_S < -2; other nonparametric indices are auxiliary",
+    },
+    "pm_agent": {
+        "fn": "detect_pm",
+        "label": "Model Misfit (detect_pm)",
+        "primary_indices": ["L_S"],
+        "typical_indices": "ECI2_S_*, ECI4_S_*, L_S_*, L_R_*, L_T, Q_ST_*, L_ST_*, Q_RT_*, L_RT_* (+ _pval columns)",
+        "flag_rule": "L_S-family model-misfit indices are main; other parametric methods are auxiliary",
+    },
+    "ac_agent": {
+        "fn": "detect_ac",
+        "label": "Answer Copying (detect_ac)",
+        "primary_indices": ["OMG_S"],
+        "typical_indices": "OMG_S, GBT_S, OMG_R, GBT_R (+ _pval); pair-level, aggregated per examinee",
+        "flag_rule": "OMG_S is main; copier flag is retained as the decision flag",
+    },
+    "as_agent": {
+        "fn": "detect_as",
+        "label": "Answer Similarity (detect_as)",
+        "primary_indices": ["M4_S"],
+        "typical_indices": "M4_S (+ _pval); pair-level, aggregated per examinee",
+        "flag_rule": "Examinee in flagged similarity pair",
+    },
+    "rg_agent": {
+        "fn": "detect_rg",
+        "label": "Rapid Guessing (detect_rg)",
+        "primary_indices": ["RTE"],
+        "typical_indices": "RTE (RG_NT)",
+        "flag_rule": "Normative-time / threshold rapid-guessing flag",
+    },
+    "cp_agent": {
+        "fn": "detect_cp",
+        "label": "Change Point (detect_cp)",
+        "primary_indices": ["L_T"],
+        "typical_indices": "L_S_*, S_S_*, W_S_*, L_T_*, W_T_*",
+        "flag_rule": "L_T-family change-point indices are main when available",
+    },
+    "tt_agent": {
+        "fn": "detect_tt",
+        "label": "Test Tampering (detect_tt)",
+        "primary_indices": ["change_rate"],
+        "typical_indices": "change_rate, n_changed, n_items from uploaded answer-change data",
+        "flag_rule": "change_rate is main in the current lightweight answer-change workflow",
+    },
+    "pk_agent": {
+        "fn": "detect_pk",
+        "label": "Preknowledge (detect_pk)",
+        "primary_indices": ["L_S"],
+        "typical_indices": "L_S, S_S, W_S, L_T, W_T, L_ST (+ _pval)",
+        "flag_rule": "L_S is main; other preknowledge methods are auxiliary",
+    },
+}
+
+_EXAMINEE_FLAG_AGENT_COLUMNS: list[tuple[str, str]] = [
+    (k, v["fn"]) for k, v in _AGENT_EXPORT_META.items()
+]
+
+_CSV_SKIP_KEYS = frozenset(
+    {
+        "Source",
+        "Copier",
+        "flagged",
+        "_pair",
+        "row",
+        "Student",
+        "Examinee_ID",
+        "examinee_id",
+        "item_id",
+        "person_id",
+        "error",
+        "info",
+        "methods",
+        "n_persons",
+    }
+)
+
+
+def _csv_numeric(value) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _csv_round(value):
+    if isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
+        return int(value)
+    return round(float(value), 6)
+
+
+def _safe_float(value, default: float | None = None) -> float | None:
+    """Convert UI display values without crashing on None / NaN / non-numeric cells."""
+    try:
+        if value is None:
+            return default
+        out = float(value)
+        if not math.isfinite(out):
+            return default
+        return out
+    except (TypeError, ValueError):
+        return default
+
+
+def _export_col_name(fn_label: str, index_name: str, *, suffix: str = "") -> str:
+    """Readable data column: pm_L_S_TS or ac_OMG_S_max."""
+    agent_short = fn_label.replace("detect_", "", 1)
+    base = f"{agent_short}_{index_name}"
+    return f"{base}_{suffix}" if suffix else base
+
+
+def _export_flag_col_name(fn_label: str) -> str:
+    agent_short = fn_label.replace("detect_", "", 1)
+    return f"{agent_short}_flagged"
+
+
+def _index_is_primary(agent_key: str, index_name: str) -> bool:
+    if index_name in ("n_pairs", "flagged_copier", "flagged") or "pval" in index_name.lower():
+        return False
+    meta = _AGENT_EXPORT_META.get(agent_key, {})
+    primaries = meta.get("primary_indices") or []
+    if index_name in primaries:
+        return True
+    for p in primaries:
+        if index_name == p or index_name.startswith(f"{p}_"):
+            return True
+    return False
+
+
+def _legend_row(
+    column_name: str,
+    agent_key: str,
+    fn_label: str,
+    index_name: str,
+    *,
+    is_primary: bool = False,
+    aggregation: str = "person",
+    notes: str = "",
+) -> dict:
+    meta = _AGENT_EXPORT_META.get(agent_key, {})
+    return {
+        "column_name": column_name,
+        "agent": fn_label,
+        "agent_label": meta.get("label", fn_label),
+        "index_name": index_name,
+        "is_primary_index": "Y" if is_primary else "N",
+        "aggregation": aggregation,
+        "notes": notes,
+    }
+
+
+def _agent_flagged_indices(agent_data: dict) -> set[int]:
+    """0-based examinee indices flagged by one agent result payload."""
+    if not isinstance(agent_data, dict):
+        return set()
+    out: set[int] = set()
+    for key in ("flagged", "flagged_copiers"):
+        for p in agent_data.get(key) or []:
+            try:
+                out.add(int(p))
+            except (TypeError, ValueError):
+                continue
+    for item in agent_data.get("flagged_pairs") or []:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            try:
+                out.add(int(item[0]))
+                out.add(int(item[1]))
+            except (TypeError, ValueError):
+                pass
+        else:
+            try:
+                out.add(int(item))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def _infer_n_examinees(flags: dict, responses: list | None) -> int:
+    n = len(responses or [])
+    if n > 0:
+        return n
+    best = 0
+    for agent_data in flags.values():
+        if not isinstance(agent_data, dict):
+            continue
+        for key in ("stat", "rte"):
+            block = agent_data.get(key)
+            if isinstance(block, list):
+                best = max(best, len(block))
+        pairs = agent_data.get("pairs")
+        if isinstance(pairs, list):
+            for pr in pairs:
+                if isinstance(pr, dict):
+                    for k in ("Source", "Copier"):
+                        try:
+                            best = max(best, int(pr.get(k, 0)))
+                        except (TypeError, ValueError):
+                            pass
+    return best
+
+
+def _export_agents(flags: dict, visible_agents: set[str] | None) -> list[tuple[str, str]]:
+    """Agents to include: selected in this run, plus cp_agent when rg ran and cp data exists."""
+    out: list[tuple[str, str]] = []
+    for agent_key, fn_label in _EXAMINEE_FLAG_AGENT_COLUMNS:
+        if agent_key not in flags or not isinstance(flags.get(agent_key), dict):
+            continue
+        if visible_agents is not None:
+            if agent_key in visible_agents:
+                out.append((agent_key, fn_label))
+            elif agent_key == "cp_agent" and "rg_agent" in visible_agents:
+                out.append((agent_key, fn_label))
+        else:
+            out.append((agent_key, fn_label))
+    return out
+
+
+def _person_level_index_columns(
+    agent_key: str,
+    fn_label: str,
+    data: dict,
+    n_examinees: int,
+) -> tuple[dict[str, list], list[dict]]:
+    """Per-examinee index columns from agent `stat` and/or `rte`; returns (columns, legend rows)."""
+    cols: dict[str, list] = {}
+    legend: list[dict] = []
+    stat = data.get("stat")
+    if isinstance(stat, list) and stat:
+        index_keys: set[str] = set()
+        for rec in stat:
+            if not isinstance(rec, dict):
+                continue
+            for k, v in rec.items():
+                if k not in _CSV_SKIP_KEYS and _csv_numeric(v):
+                    index_keys.add(k)
+        for key in sorted(index_keys):
+            col = _export_col_name(fn_label, key)
+            vals: list = []
+            for p in range(n_examinees):
+                if p < len(stat) and isinstance(stat[p], dict) and key in stat[p]:
+                    try:
+                        vals.append(_csv_round(stat[p][key]))
+                    except (TypeError, ValueError):
+                        vals.append(None)
+                else:
+                    vals.append(None)
+            cols[col] = vals
+            legend.append(
+                _legend_row(
+                    col,
+                    agent_key,
+                    fn_label,
+                    key,
+                    is_primary=_index_is_primary(agent_key, key),
+                    aggregation="person",
+                )
+            )
+    rte = data.get("rte")
+    if isinstance(rte, list) and rte:
+        col = _export_col_name(fn_label, "RTE")
+        vals = []
+        for p in range(n_examinees):
+            if p < len(rte):
+                try:
+                    vals.append(_csv_round(rte[p]))
+                except (TypeError, ValueError):
+                    vals.append(None)
+            else:
+                vals.append(None)
+        cols[col] = vals
+        legend.append(
+            _legend_row(
+                col,
+                agent_key,
+                fn_label,
+                "RTE",
+                is_primary=True,
+                aggregation="person",
+                notes="Response Time Effort (detect_rg)",
+            )
+        )
+    rte_by_method = data.get("rte_by_method")
+    if isinstance(rte_by_method, dict) and rte_by_method:
+        for method_name, method_vals in sorted(rte_by_method.items()):
+            if not isinstance(method_vals, list) or not method_vals:
+                continue
+            index_name = f"RTE_{method_name}"
+            col = _export_col_name(fn_label, index_name)
+            vals = []
+            for p in range(n_examinees):
+                if p < len(method_vals):
+                    try:
+                        vals.append(_csv_round(method_vals[p]))
+                    except (TypeError, ValueError):
+                        vals.append(None)
+                else:
+                    vals.append(None)
+            cols[col] = vals
+            legend.append(
+                _legend_row(
+                    col,
+                    agent_key,
+                    fn_label,
+                    index_name,
+                    is_primary=index_name == "RTE_NT_2" or index_name == "RTE_NT",
+                    aggregation="person",
+                    notes=f"Response Time Effort from detect_rg method output: {method_name}",
+                )
+            )
+    return cols, legend
+
+
+def _pair_record_participants(pair_record: dict) -> tuple[int | None, int | None]:
+    """Return 0-based participants for pair-level records from detect_ac/detect_as."""
+    if not isinstance(pair_record, dict):
+        return None, None
+    if "_pair" in pair_record:
+        pr = pair_record.get("_pair")
+        if isinstance(pr, (list, tuple)) and len(pr) >= 2:
+            try:
+                return int(pr[0]), int(pr[1])
+            except (TypeError, ValueError):
+                return None, None
+    if "Source" in pair_record and "Copier" in pair_record:
+        try:
+            return int(pair_record.get("Source")) - 1, int(pair_record.get("Copier")) - 1
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
+
+
+def _pair_level_index_columns(
+    agent_key: str,
+    fn_label: str,
+    pairs: list,
+    n_examinees: int,
+    flagged_copiers: set[int] | None = None,
+) -> tuple[dict[str, list], list[dict]]:
+    """Aggregate pair-level indices (detect_ac / detect_as) to one row per examinee."""
+    cols: dict[str, list] = {}
+    legend: list[dict] = []
+    if not isinstance(pairs, list) or not pairs:
+        return cols, legend
+    metric_keys: set[str] = set()
+    for pr in pairs:
+        if not isinstance(pr, dict):
+            continue
+        for k, v in pr.items():
+            if k not in _CSV_SKIP_KEYS and _csv_numeric(v):
+                metric_keys.add(k)
+    for key in sorted(metric_keys):
+        is_pval = key.endswith("_pval") or "pval" in key.lower()
+        agg = "pair_min" if is_pval else "pair_max"
+        suffix = "min" if is_pval else "max"
+        col = _export_col_name(fn_label, key, suffix=suffix)
+        vals = []
+        for p in range(n_examinees):
+            pid = p + 1
+            involved = []
+            for pr in pairs:
+                p1, p2 = _pair_record_participants(pr)
+                if p1 == p or p2 == p:
+                    involved.append(pr)
+            nums = []
+            for pr in involved:
+                if key in pr and _csv_numeric(pr[key]):
+                    try:
+                        nums.append(float(pr[key]))
+                    except (TypeError, ValueError):
+                        pass
+            if nums:
+                vals.append(_csv_round(min(nums) if is_pval else max(nums)))
+            else:
+                vals.append(None)
+        cols[col] = vals
+        legend.append(
+            _legend_row(
+                col,
+                agent_key,
+                fn_label,
+                key,
+                is_primary=_index_is_primary(agent_key, key) and not is_pval,
+                aggregation=agg,
+                notes=f"{'Min' if is_pval else 'Max'} over pairs where examinee is Source or Copier",
+            )
+        )
+    col_np = _export_col_name(fn_label, "n_pairs")
+    n_pairs = []
+    for p in range(n_examinees):
+        n_pairs.append(
+            sum(
+                1
+                for pr in pairs
+                if p in _pair_record_participants(pr)
+            )
+        )
+    cols[col_np] = n_pairs
+    legend.append(
+        _legend_row(col_np, agent_key, fn_label, "n_pairs", aggregation="pair_count", notes="Stored pairs involving examinee")
+    )
+    if flagged_copiers is not None:
+        col_fc = _export_col_name(fn_label, "flagged_copier")
+        cols[col_fc] = [1 if p in flagged_copiers else 0 for p in range(n_examinees)]
+        legend.append(
+            _legend_row(
+                col_fc,
+                agent_key,
+                fn_label,
+                "flagged_copier",
+                is_primary=True,
+                aggregation="flag",
+                notes="1 if examinee flagged as copier (detect_ac)",
+            )
+        )
+    return cols, legend
+
+
+def _collusion_partners_for_examinee(pairs: list, examinee_id_1based: int) -> str:
+    partners: set[int] = set()
+    for pr in pairs:
+        if not isinstance(pr, dict):
+            continue
+        src, cop = pr.get("Source", 0), pr.get("Copier", 0)
+        if src == examinee_id_1based:
+            partners.add(int(cop))
+        elif cop == examinee_id_1based:
+            partners.add(int(src))
+    return ", ".join(str(x) for x in sorted(partners))
+
+
+def _build_agent_index_guide(flags: dict, agents_for_export: list[tuple[str, str]], legend_df: pd.DataFrame) -> pd.DataFrame:
+    """One row per agent: primary indices (documented) and indices present in this export."""
+    rows: list[dict] = []
+    for agent_key, fn_label in agents_for_export:
+        meta = _AGENT_EXPORT_META.get(agent_key, {})
+        data = flags.get(agent_key, {})
+        if not isinstance(data, dict):
+            continue
+        sub = legend_df[legend_df["agent"] == fn_label] if not legend_df.empty and "agent" in legend_df.columns else pd.DataFrame()
+        exported_indices = sorted(set(sub["index_name"].dropna().astype(str))) if not sub.empty else []
+        primary_exported = sorted(
+            set(sub.loc[sub["is_primary_index"] == "Y", "index_name"].dropna().astype(str)) if not sub.empty else []
+        )
+        methods = data.get("methods") or []
+        if isinstance(methods, str):
+            methods = [methods]
+        flagged_n = len(_agent_flagged_indices(data))
+        rows.append(
+            {
+                "agent": fn_label,
+                "agent_label": meta.get("label", fn_label),
+                "primary_indices": ", ".join(meta.get("primary_indices") or []),
+                "primary_indices_in_export": ", ".join(primary_exported),
+                "all_indices_in_export": ", ".join(exported_indices),
+                "typical_indices_reference": meta.get("typical_indices", ""),
+                "methods_in_run": ", ".join(str(m) for m in methods),
+                "flag_rule": meta.get("flag_rule", ""),
+                "n_flagged_examinees": flagged_n,
+                "export_error": data.get("error") or "",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_examinee_flags_export(
+    flags: dict,
+    n_examinees: int,
+    *,
+    visible_agents: set[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Returns (examinee data, column dictionary, per-agent index guide)."""
+    empty = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    if n_examinees <= 0:
+        return empty
+
+    agents_for_export = _export_agents(flags, visible_agents)
+    columns: dict[str, list] = {"Examinee_ID": list(range(1, n_examinees + 1))}
+    legend_rows: list[dict] = [
+        _legend_row("Examinee_ID", "", "", "Examinee_ID", aggregation="id", notes="1-based examinee number"),
+    ]
+
+    flagged_by_per_person: list[list[str]] = [[] for _ in range(n_examinees)]
+    collusion_partners = [""] * n_examinees
+
+    for agent_key, fn_label in agents_for_export:
+        data = flags.get(agent_key, {})
+        if not isinstance(data, dict) or data.get("error"):
+            continue
+
+        flagged_set = _agent_flagged_indices(data)
+        flag_col = _export_flag_col_name(fn_label)
+        columns[flag_col] = [1 if p in flagged_set else 0 for p in range(n_examinees)]
+        legend_rows.append(
+            _legend_row(
+                flag_col,
+                agent_key,
+                fn_label,
+                "flagged",
+                is_primary=True,
+                aggregation="flag",
+                notes=f"1 if flagged by {fn_label}; rule: {_AGENT_EXPORT_META.get(agent_key, {}).get('flag_rule', '')}",
+            )
+        )
+        for p in range(n_examinees):
+            if p in flagged_set:
+                flagged_by_per_person[p].append(fn_label)
+
+        if agent_key == "as_agent" and isinstance(data.get("stat"), list) and data.get("stat"):
+            pair_cols, pair_legend = _pair_level_index_columns(
+                agent_key,
+                fn_label,
+                data.get("stat") or [],
+                n_examinees,
+                flagged_copiers=None,
+            )
+            columns.update(pair_cols)
+            legend_rows.extend(pair_legend)
+        else:
+            person_cols, person_legend = _person_level_index_columns(agent_key, fn_label, data, n_examinees)
+            columns.update(person_cols)
+            legend_rows.extend(person_legend)
+
+        pairs = data.get("pairs")
+        if isinstance(pairs, list) and pairs:
+            fc: set[int] = set()
+            if agent_key == "ac_agent":
+                for x in data.get("flagged_copiers") or []:
+                    try:
+                        fc.add(int(x))
+                    except (TypeError, ValueError):
+                        pass
+            pair_cols, pair_legend = _pair_level_index_columns(
+                agent_key,
+                fn_label,
+                pairs,
+                n_examinees,
+                flagged_copiers=fc if agent_key == "ac_agent" else None,
+            )
+            columns.update(pair_cols)
+            legend_rows.extend(pair_legend)
+            if agent_key == "ac_agent":
+                for p in range(n_examinees):
+                    part = _collusion_partners_for_examinee(pairs, p + 1)
+                    if part:
+                        collusion_partners[p] = part
+
+    columns["Any_Flagged"] = [1 if x else 0 for x in flagged_by_per_person]
+    columns["Flags_Count"] = [len(x) for x in flagged_by_per_person]
+    columns["Flagged_By"] = [", ".join(x) for x in flagged_by_per_person]
+    columns["Collusion_Partners"] = collusion_partners
+    for sum_col, note in (
+        ("Any_Flagged", "1 if any agent flagged this examinee"),
+        ("Flags_Count", "Number of agents that flagged this examinee"),
+        ("Flagged_By", "Comma-separated agent ids (detect_*)"),
+        ("Collusion_Partners", "Partner examinee IDs from detect_ac pairs"),
+    ):
+        legend_rows.append(
+            _legend_row(sum_col, "", "", sum_col, aggregation="summary", notes=note),
+        )
+
+    data_df = pd.DataFrame(columns)
+    flag_cols = [c for c in data_df.columns if c.endswith("_flagged")]
+    index_cols = sorted(
+        c
+        for c in data_df.columns
+        if c not in {"Examinee_ID", "Any_Flagged", "Flags_Count", "Flagged_By", "Collusion_Partners", *flag_cols}
+    )
+    col_order = ["Examinee_ID", "Any_Flagged", "Flags_Count", *flag_cols, "Flagged_By", "Collusion_Partners", *index_cols]
+    data_df = data_df[[c for c in col_order if c in data_df.columns]]
+
+    legend_df = pd.DataFrame(legend_rows)
+    guide_df = _build_agent_index_guide(flags, agents_for_export, legend_df)
+    return data_df, legend_df, guide_df
+
+
+def _examinee_export_zip_bytes(data_df: pd.DataFrame, legend_df: pd.DataFrame, guide_df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        result_csv = data_df.to_csv(index=False)
+        zf.writestr("result_data.csv", result_csv)
+        zf.writestr(
+            "column_dictionary.csv",
+            legend_df.to_csv(index=False),
+        )
+        zf.writestr(
+            "agent_index_guide.csv",
+            guide_df.to_csv(index=False),
+        )
+    return buf.getvalue()
+
+
+def _forensic_visible_agents() -> set[str]:
+    selected = st.session_state.get("last_detect_agents") or [
+        fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")
+    ]
+    if not selected:
+        selected = ["detect_nm"]
+    return {ABERRANCE_FN_TO_AGENT[fn] for fn in selected if fn in ABERRANCE_FN_TO_AGENT}
+
+
+def _render_examinee_export_download(
+    flags: dict,
+    visible_agents: set[str],
+    *,
+    key_prefix: str = "export",
+) -> None:
+    """Prepare and download per-examinee flags plus all computed agent indices."""
+    responses = st.session_state.get("forensic_responses") or st.session_state.get("last_uploaded_responses") or []
+    n_export = _infer_n_examinees(flags, responses)
+    st.subheader("📥 Download result data")
+    st.caption(
+        "ZIP: **result_data.csv** (all examinees × all computed indices), **column_dictionary.csv** (agent + index per column), "
+        "**agent_index_guide.csv** (primary indices per agent). "
+        "Column names use short prefixes such as `pm_L_S_TSEW` and `rg_RTE_NT_2`."
+    )
+    if n_export <= 0:
+        st.info("No examinee data yet. Upload responses and run **Detect** first.")
+        return
+    export_state_key = f"{key_prefix}_result_data_export"
+    export_sig = json.dumps(
+        {
+            "agents": sorted(visible_agents or []),
+            "n": n_export,
+            "flag_keys": sorted(str(k) for k in flags.keys()) if isinstance(flags, dict) else [],
+            "result_id": id(st.session_state.get("forensic_result")),
+            "column_naming": "short_agent_prefix_v1",
+        },
+        sort_keys=True,
+    )
+    cached = st.session_state.get(export_state_key)
+    if not isinstance(cached, dict) or cached.get("sig") != export_sig:
+        cached = None
+
+    col_a, col_b = st.columns([1, 3])
+    with col_a:
+        prepare = st.button("Prepare result data", key=f"{key_prefix}_prepare_result_data", type="primary")
+    with col_b:
+        st.caption("Export generation is manual so this page stays responsive for large pairwise outputs.")
+    if prepare or cached is None:
+        if prepare:
+            with st.spinner("Building result_data.csv..."):
+                data_df, col_legend_df, agent_guide_df = _build_examinee_flags_export(
+                    flags, n_export, visible_agents=visible_agents
+                )
+                cached = {
+                    "sig": export_sig,
+                    "data_df": data_df,
+                    "legend_df": col_legend_df,
+                    "guide_df": agent_guide_df,
+                    "zip_bytes": _examinee_export_zip_bytes(data_df, col_legend_df, agent_guide_df),
+                    "csv_bytes": data_df.to_csv(index=False).encode("utf-8-sig"),
+                }
+                st.session_state[export_state_key] = cached
+        else:
+            st.info("Click **Prepare result data** to create the downloadable files.")
+            return
+
+    data_df = cached["data_df"]
+    col_legend_df = cached["legend_df"]
+    agent_guide_df = cached["guide_df"]
+    n_any = int(data_df["Any_Flagged"].sum()) if "Any_Flagged" in data_df.columns else 0
+    if isinstance(col_legend_df, pd.DataFrame) and not col_legend_df.empty and "aggregation" in col_legend_df.columns:
+        n_index_cols = int((~col_legend_df["aggregation"].isin(["id", "summary", "flag"])).sum())
+    else:
+        n_index_cols = len(
+            [
+                c
+                for c in data_df.columns
+                if c not in {"Examinee_ID", "Any_Flagged", "Flags_Count", "Flagged_By", "Collusion_Partners"}
+                and not c.endswith("_flagged")
+            ]
+        )
+    st.markdown(f"**{n_export}** examinees · **{n_any}** flagged · **{n_index_cols}** computed index columns.")
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            label="⬇️ Download ZIP (recommended)",
+            data=cached["zip_bytes"],
+            file_name="psymas_result_data.zip",
+            mime="application/zip",
+            key=f"{key_prefix}_zip",
+            type="primary",
+            use_container_width=True,
+        )
+    with dl2:
+        st.download_button(
+            label="⬇️ CSV only (result_data)",
+            data=cached["csv_bytes"],
+            file_name="psymas_result_data.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_csv",
+            use_container_width=True,
+        )
+    if st.checkbox("Show export preview", value=False, key=f"{key_prefix}_show_export_preview"):
+        st.dataframe(data_df.head(15), use_container_width=True, hide_index=True)
+        st.caption("Agent index guide (primary indices)")
+        st.dataframe(agent_guide_df, use_container_width=True, hide_index=True)
+
+
+_GOV_STRENGTH_RANK = {"unavailable": -1, "none": 0, "weak": 1, "moderate": 2, "strong": 3}
+_GOV_DOMAIN_META = {
+    "MF": {
+        "label": "Misfit Evidence",
+        "flag_cols": ["nm_flagged", "pm_flagged"],
+        "primary_cols": ["nm_ZU3_S", "pm_L_S_NO", "pm_L_S_TS", "pm_L_ST_NO", "pm_L_ST_TS", "pm_Q_ST_NO", "pm_Q_ST_TS"],
+        "supporting_prefixes": ["nm_", "pm_ECI2", "pm_ECI4"],
+        "required": ["responses"],
+    },
+    "RT": {
+        "label": "Response-Time Evidence",
+        "flag_cols": ["rg_flagged"],
+        "primary_cols": ["rg_RTE"],
+        "supporting_prefixes": ["rg_RTE_NT", "rg_RTE_CT", "rg_RTE_CUMP"],
+        "required": ["response_times"],
+    },
+    "SIM": {
+        "label": "Similarity Evidence",
+        "flag_cols": ["ac_flagged", "as_flagged"],
+        "primary_cols": ["ac_OMG_S_max", "as_M4_S_max", "as_OMG_S_max", "as_GBT_S_max"],
+        "supporting_prefixes": ["ac_", "as_"],
+        "required": ["responses"],
+    },
+    "PK": {
+        "label": "Preknowledge Evidence",
+        "flag_cols": ["pk_flagged"],
+        "primary_cols": ["pk_L_S", "pk_L_T", "pk_L_ST", "pk_LR_S", "pk_ML_S"],
+        "supporting_prefixes": ["pk_"],
+        "required": ["exposure_or_compromised_items"],
+    },
+    "CP": {
+        "label": "Change-Pattern Evidence",
+        "flag_cols": ["cp_flagged"],
+        "primary_cols": ["cp_L_T_MAX1", "cp_L_S_MAX1", "cp_W_T_MAX1", "cp_W_S_MAX1"],
+        "supporting_prefixes": ["cp_"],
+        "required": ["item_sequence_or_testing_order"],
+    },
+    "TP": {
+        "label": "Tampering Evidence",
+        "flag_cols": ["tt_flagged"],
+        "primary_cols": ["tt_change_rate"],
+        "supporting_prefixes": ["tt_"],
+        "required": ["answer_change_records"],
+    },
+}
+
+
+def _gov_to_float(value) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        out = float(value)
+        if not math.isfinite(out):
+            return None
+        return out
+    except (TypeError, ValueError):
+        return None
+
+
+def _gov_truthy_flag(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(_gov_to_float(value))
+
+
+def _gov_domain_available(df: pd.DataFrame, domain: str, meta: dict) -> bool:
+    cols = set(df.columns)
+    if domain in {"MF", "SIM"}:
+        return bool(cols & set(meta["flag_cols"] + meta["primary_cols"]))
+    if domain == "RT":
+        return bool(cols & {"rg_flagged", "rg_RTE"})
+    if domain == "PK":
+        return bool(cols & {"pk_flagged", "pk_L_S", "pk_L_T", "pk_L_ST"})
+    if domain == "CP":
+        return bool(cols & {"cp_flagged", "cp_L_T_MAX1", "cp_L_S_MAX1", "cp_W_T_MAX1"})
+    if domain == "TP":
+        return bool(cols & {"tt_flagged", "tt_change_rate", "tt_n_changed"})
+    return False
+
+
+def _gov_supporting_hits(row: pd.Series, domain: str, meta: dict, primary_flag_count: int) -> list[str]:
+    hits: list[str] = []
+    for col in row.index:
+        if col in meta["flag_cols"] or col in meta["primary_cols"]:
+            continue
+        if not any(str(col).startswith(prefix) for prefix in meta["supporting_prefixes"]):
+            continue
+        val = _gov_to_float(row.get(col))
+        if val is None:
+            continue
+        if col.endswith("_pval") or "_pval_" in col:
+            if val <= 0.05:
+                hits.append(col)
+        elif domain == "TP" and col == "tt_n_changed" and val > 0:
+            hits.append(col)
+        elif domain == "SIM" and col.endswith("_n_pairs") and val > 0 and primary_flag_count > 0:
+            hits.append(col)
+    return hits
+
+
+def _gov_domain_profile(row: pd.Series, df: pd.DataFrame, domain: str, meta: dict) -> dict:
+    available = _gov_domain_available(df, domain, meta)
+    if not available:
+        return {
+            "domain": domain,
+            "label": meta["label"],
+            "strength": "unavailable",
+            "primary_hits": [],
+            "supporting_hits": [],
+            "trace_columns": [],
+            "rule_id": "DS-00",
+            "note": f"Required data unavailable: {', '.join(meta['required'])}.",
+        }
+
+    primary_hits = [c for c in meta["flag_cols"] if c in row.index and _gov_truthy_flag(row.get(c))]
+    supporting_hits = _gov_supporting_hits(row, domain, meta, len(primary_hits))
+    if len(primary_hits) >= 1 and len(supporting_hits) >= 1:
+        strength, rule_id = "strong", "DS-05"
+    elif len(primary_hits) >= 1:
+        strength, rule_id = "moderate", "DS-03"
+    elif len(supporting_hits) >= 2:
+        strength, rule_id = "moderate", "DS-04"
+    elif len(supporting_hits) == 1:
+        strength, rule_id = "weak", "DS-02"
+    else:
+        strength, rule_id = "none", "DS-01"
+
+    trace_cols = sorted(set(primary_hits + supporting_hits + [c for c in meta["primary_cols"] if c in row.index]))
+    return {
+        "domain": domain,
+        "label": meta["label"],
+        "strength": strength,
+        "primary_hits": primary_hits,
+        "supporting_hits": supporting_hits,
+        "trace_columns": trace_cols,
+        "rule_id": rule_id,
+        "note": "",
+    }
+
+
+def _gov_case_status(domain_profiles: dict[str, dict]) -> tuple[str, str, list[str]]:
+    strengths = {k: v["strength"] for k, v in domain_profiles.items()}
+    ranks = {k: _GOV_STRENGTH_RANK.get(v, -1) for k, v in strengths.items()}
+    available = [k for k, v in ranks.items() if v >= 0]
+    moderate_plus = [k for k, v in ranks.items() if v >= 2]
+    weak = [k for k, v in ranks.items() if v == 1]
+    strong = [k for k, v in ranks.items() if v == 3]
+    triggered: list[str] = []
+
+    if available and all(ranks[k] == 0 for k in available):
+        return "None", "Low", ["BL-01"]
+    if len(moderate_plus) >= 3:
+        return "Convergent", "High", ["CV-02"]
+    if len(moderate_plus) >= 2:
+        return "Convergent", "High", ["CV-01"]
+    if strong and any(k not in strong and ranks[k] >= 2 for k in ranks):
+        return "Convergent", "High", ["CV-03"]
+    if len(moderate_plus) == 1 and all(k == moderate_plus[0] or ranks[k] <= 1 for k in ranks):
+        triggered.append("IS-02" if strengths[moderate_plus[0]] == "strong" else "IS-01")
+        return "Isolated", "Moderate", triggered
+    if len(weak) >= 2 and not moderate_plus:
+        return "Weak", "Low", ["WE-01"]
+    if not available:
+        return "Unavailable", "Low", ["ME-00"]
+    if any(v == -1 for v in ranks.values()) and not strong:
+        return "Limited", "Low", ["ME-01"]
+    return "Mixed", "Moderate", ["MX-01"]
+
+
+def _build_governed_evidence_profile(result_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rows: list[dict] = []
+    domain_rows: list[dict] = []
+    if result_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    for _, row in result_df.iterrows():
+        examinee_id = row.get("Examinee_ID", "")
+        profiles = {
+            code: _gov_domain_profile(row, result_df, code, meta)
+            for code, meta in _GOV_DOMAIN_META.items()
+        }
+        status, priority, case_rules = _gov_case_status(profiles)
+        missing = [
+            f"{code}:{profile['note']}"
+            for code, profile in profiles.items()
+            if profile["strength"] == "unavailable" and profile.get("note")
+        ]
+        primary_concern = ", ".join(
+            code for code, profile in profiles.items() if _GOV_STRENGTH_RANK.get(profile["strength"], -1) >= 2
+        ) or "None"
+        trace_cols = sorted({c for profile in profiles.values() for c in profile.get("trace_columns", [])})
+        rows.append(
+            {
+                "Examinee_ID": examinee_id,
+                "Evidence_Status": status,
+                "Review_Priority": priority,
+                "Primary_Concern": primary_concern,
+                "Rule_IDs_Triggered": ", ".join(case_rules),
+                "Missing_Evidence": " | ".join(missing),
+                "Trace_Columns": ", ".join(trace_cols),
+                "Draft_Statement": _governance_statement(status, primary_concern),
+                "Audit_Status": "pass_trace_required" if trace_cols or status in {"None", "Unavailable", "Limited"} else "needs_trace_review",
+                **{f"{code}_Strength": profile["strength"] for code, profile in profiles.items()},
+            }
+        )
+        for code, profile in profiles.items():
+            domain_rows.append(
+                {
+                    "Examinee_ID": examinee_id,
+                    "Domain": code,
+                    "Domain_Label": profile["label"],
+                    "Strength": profile["strength"],
+                    "Domain_Rule": profile["rule_id"],
+                    "Primary_Hits": ", ".join(profile["primary_hits"]),
+                    "Supporting_Hits": ", ".join(profile["supporting_hits"]),
+                    "Trace_Columns": ", ".join(profile["trace_columns"]),
+                    "Missing_Note": profile["note"],
+                }
+            )
+    return pd.DataFrame(rows), pd.DataFrame(domain_rows)
+
+
+def _governance_statement(status: str, primary_concern: str) -> str:
+    if status == "Convergent":
+        return f"The pattern shows convergent evidence for further review ({primary_concern})."
+    if status == "Isolated":
+        return f"The pattern represents isolated evidence and requires cautious interpretation ({primary_concern})."
+    if status == "Mixed":
+        return "The evidence is mixed; some indicators raise concern while other evidence is limited or not aligned."
+    if status == "Weak":
+        return "Only weak evidence accumulation was identified from the available evidence."
+    if status == "Limited":
+        return "The available evidence is limited because key data sources are unavailable."
+    if status == "Unavailable":
+        return "The available outputs do not contain enough evidence domains for governed interpretation."
+    return "No elevated forensic concern was identified from the available evidence."
+
+
+def _governance_source_result_df() -> pd.DataFrame:
+    for key in ("summary_result_data_export", "prep_result_data_export"):
+        cached = st.session_state.get(key)
+        if isinstance(cached, dict) and isinstance(cached.get("data_df"), pd.DataFrame):
+            return cached["data_df"].copy()
+    fr = st.session_state.get("forensic_result")
+    if isinstance(fr, dict):
+        flags = fr.get("flags", {})
+        responses = st.session_state.get("forensic_responses") or st.session_state.get("last_uploaded_responses") or []
+        n_export = _infer_n_examinees(flags, responses)
+        if n_export > 0:
+            data_df, _, _ = _build_examinee_flags_export(flags, n_export, visible_agents=_forensic_visible_agents())
+            return data_df
+    sample_path = Path("psymas_tutorial_data/psymas_result_data.csv")
+    if sample_path.exists():
+        return pd.read_csv(sample_path)
+    return pd.DataFrame()
 
 
 def _suggest_module(user_description: str) -> tuple[str, str]:
@@ -2296,7 +3505,7 @@ def _build_test_taker_report_pdf(
 
         story.append(Spacer(1, 0.14 * inch))
         footer_para = Paragraph(
-            f"<b>PsyMAS</b> · Psychometric Modeling Assistant System · Ver. 0.5.0<br/>"
+            f"<b>PsyMAS</b> · Psychometric Modeling Assistant System · Ver. 0.6.0<br/>"
             f"Confidential forensic analysis artifact · Generated {gen_date} · Not for high-stakes decisions without review",
             styles["TtrFooter"],
         )
@@ -3470,7 +4679,11 @@ NAV_OPTIONS = [
     "Preparation",
     "Data review",
     "Aberrance Summary",
+    "Evidence Governance",
     "Student Profile",
+    "Collusion Network",
+    "Individual Aberrance",
+    "Temporal Forensics",
     "Settings",
 ]
 if "run_mode" not in st.session_state:
@@ -3506,7 +4719,7 @@ if run_mode == "Command Center":
 
 with st.sidebar:
     st.title("PsyMAS-Aberrance")
-    st.caption("Ver. 0.5.0— Psychometric MAS for detecting aberrant test behavior.")
+    st.caption("Ver. 0.6.0— Psychometric MAS for detecting aberrant test behavior.")
     st.divider()
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))
@@ -3519,7 +4732,11 @@ with st.sidebar:
         "Preparation": True,
         "Data review": _has_resp,
         "Aberrance Summary": _has_forensic,
+        "Evidence Governance": _has_forensic,
         "Student Profile": _has_forensic,
+        "Collusion Network": _has_forensic,
+        "Individual Aberrance": _has_forensic,
+        "Temporal Forensics": _has_forensic,
         "Settings": True,
     }
     def _nav_label(x: str) -> str:
@@ -3528,7 +4745,11 @@ with st.sidebar:
             "Preparation": "🧪 Preparation",
             "Data review": "📋 Data review",
             "Aberrance Summary": "🧾 Aberrance Summary",
+            "Evidence Governance": "🧩 Evidence Governance",
             "Student Profile": "👤 Student Profile",
+            "Collusion Network": "🕸️ Collusion Network",
+            "Individual Aberrance": "📍 Individual Aberrance",
+            "Temporal Forensics": "⏱️ Temporal Forensics",
             "Settings": "⚙️ Settings",
         }.get(x, x)
         dot = "🟢 " if _nav_ready.get(x) else "⚪ "
@@ -3554,15 +4775,15 @@ with st.sidebar:
     psi_loaded = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
     comp_items = st.session_state.get("prep_compromised_items") or []
     comp_ok = bool(comp_items)
-    tt_name = st.session_state.get("prep_tt_data_name") or ""
-    tt_loaded = bool(str(tt_name).strip())
+    answer_change_rows = len(st.session_state.get("prep_answer_changes") or [])
+    tt_loaded = answer_change_rows > 0
 
     # Requirements depend on which agents are currently selected (via Preparation checkboxes).
     selected_fns = [fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")]
     if not selected_fns:
         selected_fns = ["detect_nm"]  # default backend fallback (no extra inputs)
     need_rt = "detect_rg" in selected_fns
-    need_psi = any(fn in selected_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"])
+    need_psi = any(fn in selected_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"])
     need_comp = "detect_pk" in selected_fns
     need_tt = "detect_tt" in selected_fns
 
@@ -3585,16 +4806,20 @@ with st.sidebar:
     rt_extra = (f"{rt_rows} rows" if rt_loaded else "not loaded") + (" (required)" if need_rt else " (optional)")
     psi_extra = ("ready" if psi_loaded else "not ready") + (" (required)" if need_psi else " (optional)")
     comp_extra = (f"{len(comp_items)} set" if comp_ok else "none") + (" (required)" if need_comp else " (optional)")
-    tt_extra = (str(tt_name) if tt_loaded else "not loaded") + (" (required)" if need_tt else " (optional)")
+    tt_extra = (f"{answer_change_rows} rows" if tt_loaded else "not loaded") + (" (required)" if need_tt else " (optional)")
 
     st.caption(_sb_line("Response", resp_loaded, resp_extra))
     st.caption(_sb_line("RT", rt_loaded, rt_extra))
     st.caption(_sb_line("ψ (item params)", psi_loaded, psi_extra))
     st.caption(_sb_line("Compromised items", comp_ok, comp_extra))
-    st.caption(_sb_line("Tampering file", tt_loaded, tt_extra))
+    st.caption(_sb_line("Answer changes", tt_loaded, tt_extra))
     st.caption(_sb_line(f"LLM ({provider_sb})", llm_configured_sb, "configured" if llm_configured_sb else "missing key"))
     backend_ok, backend_note, _backend_tip = _backend_status_summary()
     st.caption(_sb_line("LangGraph Agents", backend_ok, backend_note))
+    st.caption(_sb_line("Detect results", _has_forensic, "ready" if _has_forensic else "run Detect first"))
+    if _has_forensic:
+        st.caption("Export: open Aberrance Summary, then click Prepare result data.")
+    st.caption("UI: export enabled (v0.6.0+)")
     st.divider()
 
 # Global: activable buttons green, fixed width (no full row)
@@ -3783,11 +5008,11 @@ def _render_tool_aberrance() -> None:
         n_r = len(st.session_state.last_uploaded_responses)
         n_c = len(st.session_state.last_uploaded_responses[0]) if n_r else 0
         rt_txt = " + RT" if st.session_state.get("last_uploaded_rt_data") else ""
-        st.caption(f"✓ Using data from **sidebar**: **{n_r}** rows × **{n_c}** items{rt_txt}.")
+        st.caption(f"Using session data: **{n_r}** rows × **{n_c}** items{rt_txt}.")
     else:
-        st.warning("Upload **Response (CSV)** in the **sidebar** to run aberrance analysis.")
+        st.warning("Use **Bulk upload** on the **Preparation** page to load response data before running aberrance analysis.")
     if ab_fns and "detect_rg" in ab_fns and not st.session_state.get("last_uploaded_rt_data"):
-        st.warning("**Rapid Guessing (detect_rg)** benefits from RT data. Upload RT in the **sidebar**.")
+        st.warning("**Rapid Guessing (detect_rg)** benefits from RT data. Upload RT on the **Preparation** page.")
     # Status strip: what will run
     has_data = ab_resp is not None or has_sidebar_data
     status_parts = [f"Data: {'✓' if has_data else '✗'}"]
@@ -3855,7 +5080,7 @@ def _render_tool_aberrance() -> None:
         except Exception as e:
             st.exception(e)
     elif run_ab and not has_data:
-        st.error("Upload response data (CSV) in the **sidebar** to run the Aberrance tool.")
+        st.error("Upload response data (CSV) on the **Preparation** page to run the Aberrance tool.")
 
     # ----- 4. Results -----
     st.divider()
@@ -3942,7 +5167,7 @@ def _render_tool_aberrance() -> None:
             st.caption("Result returned but no person-fit table (keys: " + ", ".join(aberrance.keys()) + ").")
     else:
         st.caption("No results yet. Upload response data above and click **Run**.")
-    st.caption("Use the **sidebar** to switch to Main or another module.")
+    st.caption("Use the navigation sidebar to switch to another module.")
 
 
 def _render_scenario_page() -> None:
@@ -3951,7 +5176,7 @@ def _render_scenario_page() -> None:
     # Scenario A = Low-stakes (effort/quality); B = High-stakes (full detection set per table).
     SCENARIO_PRESETS_AB = {
         "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\n Examples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Low-stakes"},
-        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, and tampering detection.\n Examples: Medical licensing; Answer copying; Brain-dump", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
+        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, tampering, and preknowledge detection.\n Examples: Medical licensing; Answer copying; Brain-dump", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
         "C": {"title": "Scenario C: Custom", "description": "Choose detection agents manually on the Preparation page.\n\n\n", "icon": "✏️", "selects": [], "image": "https://placehold.co/320x160/2d2d4a/94a3b8?text=Custom"},
     }
     # CSS: card container (relative, left-aligned), overlay button on top, image left-aligned, equal height
@@ -4114,9 +5339,9 @@ def _render_tool_irt() -> None:
             n_r = len(st.session_state.last_uploaded_responses)
             n_c = len(st.session_state.last_uploaded_responses[0]) if n_r else 0
             rt_txt = " + RT" if st.session_state.get("last_uploaded_rt_data") else ""
-            st.caption(f"✓ Using data from **sidebar**: **{n_r}** rows × **{n_c}** items{rt_txt}.")
+            st.caption(f"Using session data: **{n_r}** rows × **{n_c}** items{rt_txt}.")
         else:
-            st.warning("Upload **Response (CSV)** in the **sidebar** to run the IRT agent.")
+            st.warning("Use **Bulk upload** on the **Preparation** page to load response data before running the IRT agent.")
 
         # Status check only; don't auto-install on reruns
         r_ok_irt, r_msg_irt = _check_r_packages(install_if_missing=False)
@@ -4129,7 +5354,7 @@ def _render_tool_irt() -> None:
                 responses = st.session_state.last_uploaded_responses
                 rt_data = st.session_state.get("last_uploaded_rt_data") or []
             else:
-                st.error("Upload response data in the **sidebar** to run the IRT agent.")
+                st.error("Upload response data on the **Preparation** page to run the IRT agent.")
                 st.stop()
             state = {
                 "responses": responses,
@@ -4151,7 +5376,7 @@ def _render_tool_irt() -> None:
         if st.session_state.get("irt_only_result"):
             st.subheader("Last results")
             _render_results(st.session_state.irt_only_result, response_only=True)
-    st.caption("Use the **sidebar** to switch to Main or another module.")
+    st.caption("Use the navigation sidebar to switch to another module.")
 
 
 def _render_tool_rt() -> None:
@@ -4161,9 +5386,9 @@ def _render_tool_rt() -> None:
     if has_sidebar_rt:
         n_r = len(st.session_state.last_uploaded_responses)
         n_c = len(st.session_state.last_uploaded_responses[0]) if n_r else 0
-        st.caption(f"✓ Using data from **sidebar**: **{n_r}** rows × **{n_c}** items + RT.")
+        st.caption(f"Using session data: **{n_r}** rows × **{n_c}** items + RT.")
     else:
-        st.warning("Upload **Response (CSV)** and **RT (CSV)** in the **sidebar** to run the RT agent.")
+        st.warning("Use **Bulk upload** on the **Preparation** page to load response and RT data before running the RT agent.")
     run_rt_btn = st.button("Run RT agent", key="run_rt_only", type="primary")
     if run_rt_btn:
         if has_sidebar_rt:
@@ -4183,7 +5408,7 @@ def _render_tool_rt() -> None:
             except Exception as e:
                 st.exception(e)
         else:
-            st.error("Upload response and RT in the **sidebar** to run the RT agent.")
+            st.error("Upload response and RT on the **Preparation** page to run the RT agent.")
     if st.session_state.get("rt_only_result"):
         final_rt = st.session_state.rt_only_result
         st.subheader("Latency flags")
@@ -4191,7 +5416,7 @@ def _render_tool_rt() -> None:
             st.write(", ".join(final_rt["latency_flags"]))
         else:
             st.info("No latency flags (RT agent returns flags when implemented).")
-    st.caption("Use the **sidebar** to switch to Main or another module.")
+    st.caption("Use the navigation sidebar to switch to another module.")
 
 
 def _render_backend_test() -> None:
@@ -4219,11 +5444,13 @@ def _render_backend_test() -> None:
 
     responses = st.session_state.get("last_uploaded_responses") or []
     rt_data = st.session_state.get("last_uploaded_rt_data") or []
+    answer_changes = st.session_state.get("prep_answer_changes") or []
     psi_data = st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or []
 
     st.markdown("**Session snapshot**")
     st.caption(f"- Responses: **{len(responses)}** rows")
     st.caption(f"- RT rows: **{len(rt_data)}**")
+    st.caption(f"- Answer-change rows: **{len(answer_changes)}**")
     st.caption(f"- ψ item params: **{len(psi_data)}** items")
     if psi_data and isinstance(psi_data, list) and isinstance(psi_data[0], dict):
         st.caption(f"- ψ keys (first item): `{list(psi_data[0].keys())}`")
@@ -4233,6 +5460,7 @@ def _render_backend_test() -> None:
     raw_payload = {
         "responses": responses,
         "rt_data": rt_data,
+        "answer_changes": answer_changes,
         "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
         "compromised_items": st.session_state.get("prep_compromised_items") or [],
         "model_settings": st.session_state.get("model_settings") or {},
@@ -4243,6 +5471,7 @@ def _render_backend_test() -> None:
         "Payload sizes — "
         f"responses: {len(payload.get('responses') or [])}, "
         f"rt_data: {len(payload.get('rt_data') or [])}, "
+        f"answer_changes: {len(payload.get('answer_changes') or [])}, "
         f"psi_data: {len(payload.get('psi_data') or [])}"
     )
     with st.expander("Show payload (JSON)", expanded=False):
@@ -4563,14 +5792,14 @@ elif run_mode == "Preparation":
     st.caption("Select agents to run, then upload data and click **Detect** below.")
 
     # Simple checkbox list of all agents on Preparation
-    # Ordered to match index categories: nm, pm, as, pk, tt, (cp implicit), rg.
+    # Ordered to match index categories: nm, pm, as, pk, (cp implicit), rg.
     prep_agent_labels = [
         ("detect_nm", "Nonparametric Misfit (detect_nm) — Guttman/HT person-fit without IRT."),
         ("detect_pm", "Model Misfit (detect_pm) — parametric person-fit under IRT."),
         ("detect_as", "Answer Similarity (detect_as) — similarity clusters / collusion."),
         ("detect_ac", "Answer Copying (detect_ac) — source–copier pairs."),
         ("detect_pk", "Preknowledge (detect_pk) — success on compromised items."),
-        ("detect_tt", "Test Tampering (detect_tt) — erasures / overwriting patterns."),
+        ("detect_tt", "Test Tampering (detect_tt) — answer-change / erasure patterns."),
         ("detect_rg", "Rapid Guessing (detect_rg) — unusually fast, low-effort responding."),
     ]
     for fn, desc in prep_agent_labels:
@@ -4580,62 +5809,96 @@ elif run_mode == "Preparation":
     if not prep_ab_fns:
         prep_ab_fns = ["detect_nm"]  # default so at least one agent runs
 
-    # Decide which extra inputs are relevant based on selected agents
-    # RT is required not only for Rapid Guessing but also for time-based parametric
-    # and preknowledge/similarity indices (L_T / L_ST_* etc.).
-    need_rt = any(fn in prep_ab_fns for fn in ["detect_rg", "detect_pm", "detect_pk", "detect_as", "detect_ac"])
+    # Decide which extra inputs are relevant based on selected agents.
+    # Only rapid guessing is blocked on RT in the current backend; other agents may use
+    # score-only methods or ignore RT.
+    need_rt = "detect_rg" in prep_ab_fns
     need_comp = "detect_pk" in prep_ab_fns  # compromised items needed for Preknowledge
-    need_tt = "detect_tt" in prep_ab_fns  # tampering data needed for Test Tampering
+    need_tt = "detect_tt" in prep_ab_fns  # answer-change data needed for Test Tampering
     need_model = any(
-        fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"]
-    )  # IRT model needed when any IRT-based agent is selected
+        fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"]
+    )  # IRT model needed when psi-based agents are selected
     st.divider()
 
     if not need_model:
         st.info(
-            "**Item parameters (ψ, psi)** are only required for **detect_pm**, **detect_pk**, **detect_ac**, "
-            "**detect_as**, or **detect_rg**. "
+            "**Item parameters (ψ, psi)** are required for **detect_pm**, **detect_pk**, **detect_ac**, or **detect_as**. "
             "**detect_nm** alone (the default if nothing is checked) does not use ψ—you can upload **Response** "
-            "and run **Detect** below. Add **detect_tt** only if you need tampering detection."
+            "and run **Detect** below."
         )
 
-    # Same row, equal width: Upload Response | Model Estimation | Upload Item Parameter
-    col_resp, col_model, col_psi = st.columns(3, gap="medium")
+    with st.container(border=True):
+        st.markdown(
+            """
+            <div class="psymas-card-head">
+              <div class="psymas-card-title">Bulk upload</div>
+              <div class="psymas-card-status">CSV/JSON</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        bulk_files = st.file_uploader(
+            "Upload multiple datasets",
+            type=["csv", "json"],
+            accept_multiple_files=True,
+            key="prep_bulk_uploader",
+            help="Drop several files at once. Names such as responses_matrix, response_times, compromised_items, answer_changes, or item_params are detected automatically.",
+        )
+        bulk_sig = tuple((getattr(f, "name", None), getattr(f, "size", None)) for f in (bulk_files or []))
+        if bulk_sig and st.session_state.get("prep_last_bulk_sig") != bulk_sig:
+            loaded_bulk, bulk_errors = _process_prep_bulk_uploads(list(bulk_files or []))
+            st.session_state["prep_last_bulk_sig"] = bulk_sig
+            st.session_state["prep_bulk_loaded_messages"] = loaded_bulk
+            st.session_state["prep_bulk_error_messages"] = bulk_errors
+        for msg in st.session_state.get("prep_bulk_loaded_messages") or []:
+            st.success(msg)
+        for msg in st.session_state.get("prep_bulk_error_messages") or []:
+            st.warning(msg)
 
-    with col_resp:
+    col_data, col_model = st.columns(2, gap="medium")
+
+    with col_data:
         with st.container(border=True):
             st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
+            resp_loaded_now = bool(st.session_state.get("last_uploaded_responses"))
+            rt_loaded_now = bool(st.session_state.get("last_uploaded_rt_data"))
+            psi_loaded_now = bool(st.session_state.get("last_irt_item_params") or st.session_state.get("item_params"))
+            comp_items_now = st.session_state.get("prep_compromised_items") or []
+            answer_changes_now = st.session_state.get("prep_answer_changes") or []
             st.markdown(
                 f"""
                 <div class="psymas-card-head">
-                  <div class="psymas-card-title">Upload Response</div>
-                  <div class="psymas-card-status">
-                    <span title="{_esc('Response loaded' if resp_loaded else 'Response missing')}">{_dot(resp_loaded)}Resp</span>
-                  </div>
+                  <div class="psymas-card-title">Data status</div>
+                  <div class="psymas-card-status">{_dot(resp_loaded_now)}Response</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            up_resp = st.file_uploader(
-                "Response (CSV)",
-                type=["csv"],
-                accept_multiple_files=False,
-                key="main_resp_uploader",
-                help="If the first try shows an error, wait until the file finishes uploading or pick it again—cloud cold starts can interrupt the first request.",
-            )
-            resp_sig = (getattr(up_resp, "name", None), getattr(up_resp, "size", None)) if up_resp is not None else None
-            if resp_sig and st.session_state.get("prep_last_resp_sig") != resp_sig:
-                try:
-                    up_resp.seek(0)
-                    _r = pd.read_csv(up_resp)
-                    _r = _drop_index_column(_r)
-                    _r = _validate_binary_responses(_r)
-                    st.session_state.last_uploaded_responses = _r.to_dict(orient="records")
-                    st.session_state["prep_last_resp_sig"] = resp_sig
-                    st.session_state["_nav_request"] = "Preparation"
-                    # Do not st.rerun() here: file_uploader already triggers a rerun; a second rerun races the upload HTTP request and causes flaky failures on Railway.
-                except Exception as e:
-                    st.error(f"{e}")
+            n_resp = len(st.session_state.get("last_uploaded_responses") or [])
+            n_items_status = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_resp else 0
+            status_rows = [
+                ("Response", resp_loaded_now, f"{n_resp} x {n_items_status}" if resp_loaded_now else "missing"),
+                ("RT", rt_loaded_now, f"{len(st.session_state.get('last_uploaded_rt_data') or [])} rows" if rt_loaded_now else "not loaded"),
+                ("Item parameters", psi_loaded_now, f"{len(st.session_state.get('last_irt_item_params') or st.session_state.get('item_params') or [])} items" if psi_loaded_now else "not loaded"),
+                ("Compromised items", bool(comp_items_now), f"{len(comp_items_now)} set" if comp_items_now else "not loaded"),
+                ("Answer changes", bool(answer_changes_now), f"{len(answer_changes_now)} rows" if answer_changes_now else "not loaded"),
+            ]
+            for label, ok, detail in status_rows:
+                st.markdown(f"{_dot(ok)}**{label}**: {detail}", unsafe_allow_html=True)
+            if st.button("Clear uploaded data", key="prep_clear_uploaded_data"):
+                for key in (
+                    "last_uploaded_responses",
+                    "last_uploaded_rt_data",
+                    "last_irt_item_params",
+                    "item_params",
+                    "prep_compromised_items",
+                    "prep_answer_changes",
+                    "prep_last_bulk_sig",
+                    "prep_bulk_loaded_messages",
+                    "prep_bulk_error_messages",
+                ):
+                    st.session_state.pop(key, None)
+                st.rerun()
 
     with col_model:
         if need_model:
@@ -4754,145 +6017,8 @@ elif run_mode == "Preparation":
                     unsafe_allow_html=True,
                 )
                 st.caption(
-                    "Select an IRT-based agent (pm, pk, ac, as, or rg) above to estimate or import ψ here."
+                    "Select a psi-based agent (pm, pk, ac, or as) above to estimate or import ψ here."
                 )
-
-    with col_psi:
-        if need_model:
-            with st.container(border=True):
-                st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
-                ip_psi = st.session_state.get("last_irt_item_params") or []
-                psi_ready = bool(ip_psi)
-                st.markdown(
-                    f"""
-                    <div class="psymas-card-head">
-                      <div class="psymas-card-title">Upload Item Parameter</div>
-                      <div class="psymas-card-status">{_dot(psi_ready)}{'Ready' if psi_ready else 'Not ready'}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                up_psi = st.file_uploader(
-                    "ψ (JSON/CSV)",
-                    type=["json", "csv"],
-                    accept_multiple_files=False,
-                    key="main_psi_uploader",
-                    help="Pre-estimated item parameters: JSON array of objects with a, b (and optionally c), or CSV with columns a, b [, c].",
-                )
-                _psi_sig = (getattr(up_psi, "name", None), getattr(up_psi, "size", None)) if up_psi is not None else None
-                if _psi_sig and st.session_state.get("prep_last_psi_sig") != _psi_sig:
-                    st.session_state["last_irt_error"] = None
-                    try:
-                        up_psi.seek(0)
-                        raw = up_psi.read()
-                        if up_psi.name and up_psi.name.lower().endswith(".json"):
-                            data = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-                            if not isinstance(data, list):
-                                data = data.get("item_params", data.get("result", data.get("items", [data])))
-                            if not isinstance(data, list):
-                                raise ValueError("JSON must be an array of item objects or an object with 'item_params' / 'result' / 'items'.")
-                            psi_list = [dict(x) for x in data]
-                        else:
-                            df = pd.read_csv(io.BytesIO(raw) if isinstance(raw, bytes) else io.StringIO(raw))
-                            df = _drop_index_column(df)
-                            a_col = "a1" if "a1" in df.columns else "a"
-                            if a_col not in df.columns or "b" not in df.columns:
-                                raise ValueError("CSV must have columns 'a' (or 'a1') and 'b'; optional 'c' or 'g'.")
-                            psi_list = df.to_dict(orient="records")
-                        if not psi_list:
-                            raise ValueError("No item parameters found.")
-                        st.session_state["last_irt_item_params"] = psi_list
-                        st.session_state["item_params"] = psi_list
-                        st.session_state["prep_last_psi_sig"] = _psi_sig
-                        st.session_state["_nav_request"] = "Preparation"
-                    except Exception as e:
-                        st.session_state["last_irt_error"] = f"Upload ψ failed: {e}"
-                        st.caption(st.session_state["last_irt_error"])
-        else:
-            with st.container(border=True):
-                st.markdown(
-                    "<div class='psymas-card-head'><div class='psymas-card-title'>Upload Item Parameter</div></div>",
-                    unsafe_allow_html=True,
-                )
-                st.caption(
-                    "Select an IRT-based agent (pm, pk, ac, as, or rg) above to upload a ψ file here."
-                )
-
-    # RT upload shown when any RT-using agent is selected
-    if need_rt:
-        with st.container(border=True):
-            st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"""
-                <div class="psymas-card-head">
-                  <div class="psymas-card-title">RT (optional)</div>
-                  <div class="psymas-card-status">{_dot(rt_loaded)}{'Ready' if rt_loaded else 'Not ready'}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            up_rt = st.file_uploader(
-                "RT (CSV, optional)",
-                type=["csv"],
-                accept_multiple_files=False,
-                key="main_rt_uploader",
-            )
-            rt_sig = (getattr(up_rt, "name", None), getattr(up_rt, "size", None)) if up_rt is not None else None
-            if rt_sig and st.session_state.get("prep_last_rt_sig") != rt_sig and st.session_state.get("last_uploaded_responses"):
-                try:
-                    up_rt.seek(0)
-                    _rt = pd.read_csv(up_rt)
-                    _rt = _drop_index_column(_rt)
-                    _rt = _coerce_numeric(_rt, "RT")
-                    _r_prev = pd.DataFrame(st.session_state.last_uploaded_responses)
-                    if _r_prev.shape[1] == _rt.shape[1]:
-                        _rt = _align_rt_columns_to_response(_rt, _r_prev)
-                    st.session_state.last_uploaded_rt_data = _rt.to_dict(orient="records")
-                    st.session_state["prep_last_rt_sig"] = rt_sig
-                    st.session_state["_nav_request"] = "Preparation"
-                except Exception as e:
-                    st.error(f"{e}")
-
-    # Compromised items section when Preknowledge is selected
-    if need_comp:
-        with st.container(border=True):
-            st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
-            st.markdown(
-                """
-                <div class="psymas-card-head">
-                  <div class="psymas-card-title">Compromised items</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            comp_input = st.text_input(
-                "Compromised item IDs (optional)",
-                key="prep_compromised_input",
-                label_visibility="collapsed",
-                placeholder="Compromised item IDs, e.g. 3,7,12 — leave empty for first n-1",
-            )
-            try:
-                st.session_state["prep_compromised_items"] = [
-                    int(x.strip()) for x in (comp_input or "").split(",") if x.strip().isdigit()
-                ]
-            except Exception:
-                st.session_state["prep_compromised_items"] = []
-
-    # Test tampering data section when detect_tt is selected
-    if need_tt:
-        with st.container(border=True):
-            st.markdown("<div class='psymas-prep-card-marker'></div>", unsafe_allow_html=True)
-            st.markdown(
-                """
-                <div class="psymas-card-head">
-                  <div class="psymas-card-title">Test tampering data (optional)</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            tt_file = st.file_uploader("Erasure / tampering data (CSV)", type=["csv"], key="prep_tt_uploader")
-            if tt_file is not None:
-                st.session_state["prep_tt_data_name"] = tt_file.name
 
     st.divider()
     # Upload handlers above may have updated session this same run; early `resp_loaded` / `rt_loaded` /
@@ -4904,18 +6030,20 @@ elif run_mode == "Preparation":
     n_items = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_persons else 0
 
     # Align readiness pills with what is actually required by the selected agents
-    need_rt = any(fn in prep_ab_fns for fn in ["detect_rg", "detect_pm", "detect_pk", "detect_as", "detect_ac"])
-    need_psi = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_rg"])
+    need_rt = "detect_rg" in prep_ab_fns
+    need_psi = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"])
+    need_tt = "detect_tt" in prep_ab_fns
 
     resp_ok = resp_loaded
     rt_ok = rt_loaded if need_rt else True
     psi_ok = psi_loaded if need_psi else True
+    tt_ok = bool(st.session_state.get("prep_answer_changes")) if need_tt else True
 
     # Now that we know which resources are actually required for the
     # current agent selection, we can decide whether Detect should be
     # enabled. RT / ψ are only required when their corresponding flags
     # are needed by at least one selected agent.
-    all_ready = bool(resp_ok and rt_ok and psi_ok and llm_configured)
+    all_ready = bool(resp_ok and rt_ok and psi_ok and tt_ok and backend_ok)
 
     rt_title = (
         _esc("RT loaded (used by Rapid Guessing).")
@@ -4946,10 +6074,14 @@ elif run_mode == "Preparation":
         _pills_html.append(
             f'<span class="psymas-pill" title="{psi_title}">{_dot(psi_ok)}ψ</span>'
         )
+    if need_tt:
+        _pills_html.append(
+            f'<span class="psymas-pill" title="{_esc("Answer-change data loaded." if tt_ok else "Answer-change CSV required for detect_tt.")}">{_dot(tt_ok)}Answer changes</span>'
+        )
     # LLM and LangGraph Agents are always relevant for Detect
     _pills_html.append(
-        f'<span class="psymas-pill" title="{_esc("LLM configured" if llm_configured else "LLM key missing for selected provider")}">'
-        f'{_dot(llm_configured)}LLM ({llm_short})</span>'
+        f'<span class="psymas-pill" title="{_esc("LLM configured; verdict can use the selected model." if llm_configured else "LLM key missing; Detect will still run and use a rule-based verdict.")}">'
+        f'{_dot(True)}LLM ({llm_short}){" optional" if not llm_configured else ""}</span>'
     )
     _pills_html.append(
         f'<span class="psymas-pill" title="{_esc(backend_status_tip)}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>'
@@ -4977,6 +6109,7 @@ elif run_mode == "Preparation":
         raw_payload = {
             "responses": _responses,
             "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
+            "answer_changes": st.session_state.get("prep_answer_changes") or [],
             "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
             "compromised_items": _comp,
             "model_settings": _model_settings_for_backend(),
@@ -5011,6 +6144,9 @@ elif run_mode == "Preparation":
         _job_status = st.session_state.get("detect_job_status", "pending")
         if _job_status == "done" and st.session_state.get("forensic_result") is not None:
             st.success("Detection completed.")
+            _prep_fr = st.session_state["forensic_result"]
+            _prep_flags = _prep_fr.get("flags", {}) if isinstance(_prep_fr, dict) else {}
+            _render_examinee_export_download(_prep_flags, _forensic_visible_agents(), key_prefix="prep")
             if st.button("Open Aberrance Summary", key="prep_open_summary", type="primary"):
                 st.session_state["_nav_request"] = "Aberrance Summary"
                 st.rerun()
@@ -5116,6 +6252,7 @@ elif run_mode == "Preparation":
             raw_payload = {
                 "responses": _resp,
                 "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
+                "answer_changes": st.session_state.get("prep_answer_changes") or [],
                 "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
                 "compromised_items": _ci,
                 "model_settings": _model_settings_for_backend(),
@@ -5144,7 +6281,7 @@ elif run_mode == "Data review":
     resp_data = st.session_state.get("last_uploaded_responses") or []
     rt_data = st.session_state.get("last_uploaded_rt_data") or []
     if not resp_data:
-        st.info("Upload **Response (CSV)** in the **sidebar** to see the data table and distribution here.")
+        st.info("Use **Bulk upload** on the **Preparation** page to load response data and view it here.")
     else:
         resp_df = pd.DataFrame(resp_data)
         n_rows, n_cols = resp_df.shape
@@ -5159,7 +6296,7 @@ elif run_mode == "Data review":
                 rt_df = pd.DataFrame(rt_data)
                 st.dataframe(rt_df, height=min(400, 120 + 32 * len(rt_df)), use_container_width=True)
             else:
-                st.info("No RT data in session. Upload **RT (CSV)** in the sidebar.")
+                st.info("No RT data in session. Use **Bulk upload** on the **Preparation** page.")
         with tab_stats:
             # Per-item statistics
             numeric_resp = resp_df.apply(pd.to_numeric, errors="coerce")
@@ -5202,7 +6339,7 @@ elif run_mode == "Data review":
         with _pc:
             st.pyplot(fig)
         plt.close()
-    st.caption("Use the **sidebar** to switch to another module.")
+    st.caption("Use the navigation sidebar to switch to another module.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: Aberrance Summary (dashboard)
@@ -5219,34 +6356,26 @@ elif run_mode == "Aberrance Summary":
     .threat-clear {background:#002d00;border-left:4px solid #00ff00;padding:15px;border-radius:5px;margin:10px 0;}
     </style>
     """, unsafe_allow_html=True)
-    st.markdown('<div class="command-header"><h2>🧾 Aberrance Summary</h2><p>Forensic verdict and flags</p></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="command-header"><h2>🧾 Aberrance Summary</h2>'
+        "<p>Forensic verdict, flags, and CSV export</p></div>",
+        unsafe_allow_html=True,
+    )
     st.divider()
 
     # ── Dashboard (results) ──
     if st.session_state.get("forensic_result") is None:
-        st.info("Run **Detect** on the Preparation page to generate the dashboard.")
+        st.info("Run **Detect** on the **Preparation** page to generate results, then return here.")
+        st.markdown("After Detect completes, return to **Aberrance Summary** — download buttons appear at the top of this page.")
     else:
         fr = st.session_state["forensic_result"]
         flags = fr.get("flags", {})
-        # Only show agents that were actually selected on Preparation.
-        # Map UI function names -> backend agent keys.
-        _fn_to_agent = {
-            "detect_nm": "nm_agent",
-            "detect_pm": "pm_agent",
-            "detect_ac": "ac_agent",
-            "detect_as": "as_agent",
-            "detect_rg": "rg_agent",
-            "detect_tt": "tt_agent",
-            "detect_pk": "pk_agent",
-        }
-        # Use the agents actually used in the last Detect run; fall back to current checkboxes.
-        _selected_fns = st.session_state.get("last_detect_agents") or [
-            fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"ab_only_cb_{fn}")
-        ]
-        if not _selected_fns:
-            _selected_fns = ["detect_nm"]
-        _visible_agents = { _fn_to_agent[fn] for fn in _selected_fns if fn in _fn_to_agent }
+        _visible_agents = _forensic_visible_agents()
         final_report = fr.get("final_report", "")
+
+        # ── Download (top of page — easy to find) ──
+        _render_examinee_export_download(flags, _visible_agents, key_prefix="summary")
+        st.divider()
 
         # ── Top Section: Generative Report ──
         st.subheader("Forensic Verdict")
@@ -5319,10 +6448,7 @@ elif run_mode == "Aberrance Summary":
         if nm_data.get("stat") and isinstance(nm_data.get("stat"), list):
             for rec in nm_data["stat"]:
                 if isinstance(rec, dict):
-                    try:
-                        _ability.append(float(rec.get("ZU3_S", 0)))
-                    except Exception:
-                        _ability.append(0.0)
+                    _ability.append(_safe_float(rec.get("ZU3_S"), 0.0))
         else:
             _ability = list(range(len(_rte_vals)))
         _n_eff = min(len(_rte_vals), len(_ability))
@@ -5454,9 +6580,11 @@ elif run_mode == "Aberrance Summary":
         ac_pairs = flags.get("ac_agent", {}).get("pairs", [])
         for p, info in all_flagged.items():
             if p < len(nm_stat) and nm_stat:
-                info["Misfit_Score"] = round(float(nm_stat[p].get("ZU3_S", 0)), 3)
+                zu3 = _safe_float(nm_stat[p].get("ZU3_S") if isinstance(nm_stat[p], dict) else None)
+                info["Misfit_Score"] = round(zu3, 3) if zu3 is not None else None
             if p < len(rg_rte) and rg_rte:
-                info["RTE_Score"] = round(float(rg_rte[p]), 3)
+                rte = _safe_float(rg_rte[p])
+                info["RTE_Score"] = round(rte, 3) if rte is not None else None
             partners = set()
             for pair in ac_pairs:
                 src, cop = pair.get("Source", 0), pair.get("Copier", 0)
@@ -5475,6 +6603,20 @@ elif run_mode == "Aberrance Summary":
             st.caption("Navigate to **Student Profile** for drill-down analysis.")
         else:
             st.info("No students were flagged across any agents.")
+
+        drill_col1, drill_col2, drill_col3 = st.columns(3)
+        with drill_col1:
+            if st.button("Open Evidence Governance", key="summary_open_governance", use_container_width=True):
+                st.session_state["_nav_request"] = "Evidence Governance"
+                st.rerun()
+        with drill_col2:
+            if st.button("Open Student Profile", key="summary_open_student_profile", use_container_width=True):
+                st.session_state["_nav_request"] = "Student Profile"
+                st.rerun()
+        with drill_col3:
+            if st.button("Open Collusion Network", key="summary_open_collusion", use_container_width=True):
+                st.session_state["_nav_request"] = "Collusion Network"
+                st.rerun()
 
         st.divider()
 
@@ -5514,6 +6656,9 @@ elif run_mode == "Aberrance Summary":
                 "Score- and time-based likelihood-ratio indices (L_S, L_T, L_ST) contrasting compromised vs. safe item sets to detect advance knowledge of leaked items.",
             ),
         }
+        if not st.toggle("Show detailed agent reports", value=False, key="summary_show_agent_reports"):
+            st.caption("Detailed agent tables are skipped by default to keep this page fast. Turn this on when you need full per-agent outputs.")
+            _agent_meta = {}
 
         for agent_key, (title, blurb) in _agent_meta.items():
             if agent_key not in _visible_agents:
@@ -5545,6 +6690,9 @@ elif run_mode == "Aberrance Summary":
             elif agent_key == "cp_agent":
                 table_data = data.get("stat") or []
                 table_title = "Change-point statistics by student (detect_cp)"
+            elif agent_key == "tt_agent":
+                table_data = data.get("stat") or []
+                table_title = "Answer-change summary by examinee (detect_tt)"
             elif agent_key == "pk_agent":
                 table_data = data.get("stat") or []
                 table_title = "Preknowledge indices by student (detect_pk)"
@@ -5568,6 +6716,19 @@ elif run_mode == "Aberrance Summary":
                             st.caption("Run **Run** (Detect) again on the Preparation page to recompute with the latest fix; then reopen Aberrance.")
                     elif data.get("info"):
                         st.markdown(f"ℹ️ {data['info']}")
+                        if n_students:
+                            rate_pct = (n_flagged / n_students) * 100 if n_students > 0 else 0.0
+                            st.markdown(f"**Flagged students**: {n_flagged} of {n_students} (~{rate_pct:.1f}%).")
+                        else:
+                            st.markdown(f"**Flagged students**: {n_flagged}.")
+                        if n_flagged:
+                            example_ids = sorted(flagged)[:10]
+                            st.markdown("Examples (student indices): " + ", ".join(str(i + 1) for i in example_ids))
+                        if agent_key == "tt_agent":
+                            st.caption(
+                                f"Answer-change records: {data.get('n_records', 0)}; "
+                                f"examinees: {data.get('n_examinees', 0)}."
+                            )
                     else:
                         # Static methodological details
                         if agent_key == "nm_agent":
@@ -5626,7 +6787,12 @@ elif run_mode == "Aberrance Summary":
                         if agent_key == "nm_agent" and data.get("stat"):
                             try:
                                 stats = data["stat"]
-                                scores = [float(stats[i].get("ZU3_S", 0)) for i in flagged if i < len(stats)]
+                                scores = [
+                                    v for i in flagged
+                                    if i < len(stats) and isinstance(stats[i], dict)
+                                    for v in [_safe_float(stats[i].get("ZU3_S"))]
+                                    if v is not None
+                                ]
                                 if scores:
                                     st.caption(f"Maximum person-fit ZU3_S among flagged examinees: {max(scores):.2f}.")
                             except Exception:
@@ -5647,6 +6813,13 @@ elif run_mode == "Aberrance Summary":
                             df_detail = pd.DataFrame(table_data)
                             st.caption(table_title)
                             st.dataframe(df_detail, use_container_width=True, hide_index=True)
+                            if agent_key == "tt_agent" and data.get("item_hotspots"):
+                                st.caption("Item change hotspots")
+                                st.dataframe(
+                                    pd.DataFrame(data.get("item_hotspots") or []),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
                         except Exception:
                             st.info("Detailed table is not available for this agent output.")
                     else:
@@ -5676,7 +6849,7 @@ elif run_mode == "Aberrance Summary":
             # Order: nm, pm, as, pk, tt, cp, rg (copying AC grouped with AS in visuals / reports).
             _status_agents = ["nm_agent", "pm_agent", "as_agent", "ac_agent", "pk_agent", "tt_agent", "cp_agent", "rg_agent"]
             for agent_name in _status_agents:
-                if agent_name in _fn_to_agent.values() and agent_name not in _visible_agents:
+                if agent_name in ABERRANCE_FN_TO_AGENT.values() and agent_name not in _visible_agents:
                     continue
                 data = flags.get(agent_name, {})
                 if data.get("error"):
@@ -5686,6 +6859,92 @@ elif run_mode == "Aberrance Summary":
                 else:
                     n_flagged = len(data.get("flagged", [])) + len(data.get("flagged_copiers", []))
                     st.markdown(f"✅ **{agent_name}**: {n_flagged} flagged")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: Evidence Governance
+# ══════════════════════════════════════════════════════════════════════════════
+elif run_mode == "Evidence Governance":
+    st.markdown(
+        '<div class="command-header"><h2>🧩 Evidence Governance</h2>'
+        "<p>Domain construction, rule-based status, trace links, and audit-ready outputs</p></div>",
+        unsafe_allow_html=True,
+    )
+    result_df = _governance_source_result_df()
+    if result_df.empty:
+        st.info("Run **Detect** first, then prepare or open result data from **Aberrance Summary**.")
+    else:
+        governed_df, domain_df = _build_governed_evidence_profile(result_df)
+        if governed_df.empty:
+            st.info("No governed evidence profile could be created from the current result data.")
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Examinees", len(governed_df))
+            with c2:
+                st.metric("High priority", int((governed_df["Review_Priority"] == "High").sum()))
+            with c3:
+                st.metric("Convergent", int((governed_df["Evidence_Status"] == "Convergent").sum()))
+            with c4:
+                st.metric("Isolated", int((governed_df["Evidence_Status"] == "Isolated").sum()))
+
+            st.caption(
+                "This layer applies fixed Appendix B governance logic to the deterministic result table. "
+                "It organizes evidence; it does not conclude misconduct."
+            )
+            status_filter = st.multiselect(
+                "Evidence status",
+                options=sorted(governed_df["Evidence_Status"].dropna().unique().tolist()),
+                default=sorted(governed_df["Evidence_Status"].dropna().unique().tolist()),
+                key="gov_status_filter",
+            )
+            view_df = governed_df[governed_df["Evidence_Status"].isin(status_filter)] if status_filter else governed_df
+            cols = [
+                "Examinee_ID",
+                "Evidence_Status",
+                "Review_Priority",
+                "Primary_Concern",
+                "MF_Strength",
+                "RT_Strength",
+                "SIM_Strength",
+                "PK_Strength",
+                "CP_Strength",
+                "TP_Strength",
+                "Rule_IDs_Triggered",
+                "Draft_Statement",
+            ]
+            st.dataframe(view_df[[c for c in cols if c in view_df.columns]], use_container_width=True, hide_index=True)
+
+            with st.expander("Domain-level trace records", expanded=False):
+                st.dataframe(domain_df, use_container_width=True, hide_index=True)
+
+            with st.expander("Appendix B rule mapping used in this page", expanded=False):
+                st.markdown(
+                    """
+                    - **B1 domains**: MF, RT, SIM, PK, CP, TP.
+                    - **B2 index selection**: result columns are mapped by agent/index prefixes such as `nm_`, `pm_`, `rg_`, `ac_`, `as_`, `pk_`, `cp_`, and `tt_`.
+                    - **B3 strength**: unavailable, none, weak, moderate, or strong based on required data, primary flags, and supporting indicators.
+                    - **B4 governance**: case status is none, weak, isolated, convergent, mixed, limited, or unavailable.
+                    - **B5 audit language**: draft statements use cautious review language and preserve trace columns.
+                    """
+                )
+
+            dl_a, dl_b = st.columns(2)
+            with dl_a:
+                st.download_button(
+                    "Download governed evidence profile",
+                    data=governed_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="psymas_governed_evidence_profile.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with dl_b:
+                st.download_button(
+                    "Download domain trace records",
+                    data=domain_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="psymas_evidence_domain_trace.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: Student Profile (Drill-Down)
@@ -6446,12 +7705,12 @@ elif run_mode == "Individual Aberrance":
         lst_ts_vals = []
         y_label = "L_ST_TS"
         if pm_stat:
-            lst_ts_vals = [float(rec.get("L_ST_TS", 0) or 0) for rec in pm_stat]
+            lst_ts_vals = [_safe_float(rec.get("L_ST_TS"), 0.0) for rec in pm_stat if isinstance(rec, dict)]
         if not lst_ts_vals:
             # Fallback to ZU3_S from nm_agent
             nm_stat = flags.get("nm_agent", {}).get("stat", [])
             if nm_stat:
-                lst_ts_vals = [float(rec.get("ZU3_S", 0) or 0) for rec in nm_stat]
+                lst_ts_vals = [_safe_float(rec.get("ZU3_S"), 0.0) for rec in nm_stat if isinstance(rec, dict)]
                 y_label = "ZU3_S (nm fallback)"
 
         # Color: RTE from rg_agent
@@ -6684,7 +7943,7 @@ elif run_mode == "Temporal Forensics":
             st.caption("Response time across the test with change-point overlay from detect_cp.")
 
             if not rt_data:
-                st.info("No response-time data available. Upload RT data in the Evidence Room and rerun.")
+                st.info("No response-time data available. Upload RT data on the Preparation page and rerun.")
             elif n_students == 0:
                 st.info("No student data available.")
             else:
@@ -6766,27 +8025,21 @@ elif run_mode == "Temporal Forensics":
                 else:
                     st.caption("Student index out of range for RT data.")
 
-        # ── Tab 2: Erasure Heatmap (detect_tt — stub) ──
+        # ── Tab 2: Answer-change summary (detect_tt lightweight workflow) ──
         with tab_erasure:
-            st.markdown("#### Erasure Heatmap")
+            st.markdown("#### Answer-change Summary")
             tt_data = flags.get("tt_agent", {})
-            st.markdown("""
-            <div style="background:#2d2d00;border-left:4px solid #ffaa00;padding:20px;border-radius:5px;margin:10px 0;">
-            <h4 style="color:#ffaa00;margin-top:0;">Erasure Data Required</h4>
-            <p style="color:#d0d0d0;">
-            Test Tampering detection (<code>detect_tt</code>) requires <strong>erasure data</strong> — a record of
-            initial and final answer selections per student per item. This data is typically collected by
-            computer-based testing platforms that log answer changes.</p>
-            <p style="color:#d0d0d0;">
-            <strong>What this module would show:</strong><br>
-            A heatmap (students x items) colored by the Erasure Detection Index (<code>EDI_SD</code>).
-            Items with statistically significant wrong-to-right answer changes are highlighted,
-            indicating potential unauthorized answer correction or external assistance.</p>
-            <p style="color:#a0a0a0;font-size:0.85em;">
-            To enable this module, provide erasure data (initial responses, final responses, distractor matrices)
-            when the <code>detect_tt</code> agent is fully implemented.</p>
-            </div>
-            """, unsafe_allow_html=True)
+            if tt_data.get("stat"):
+                tt_df = pd.DataFrame(tt_data.get("stat") or [])
+                st.dataframe(tt_df, use_container_width=True, hide_index=True)
+                flagged_tt = tt_data.get("flagged") or []
+                if flagged_tt:
+                    st.warning(f"Flagged examinees by answer-change rate: {', '.join(str(i + 1) for i in flagged_tt)}")
+                if tt_data.get("item_hotspots"):
+                    with st.expander("Item change hotspots", expanded=False):
+                        st.dataframe(pd.DataFrame(tt_data["item_hotspots"]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No answer-change summary. Select detect_tt, upload answer_changes.csv on Preparation, and rerun Detect.")
             if tt_data.get("info"):
                 st.caption(tt_data["info"])
 

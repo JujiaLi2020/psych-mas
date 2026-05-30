@@ -429,6 +429,7 @@ class State(TypedDict):
     aberrance_results: NotRequired[dict]  # from R package aberrance (e.g. nonparametric misfit)
     aberrance_functions: NotRequired[list]  # selected detection functions from UI (e.g. ["detect_nm", "detect_pm"])
     compromised_items: NotRequired[list]  # 1-based item indices for detect_pk (preknowledge)
+    answer_changes: NotRequired[list[dict]]  # long answer-change records for test tampering summaries
     # --- Forensic workflow fields ---
     psi_data: NotRequired[list[dict]]   # uploaded or IRT-computed item parameters (a, b, c, ...)
     flags: Annotated[dict, _merge_flags]  # results from each specialist keyed by agent name — uses reducer for parallel writes
@@ -1271,7 +1272,7 @@ def nm_agent(state: State) -> dict:
 
 # ---------- 2. pm_agent (Parametric Fit) --------------------------------------
 def pm_agent(state: State) -> dict:
-    """detect_pm: L_S_TS, L_T, Q_ST_TS, L_ST_TS parametric person-fit."""
+    """detect_pm: run all supported score/response/time person-fit method families."""
     print("--- FORENSIC pm_agent: detect_pm ---")
     selected = state.get("aberrance_functions") or []
     if selected and "detect_pm" not in selected:
@@ -1294,64 +1295,76 @@ def pm_agent(state: State) -> dict:
             if has_rt:
                 pm_rt_df = pd.DataFrame(rt_data)
                 pm_rt_block = pm_rt_df.iloc[:, :len(keep_cols)].apply(pd.to_numeric, errors="coerce").fillna(0.01)
-                y_flat = np.log(pm_rt_block.values.clip(min=0.001)).flatten().tolist()
+                y_flat = np.log(pm_rt_block.astype(float).clip(lower=0.001).values.flatten()).tolist()
                 ro.globalenv["y_vec"] = ro.FloatVector(y_flat)
-                ro.r(f"y <- matrix(y_vec, nrow={n_persons}, ncol={len(keep_cols)}, byrow=FALSE)")
+                ro.r(f"y <- matrix(y_vec, nrow={n_persons}, ncol={len(keep_cols)}, byrow=TRUE)")
                 ro.r("""
                     pm_beta_est  <- apply(y, 2, mean)
                     pm_alpha_est <- 1 / apply(y, 2, sd)
                     pm_alpha_est[!is.finite(pm_alpha_est)] <- 1.0
                     psi <- cbind(psi, alpha = pm_alpha_est, beta = pm_beta_est)
                 """)
-                ro.r("""
+
+            ro.r("r <- x")
+            pm_data: dict[str, list] = {}
+            flagged_pm: set[int] = set()
+            methods_run: list[str] = []
+            method_errors: list[str] = []
+
+            def _run_pm_group(methods: list[str], call_args: str) -> None:
+                nonlocal pm_data, flagged_pm, methods_run, method_errors
+                ro.globalenv["pm_methods_req"] = ro.StrVector(methods)
+                ro.r(f"""
                     assign('pm_err', NULL, envir = .GlobalEnv)
                     pm_out <- tryCatch(
-                        detect_pm(method = c('L_S_TS','L_T','Q_ST_TS','L_ST_TS'), psi = psi, x = x, y = y, alpha = 0.05),
-                        error = function(e) { assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL })
+                        detect_pm(method = pm_methods_req, psi = psi, {call_args}, alpha = 0.05),
+                        error = function(e) {{ assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL }})
                 """)
-            else:
+                if not bool(ro.r("!is.null(pm_out)")[0]):
+                    err = "no output"
+                    try:
+                        if not bool(ro.r("is.null(get0('pm_err', envir = .GlobalEnv, ifnotfound = NULL))")[0]):
+                            err = str(ro.r("as.character(pm_err)")[0])
+                    except Exception:
+                        pass
+                    method_errors.append(f"{', '.join(methods)}: {err}")
+                    return
                 ro.r("""
-                    assign('pm_err', NULL, envir = .GlobalEnv)
-                    pm_out <- tryCatch(
-                        detect_pm(method = c('L_S_TS','L_T','Q_ST_TS','L_ST_TS'), psi = psi, x = x, alpha = 0.05),
-                        error = function(e) { assign('pm_err', conditionMessage(e), envir = .GlobalEnv); NULL })
+                    pm_stat_mat <- pm_out$stat
+                    pm_pval_mat <- pm_out$pval
+                    pm_flag_arr <- pm_out$flag
+                    pm_n <- as.integer(nrow(pm_stat_mat))
+                    pm_methods <- colnames(pm_stat_mat)
+                    pm_n_methods <- as.integer(length(pm_methods))
+                    pm_methods_str <- paste(pm_methods, collapse='|')
                 """)
-            has_pm_r = ro.r("!is.null(pm_out)")
-            has_pm = bool(list(ro.conversion.rpy2py(has_pm_r))[0]) if hasattr(ro.conversion.rpy2py(has_pm_r), '__iter__') else bool(ro.conversion.rpy2py(has_pm_r))
-            if not has_pm:
-                pm_err_r = ro.r("get0('pm_err', envir = .GlobalEnv, ifnotfound = 'unknown error')")
-                return {"flags": {"pm_agent": {"error": f"detect_pm failed: {ro.conversion.rpy2py(pm_err_r)}"}}}
-            ro.r("""
-                pm_stat_mat  <- pm_out$stat
-                pm_pval_mat  <- pm_out$pval
-                pm_flag_arr  <- pm_out$flag
-                pm_n         <- as.integer(nrow(pm_stat_mat))
-                pm_methods   <- colnames(pm_stat_mat)
-                pm_n_methods <- as.integer(length(pm_methods))
-                pm_methods_str <- paste(pm_methods, collapse = '|')
-            """)
-            pm_n = int(ro.r("pm_n")[0])
-            pm_n_methods = int(ro.r("pm_n_methods")[0])
-            pm_methods_str = str(ro.r("pm_methods_str")[0])
-            pm_methods_r = pm_methods_str.split("|") if pm_methods_str else []
-            pm_data = {}
-            for mi in range(pm_n_methods):
-                mname = pm_methods_r[mi]
-                stat_r = ro.r(f"as.numeric(pm_stat_mat[, {mi + 1}])")
-                pm_data[mname] = [float(v) for v in stat_r]
-                pval_r = ro.r(f"as.numeric(pm_pval_mat[, {mi + 1}])")
-                pm_data[f"{mname}_pval"] = [float(v) for v in pval_r]
+                pm_n_methods = int(ro.r("pm_n_methods")[0])
+                group_methods = str(ro.r("pm_methods_str")[0]).split("|") if pm_n_methods else []
+                for mi, mname in enumerate(group_methods):
+                    stat_r = ro.r(f"as.numeric(pm_stat_mat[, {mi + 1}])")
+                    pm_data[mname] = [float(v) for v in stat_r]
+                    pval_r = ro.r(f"as.numeric(pm_pval_mat[, {mi + 1}])")
+                    pm_data[f"{mname}_pval"] = [float(v) for v in pval_r]
+                try:
+                    flag_any_r = ro.r("as.logical(apply(pm_flag_arr, 1, any))")
+                    flagged_pm.update(i for i, v in enumerate(flag_any_r) if v)
+                except Exception:
+                    pass
+                methods_run.extend(group_methods)
+
+            _run_pm_group(["ECI2_S_*", "ECI4_S_*", "L_S_*"], "x = x")
+            _run_pm_group(["L_R_*"], "r = r")
+            if has_rt:
+                _run_pm_group(["L_T"], "y = y")
+                _run_pm_group(["Q_ST_*", "L_ST_*"], "x = x, y = y")
+                _run_pm_group(["Q_RT_*", "L_RT_*"], "r = r, y = y")
+            if not methods_run:
+                return {"flags": {"pm_agent": {"error": "detect_pm failed for all method groups: " + "; ".join(method_errors)}}}
             pm_df_out = pd.DataFrame(pm_data)
-            # Flag: person flagged if ANY method flags
-            flagged_pm = []
-            try:
-                flag_any_r = ro.r("as.logical(apply(pm_flag_arr, 1, any))")
-                flagged_pm = [i for i, v in enumerate(flag_any_r) if v]
-            except Exception:
-                pass
+            pm_n = len(pm_df_out)
             return {"flags": {"pm_agent": {
-                "stat": pm_df_out.to_dict(orient="records"), "methods": pm_methods_r,
-                "flagged": flagged_pm, "n_persons": pm_n,
+                "stat": pm_df_out.to_dict(orient="records"), "methods": list(dict.fromkeys(methods_run)),
+                "flagged": sorted(flagged_pm), "n_persons": pm_n, "method_errors": method_errors,
             }}}
     except Exception as e:
         return {"flags": {"pm_agent": {"error": str(e)}}}
@@ -1359,7 +1372,7 @@ def pm_agent(state: State) -> dict:
 
 # ---------- 3. ac_agent (Answer Copying) --------------------------------------
 def ac_agent(state: State) -> dict:
-    """detect_ac: OMG_S and GBT_S answer-copying detection."""
+    """detect_ac: all supported score- and response-based answer-copying methods."""
     print("--- FORENSIC ac_agent: detect_ac ---")
     selected = state.get("aberrance_functions") or []
     if selected and "detect_ac" not in selected:
@@ -1376,69 +1389,82 @@ def ac_agent(state: State) -> dict:
         with (ro.default_converter + pandas2ri.converter).context():
             if not _forensic_build_psi(ro, ip_df, len(keep_cols)):
                 return {"flags": {"ac_agent": {"error": "Could not build psi matrix."}}}
-            ro.r("ac_out <- tryCatch(detect_ac(method = c('OMG_S','GBT_S'), psi = psi, x = x, alpha = 0.05), error = function(e) NULL)")
-            has_ac = ro.r("!is.null(ac_out)")
-            if not (has_ac and ro.conversion.rpy2py(has_ac)):
-                return {"flags": {"ac_agent": {"error": "detect_ac returned NULL."}}}
-            ac_stat = ro.r("as.data.frame(ac_out$stat)")
-            ac_stat_py = ro.conversion.rpy2py(ac_stat)
-            # Extract p-values — store in R env first to avoid scoping issues
-            ro.r("ac_pval_df <- tryCatch(as.data.frame(ac_out$pval), error = function(e) NULL)")
-            ac_pval_py = None
-            try:
-                has_pval = ro.r("!is.null(ac_pval_df)")[0]
-                if has_pval:
-                    ac_pval_py = ro.conversion.rpy2py(ro.r("ac_pval_df"))
-            except Exception:
-                pass
-            ac_flag = ro.r("ac_out$flag")
-            ac_flag_py = ro.conversion.rpy2py(ac_flag) if ac_flag is not None else None
+            ro.r("r <- x")
             N = len(resp_df)
             pairs_0based = [(i, j) for i in range(N) for j in range(i + 1, N)]
-            if ac_stat_py is not None and hasattr(ac_stat_py, "to_dict"):
-                ac_records = ac_stat_py.to_dict(orient="records")
-            else:
-                arr = np.asarray(ac_stat_py) if ac_stat_py is not None else np.array([])
-                cols = getattr(ac_stat_py, "columns", None) or ["OMG_S", "GBT_S"]
-                ac_records = [dict(zip(cols, row)) for row in arr.tolist()] if arr.ndim == 2 else []
-            # Extract p-value records
-            pval_records = []
-            if ac_pval_py is not None and hasattr(ac_pval_py, "to_dict"):
-                pval_records = ac_pval_py.to_dict(orient="records")
-            elif ac_pval_py is not None:
-                parr = np.asarray(ac_pval_py)
-                pcols = getattr(ac_pval_py, "columns", None) or ["OMG_S_pval", "GBT_S_pval"]
-                pval_records = [dict(zip(pcols, row)) for row in parr.tolist()] if parr.ndim == 2 else []
-            pair_rows = []
+            pair_records: dict[int, dict] = {}
             flagged_copiers = set()
+            methods_run: list[str] = []
+            method_errors: list[str] = []
+
+            def _run_ac_group(methods: list[str], call_args: str) -> None:
+                nonlocal pair_records, flagged_copiers, methods_run, method_errors
+                ro.globalenv["ac_methods_req"] = ro.StrVector(methods)
+                ro.r(f"""
+                    assign('ac_err', NULL, envir = .GlobalEnv)
+                    ac_out <- tryCatch(
+                        detect_ac(method = ac_methods_req, psi = psi, {call_args}, alpha = 0.05),
+                        error = function(e) {{ assign('ac_err', conditionMessage(e), envir = .GlobalEnv); NULL }})
+                """)
+                if not bool(ro.r("!is.null(ac_out)")[0]):
+                    err = "no output"
+                    try:
+                        if not bool(ro.r("is.null(get0('ac_err', envir = .GlobalEnv, ifnotfound = NULL))")[0]):
+                            err = str(ro.r("as.character(ac_err)")[0])
+                    except Exception:
+                        pass
+                    method_errors.append(f"{', '.join(methods)}: {err}")
+                    return
+                ac_stat_py = ro.conversion.rpy2py(ro.r("as.data.frame(ac_out$stat)"))
+                ac_records = ac_stat_py.to_dict(orient="records") if hasattr(ac_stat_py, "to_dict") else []
+                ro.r("ac_pval_df <- tryCatch(as.data.frame(ac_out$pval), error = function(e) NULL)")
+                pval_records = []
+                try:
+                    if bool(ro.r("!is.null(ac_pval_df)")[0]):
+                        ac_pval_py = ro.conversion.rpy2py(ro.r("ac_pval_df"))
+                        if hasattr(ac_pval_py, "to_dict"):
+                            pval_records = ac_pval_py.to_dict(orient="records")
+                except Exception:
+                    pass
+                ac_flag_py = None
+                try:
+                    ac_flag_py = ro.conversion.rpy2py(ro.r("ac_out$flag"))
+                except Exception:
+                    pass
+                for idx, (i, j) in enumerate(pairs_0based[:len(ac_records)]):
+                    row = pair_records.setdefault(idx, {"Source": i + 1, "Copier": j + 1})
+                    row.update(ac_records[idx])
+                    if idx < len(pval_records):
+                        for pk, pv in pval_records[idx].items():
+                            pkey = pk if pk.endswith("_pval") else f"{pk}_pval"
+                            row[pkey] = pv
+                    if ac_flag_py is not None and hasattr(ac_flag_py, "__array__"):
+                        fl = np.asarray(ac_flag_py)
+                        if fl.ndim >= 2 and idx < fl.shape[0] and np.any(fl[idx] if fl.ndim == 2 else fl[idx]):
+                            row["flagged"] = True
+                            flagged_copiers.add(j)
+                methods_run.extend(methods)
+
+            _run_ac_group(["OMG_S", "GBT_S"], "x = x")
+            _run_ac_group(["OMG_R", "GBT_R"], "r = r")
+            if not methods_run:
+                return {"flags": {"ac_agent": {"error": "detect_ac failed for all method groups: " + "; ".join(method_errors)}}}
+
+            pair_rows = []
             # Keep pairs with p < 0.10 (generous storage cutoff; UI slider does final filtering)
             _STORAGE_P_CUTOFF = 0.10
-            for idx, (i, j) in enumerate(pairs_0based):
-                if idx >= len(ac_records):
-                    break
-                row = {"Source": i + 1, "Copier": j + 1, **ac_records[idx]}
-                # Attach p-values with _pval suffix
-                if idx < len(pval_records):
-                    for pk, pv in pval_records[idx].items():
-                        pkey = pk if pk.endswith("_pval") else f"{pk}_pval"
-                        row[pkey] = pv
-                is_flagged_pair = False
-                if ac_flag_py is not None and hasattr(ac_flag_py, "__array__"):
-                    fl = np.asarray(ac_flag_py)
-                    if fl.ndim >= 2 and idx < fl.shape[0] and np.any(fl[idx] if fl.ndim == 2 else fl[idx]):
-                        is_flagged_pair = True
-                        flagged_copiers.add(j)
-                row["flagged"] = is_flagged_pair
+            for row in pair_records.values():
+                row["flagged"] = bool(row.get("flagged", False))
                 # Keep pair if flagged OR if any p-value is below storage cutoff
                 min_p = 1.0
                 for pk, pv in row.items():
                     if pk.endswith("_pval") and isinstance(pv, (int, float)):
                         min_p = min(min_p, pv)
-                if is_flagged_pair or min_p < _STORAGE_P_CUTOFF:
+                if row["flagged"] or min_p < _STORAGE_P_CUTOFF:
                     pair_rows.append(row)
             return {"flags": {"ac_agent": {
                 "pairs": pair_rows, "flagged_copiers": sorted(flagged_copiers),
-                "methods": ["OMG_S", "GBT_S"],
+                "methods": list(dict.fromkeys(methods_run)), "method_errors": method_errors,
             }}}
     except Exception as e:
         return {"flags": {"ac_agent": {"error": str(e)}}}
@@ -1446,84 +1472,137 @@ def ac_agent(state: State) -> dict:
 
 # ---------- 4. as_agent (Answer Similarity / Clusters) ------------------------
 def as_agent(state: State) -> dict:
-    """detect_as: M4_S answer-similarity cluster detection."""
+    """detect_as: answer-similarity detection across available score/raw/time methods."""
     print("--- FORENSIC as_agent: detect_as ---")
     selected = state.get("aberrance_functions") or []
     if selected and "detect_as" not in selected:
         return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
+    psi_src = state.get("psi_data") or state.get("item_params") or []
     if not keep_cols:
         return {"flags": {"as_agent": {"error": "No valid dichotomous columns."}}}
+    if not psi_src or len(psi_src) != len(keep_cols):
+        return {"flags": {"as_agent": {"error": "Missing item parameters for detect_as."}}}
     try:
         import numpy as np
         ro, pandas2ri, _ = _forensic_init_r(resp_df, keep_cols)
+        ip_df = pd.DataFrame(psi_src)
         with (ro.default_converter + pandas2ri.converter).context():
-            ro.r("""
-                assign('as_err', NULL, envir = .GlobalEnv)
-                as_out <- tryCatch(
-                    detect_as(method = 'M4_S', x = x, alpha = 0.05),
-                    error = function(e) { assign('as_err', conditionMessage(e), envir = .GlobalEnv); NULL })
-            """)
-            has_as = ro.r("!is.null(as_out)")
-            if not (has_as and ro.conversion.rpy2py(has_as)):
-                err = str(ro.r("get0('as_err', envir = .GlobalEnv, ifnotfound = 'unknown')"))
-                return {"flags": {"as_agent": {"error": f"detect_as failed: {err}"}}}
-            as_stat = ro.r("as.data.frame(as_out$stat)")
-            as_stat_py = ro.conversion.rpy2py(as_stat)
-            stat_records = as_stat_py.to_dict(orient="records") if hasattr(as_stat_py, "to_dict") else []
-            # Extract p-values
-            ro.r("as_pval_df <- tryCatch(as.data.frame(as_out$pval), error = function(e) NULL)")
-            pval_records = []
-            try:
-                has_pval = ro.r("!is.null(as_pval_df)")[0]
-                if has_pval:
-                    as_pval_py = ro.conversion.rpy2py(ro.r("as_pval_df"))
-                    if hasattr(as_pval_py, "to_dict"):
-                        pval_records = as_pval_py.to_dict(orient="records")
-            except Exception:
-                pass
-            # Merge stat + pval and filter to keep only moderately significant pairs
-            flagged = []
-            records = []
-            _STORAGE_P_CUTOFF = 0.10
+            if not _forensic_build_psi(ro, ip_df, len(keep_cols)):
+                return {"flags": {"as_agent": {"error": "Could not build psi matrix."}}}
+            ro.r("r <- x")
+
+            rt_data = state.get("rt_data") or []
+            has_rt = bool(rt_data) and len(rt_data) == len(resp_df)
+            if has_rt:
+                rt_df = pd.DataFrame(rt_data)
+                if rt_df.shape[1] >= len(keep_cols):
+                    t_block = rt_df.iloc[:, :len(keep_cols)].apply(pd.to_numeric, errors="coerce").fillna(0.01)
+                    y_flat = np.log(t_block.astype(float).clip(lower=0.001).values.flatten()).tolist()
+                    ro.globalenv["as_y_vec"] = ro.FloatVector(y_flat)
+                    ro.r(f"y <- matrix(as_y_vec, nrow={int(t_block.shape[0])}, ncol={int(t_block.shape[1])}, byrow=TRUE)")
+                    ro.r("""
+                        as_beta_est  <- apply(y, 2, mean)
+                        as_alpha_est <- 1 / apply(y, 2, sd)
+                        as_alpha_est[!is.finite(as_alpha_est)] <- 1.0
+                        psi <- cbind(psi, alpha = as_alpha_est, beta = as_beta_est)
+                    """)
+                else:
+                    has_rt = False
+
             N = len(resp_df)
             pairs = [(i, j) for i in range(N) for j in range(i + 1, N)]
-            # Flag extraction
-            flag_arr = None
-            try:
-                as_flag = ro.r("as_out$flag")
-                fl_py = ro.conversion.rpy2py(as_flag)
-                if hasattr(fl_py, "__array__"):
-                    flag_arr = np.asarray(fl_py)
-            except Exception:
-                pass
-            for idx in range(min(len(stat_records), len(pairs))):
-                rec = {**stat_records[idx]}
-                # Attach p-values with _pval suffix
-                if idx < len(pval_records):
-                    for pk, pv in pval_records[idx].items():
-                        pkey = pk if pk.endswith("_pval") else f"{pk}_pval"
-                        rec[pkey] = pv
-                is_flagged = False
-                if flag_arr is not None:
-                    if flag_arr.ndim == 1 and idx < len(flag_arr) and flag_arr[idx]:
-                        is_flagged = True
-                    elif flag_arr.ndim >= 2 and idx < flag_arr.shape[0] and np.any(flag_arr[idx]):
-                        is_flagged = True
-                if is_flagged:
-                    flagged.extend(pairs[idx])
-                # Only store pairs with p < cutoff or flagged (avoid storing all N*(N-1)/2)
+            records_by_idx: dict[int, dict] = {}
+            flagged = []
+            methods_run: list[str] = []
+            method_errors: list[str] = []
+            _STORAGE_P_CUTOFF = 0.10
+
+            def _run_as_group(methods: list[str], call_args: str) -> None:
+                nonlocal flagged, methods_run, method_errors
+                ro.globalenv["as_methods"] = ro.StrVector(methods)
+                ro.r(f"""
+                    assign('as_err', NULL, envir = .GlobalEnv)
+                    as_out <- tryCatch(
+                        detect_as(method = as_methods, psi = psi, {call_args}, alpha = 0.05),
+                        error = function(e) {{ assign('as_err', conditionMessage(e), envir = .GlobalEnv); NULL }})
+                """)
+                has_as = ro.r("!is.null(as_out)")
+                if not (has_as and ro.conversion.rpy2py(has_as)):
+                    err = ""
+                    try:
+                        if not bool(ro.r("is.null(get0('as_err', envir = .GlobalEnv, ifnotfound = NULL))")[0]):
+                            err = str(ro.r("as.character(as_err)")[0])
+                    except Exception:
+                        err = "unknown"
+                    method_errors.append(f"{', '.join(methods)}: {err or 'no output'}")
+                    return
+
+                as_stat = ro.r("as.data.frame(as_out$stat)")
+                as_stat_py = ro.conversion.rpy2py(as_stat)
+                stat_records = as_stat_py.to_dict(orient="records") if hasattr(as_stat_py, "to_dict") else []
+
+                ro.r("as_pval_df <- tryCatch(as.data.frame(as_out$pval), error = function(e) NULL)")
+                pval_records = []
+                try:
+                    has_pval = bool(ro.r("!is.null(as_pval_df)")[0])
+                    if has_pval:
+                        as_pval_py = ro.conversion.rpy2py(ro.r("as_pval_df"))
+                        if hasattr(as_pval_py, "to_dict"):
+                            pval_records = as_pval_py.to_dict(orient="records")
+                except Exception:
+                    pass
+
+                flag_arr = None
+                try:
+                    fl_py = ro.conversion.rpy2py(ro.r("as_out$flag"))
+                    if hasattr(fl_py, "__array__"):
+                        flag_arr = np.asarray(fl_py)
+                except Exception:
+                    pass
+
+                for idx in range(min(len(stat_records), len(pairs))):
+                    rec = records_by_idx.setdefault(idx, {"_pair": pairs[idx]})
+                    for k, v in stat_records[idx].items():
+                        rec[k] = v
+                    if idx < len(pval_records):
+                        for pk, pv in pval_records[idx].items():
+                            pkey = pk if pk.endswith("_pval") else f"{pk}_pval"
+                            rec[pkey] = pv
+                    is_flagged = False
+                    if flag_arr is not None:
+                        if flag_arr.ndim == 1 and idx < len(flag_arr) and flag_arr[idx]:
+                            is_flagged = True
+                        elif flag_arr.ndim >= 2 and idx < flag_arr.shape[0] and np.any(flag_arr[idx]):
+                            is_flagged = True
+                    if is_flagged:
+                        flagged.extend(pairs[idx])
+                methods_run.extend(methods)
+
+            _run_as_group(["OMG_S", "WOMG_S", "GBT_S", "M4_S"], "x = x")
+            _run_as_group(["OMG_R", "WOMG_R", "GBT_R", "M4_R"], "r = r")
+            if has_rt:
+                _run_as_group(["OMG_ST", "GBT_ST"], "x = x, y = y")
+                _run_as_group(["OMG_RT", "GBT_RT"], "r = r, y = y")
+
+            flagged_set = set(flagged)
+            records = []
+            for idx, rec in records_by_idx.items():
                 min_p = 1.0
                 for pk, pv in rec.items():
                     if pk.endswith("_pval") and isinstance(pv, (int, float)):
                         min_p = min(min_p, pv)
-                if is_flagged or min_p < _STORAGE_P_CUTOFF:
-                    rec["_pair"] = pairs[idx]  # store (i,j) 0-based for network
+                pair = pairs[idx]
+                if pair[0] in flagged_set or pair[1] in flagged_set or min_p < _STORAGE_P_CUTOFF:
                     records.append(rec)
+            if not methods_run:
+                return {"flags": {"as_agent": {"error": "detect_as failed for all method groups: " + "; ".join(method_errors)}}}
             return {"flags": {"as_agent": {
-                "stat": records, "methods": ["M4_S"],
+                "stat": records,
+                "methods": list(dict.fromkeys(methods_run)),
                 "flagged_pairs": sorted(set(flagged)),
+                "method_errors": method_errors,
             }}}
     except Exception as e:
         return {"flags": {"as_agent": {"error": str(e)}}}
@@ -1531,7 +1610,7 @@ def as_agent(state: State) -> dict:
 
 # ---------- 5. rg_agent (Rapid Guessing) --------------------------------------
 def rg_agent(state: State) -> dict:
-    """detect_rg: NT method rapid-guessing detection."""
+    """detect_rg: all supported threshold/inspection rapid-guessing methods."""
     print("--- FORENSIC rg_agent: detect_rg ---")
     selected = state.get("aberrance_functions") or []
     if selected and "detect_rg" not in selected:
@@ -1554,42 +1633,64 @@ def rg_agent(state: State) -> dict:
             flat = t_block.values.flatten().tolist()
             ro.globalenv["t_vec"] = ro.FloatVector(flat)
             ro.r(f"t <- matrix(t_vec, nrow={n_persons}, ncol={n_items}, byrow=TRUE)")
-            ro.r("""
-                assign('rg_err', NULL, envir = .GlobalEnv)
-                rg_out <- tryCatch(
-                    detect_rg(method = 'NT', t = t, x = x, nt = 10),
-                    error = function(e) { assign('rg_err', conditionMessage(e), envir = .GlobalEnv); NULL })
-            """)
-            has_rg = ro.r("!is.null(rg_out)")
-            if not (has_rg and ro.conversion.rpy2py(has_rg)):
-                err = str(ro.r("get0('rg_err', envir = .GlobalEnv, ifnotfound = 'unknown')"))
-                return {"flags": {"rg_agent": {"error": f"detect_rg failed: {err}"}}}
-            # RTE extraction
-            rte_vals = []
-            try:
-                rte = ro.r("rg_out$rte")
-                if rte is not None:
-                    rte_py = ro.conversion.rpy2py(rte)
-                    if hasattr(rte_py, "__array__"):
-                        rte_vals = np.asarray(rte_py).flatten().tolist()
-            except Exception:
-                pass
-            # Flag extraction
-            flagged = []
-            try:
-                rg_flag = ro.r("rg_out$flag")
-                if rg_flag is not None:
-                    fl_py = ro.conversion.rpy2py(rg_flag)
-                    if hasattr(fl_py, "__array__"):
+            methods_run: list[str] = []
+            method_errors: list[str] = []
+            rte_cols: dict[str, list] = {}
+            flagged_set: set[int] = set()
+
+            def _run_rg(method: str, args: str) -> None:
+                nonlocal methods_run, method_errors, rte_cols, flagged_set
+                ro.globalenv["rg_method_req"] = ro.StrVector([method])
+                ro.r(f"""
+                    assign('rg_err', NULL, envir = .GlobalEnv)
+                    rg_out <- tryCatch(
+                        detect_rg(method = rg_method_req, t = t, {args}),
+                        error = function(e) {{ assign('rg_err', conditionMessage(e), envir = .GlobalEnv); NULL }})
+                """)
+                if not bool(ro.r("!is.null(rg_out)")[0]):
+                    err = "no output"
+                    try:
+                        if not bool(ro.r("is.null(get0('rg_err', envir = .GlobalEnv, ifnotfound = NULL))")[0]):
+                            err = str(ro.r("as.character(rg_err)")[0])
+                    except Exception:
+                        pass
+                    method_errors.append(f"{method}: {err}")
+                    return
+                methods_run.append(method)
+                try:
+                    if bool(ro.r("'rte' %in% names(rg_out)")[0]):
+                        rte_py = ro.conversion.rpy2py(ro.r("rg_out$rte"))
+                        arr = np.asarray(rte_py)
+                        if arr.ndim == 1:
+                            rte_cols[method] = arr.astype(float).tolist()
+                        elif arr.ndim >= 2:
+                            for j in range(arr.shape[1]):
+                                rte_cols[f"{method}_{j+1}"] = arr[:, j].astype(float).tolist()
+                except Exception:
+                    pass
+                try:
+                    if bool(ro.r("'flag' %in% names(rg_out)")[0]):
+                        fl_py = ro.conversion.rpy2py(ro.r("rg_out$flag"))
                         arr = np.asarray(fl_py)
                         if arr.ndim == 1:
-                            flagged = np.where(arr)[0].tolist()
-                        else:
-                            flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
-            except Exception:
-                pass
+                            flagged_set.update(np.where(arr)[0].tolist())
+                        elif arr.ndim >= 2:
+                            flagged_set.update(np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist())
+                except Exception:
+                    pass
+
+            _run_rg("CT", "thr = 3")
+            _run_rg("NT", "nt = c(5,10,15,20,25,30,35)")
+            _run_rg("CUMP", "x = x, outlier = 90")
+            _run_rg("VI", "outlier = 90")
+            _run_rg("VITP", "x = x, outlier = 90")
+            if not methods_run:
+                return {"flags": {"rg_agent": {"error": "detect_rg failed for all methods: " + "; ".join(method_errors)}}}
+            rte_vals = rte_cols.get("NT_2") or rte_cols.get("NT") or (next(iter(rte_cols.values())) if rte_cols else [])
+            flagged = sorted(flagged_set)
             return {"flags": {"rg_agent": {
-                "rte": rte_vals, "flagged": flagged, "methods": ["RG_NT"],
+                "rte": rte_vals, "rte_by_method": rte_cols, "flagged": flagged,
+                "methods": methods_run, "method_errors": method_errors,
             }}}
     except Exception as e:
         return {"flags": {"rg_agent": {"error": str(e)}}}
@@ -1597,7 +1698,7 @@ def rg_agent(state: State) -> dict:
 
 # ---------- 6. cp_agent (Change Point) ----------------------------------------
 def cp_agent(state: State) -> dict:
-    """detect_cp: change-point detection per person."""
+    """detect_cp: all supported score/time change-point method families."""
     print("--- FORENSIC cp_agent: detect_cp ---")
     selected = state.get("aberrance_functions") or []
     # Only run CP when rapid-guessing / low-effort analysis is selected.
@@ -1605,46 +1706,72 @@ def cp_agent(state: State) -> dict:
         return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
+    psi_src = state.get("psi_data") or state.get("item_params") or []
     if not keep_cols:
         return {"flags": {"cp_agent": {"error": "No valid dichotomous columns."}}}
+    if not psi_src or len(psi_src) != len(keep_cols):
+        return {"flags": {"cp_agent": {
+            "info": "Change-point method families in aberrance require item parameters (psi); cp_agent skipped.",
+            "flagged": [],
+            "methods": [],
+        }}}
     try:
         import numpy as np
         ro, pandas2ri, _ = _forensic_init_r(resp_df, keep_cols)
+        ip_df = pd.DataFrame(psi_src)
         with (ro.default_converter + pandas2ri.converter).context():
-            ro.r("""
+            if not _forensic_build_psi(ro, ip_df, len(keep_cols)):
+                return {"flags": {"cp_agent": {"error": "Could not build psi matrix."}}}
+            n_persons, n_items = resp_df[keep_cols].shape
+            rt_data = state.get("rt_data") or []
+            has_rt = bool(rt_data) and len(rt_data) == n_persons
+            if has_rt:
+                rt_df = pd.DataFrame(rt_data)
+                if rt_df.shape[1] >= n_items:
+                    y_block = rt_df.iloc[:, :n_items].apply(pd.to_numeric, errors="coerce").fillna(0.01)
+                    y_flat = np.log(y_block.astype(float).clip(lower=0.001).values.flatten()).tolist()
+                    ro.globalenv["cp_y_vec"] = ro.FloatVector(y_flat)
+                    ro.r(f"y <- matrix(cp_y_vec, nrow={n_persons}, ncol={n_items}, byrow=TRUE)")
+                    ro.r("""
+                        cp_beta_est  <- apply(y, 2, mean)
+                        cp_alpha_est <- 1 / apply(y, 2, sd)
+                        cp_alpha_est[!is.finite(cp_alpha_est)] <- 1.0
+                        psi <- cbind(psi, alpha = cp_alpha_est, beta = cp_beta_est)
+                    """)
+                else:
+                    has_rt = False
+            ro.globalenv["cp_methods_req"] = ro.StrVector(
+                ["L_S_*", "S_S_*", "W_S_*"] + (["L_T_*", "W_T_*"] if has_rt else [])
+            )
+            call_args = "x = x, y = y" if has_rt else "x = x"
+            ro.r(f"""
                 assign('cp_err', NULL, envir = .GlobalEnv)
                 cp_out <- tryCatch(
-                    detect_cp(method = 'MCP', x = x),
-                    error = function(e) { assign('cp_err', conditionMessage(e), envir = .GlobalEnv); NULL })
+                    detect_cp(method = cp_methods_req, cpi = c(1, {max(1, n_items - 1)}), psi = psi, {call_args}),
+                    error = function(e) {{ assign('cp_err', conditionMessage(e), envir = .GlobalEnv); NULL }})
             """)
-            has_cp = ro.r("!is.null(cp_out)")
-            if not (has_cp and ro.conversion.rpy2py(has_cp)):
-                err = str(ro.r("get0('cp_err', envir = .GlobalEnv, ifnotfound = 'unknown')"))
+            if not bool(ro.r("!is.null(cp_out)")[0]):
+                err = "no output"
+                try:
+                    if not bool(ro.r("is.null(get0('cp_err', envir = .GlobalEnv, ifnotfound = NULL))")[0]):
+                        err = str(ro.r("as.character(cp_err)")[0])
+                except Exception:
+                    pass
                 return {"flags": {"cp_agent": {"error": f"detect_cp failed: {err}"}}}
-            # Extract change-point stat per person
-            cp_stat_records = []
+            cp_py = ro.conversion.rpy2py(ro.r("as.data.frame(cp_out$stat)"))
+            cp_stat_records = cp_py.to_dict(orient="records") if hasattr(cp_py, "to_dict") else []
             try:
-                ro.r("cp_stat <- as.data.frame(cp_out$stat)")
-                cp_py = ro.conversion.rpy2py(ro.r("cp_stat"))
-                if hasattr(cp_py, "to_dict"):
-                    cp_stat_records = cp_py.to_dict(orient="records")
+                cp_est_py = ro.conversion.rpy2py(ro.r("as.data.frame(cp_out$cp)"))
+                cp_est_records = cp_est_py.to_dict(orient="records") if hasattr(cp_est_py, "to_dict") else []
+                for i, rec in enumerate(cp_stat_records):
+                    if i < len(cp_est_records):
+                        for k, v in cp_est_records[i].items():
+                            rec[f"{k}_cp"] = v
             except Exception:
                 pass
-            flagged = []
-            try:
-                cp_flag = ro.r("cp_out$flag")
-                if cp_flag is not None:
-                    fl = ro.conversion.rpy2py(cp_flag)
-                    if hasattr(fl, "__array__"):
-                        arr = np.asarray(fl)
-                        if arr.ndim == 1:
-                            flagged = np.where(arr)[0].tolist()
-                        elif arr.ndim >= 2:
-                            flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
-            except Exception:
-                pass
+            methods = list(cp_stat_records[0].keys()) if cp_stat_records else list(ro.conversion.rpy2py(ro.r("cp_methods_req")))
             return {"flags": {"cp_agent": {
-                "stat": cp_stat_records, "flagged": flagged, "methods": ["MCP"],
+                "stat": cp_stat_records, "flagged": [], "methods": methods,
             }}}
     except Exception as e:
         return {"flags": {"cp_agent": {"error": str(e)}}}
@@ -1652,20 +1779,119 @@ def cp_agent(state: State) -> dict:
 
 # ---------- 7. tt_agent (Test Tampering) ---------------------------------------
 def tt_agent(state: State) -> dict:
-    """detect_tt: requires erasure data (stub)."""
-    print("--- FORENSIC tt_agent: detect_tt (stub) ---")
+    """Answer-change tampering summary.
+
+    This is a lightweight workflow-level summary for uploaded answer-change logs.
+    Full R aberrance::detect_tt needs richer erasure/distractor inputs and remains a future extension.
+    """
+    print("--- FORENSIC tt_agent: answer-change summary ---")
     selected = state.get("aberrance_functions") or []
     if selected and "detect_tt" not in selected:
         return {"flags": {}}
-    return {
-        "flags": {
-            "tt_agent": {
-                "info": "Test Tampering (detect_tt) requires erasure data (initial and final responses/distractors), which is not collected in this workflow.",
-                "flagged": [],
-                "methods": ["EDI_SD"],
+    changes = state.get("answer_changes") or []
+    if not changes:
+        return {
+            "flags": {
+                "tt_agent": {
+                    "info": "Test Tampering (detect_tt) requires answer-change data; upload answer_changes.csv on Preparation.",
+                    "flagged": [],
+                    "methods": ["AnswerChangeRate"],
+                }
             }
         }
-    }
+    try:
+        import numpy as np
+
+        df = pd.DataFrame(changes)
+        if df.empty:
+            raise ValueError("answer_changes is empty")
+        cols = {str(c).strip().lower(): c for c in df.columns}
+        examinee_col = cols.get("examinee_id") or cols.get("student_id") or cols.get("person_id") or df.columns[0]
+        item_col = cols.get("item_id") or cols.get("item") or cols.get("question_id")
+        changed_col = cols.get("changed")
+        initial_col = cols.get("initial_response") or cols.get("initial")
+        final_col = cols.get("final_response") or cols.get("final")
+
+        work = df.copy()
+        if changed_col is not None:
+            changed = pd.to_numeric(work[changed_col], errors="coerce")
+            if changed.notna().any():
+                work["_changed"] = changed.fillna(0).astype(float).clip(lower=0)
+            else:
+                work["_changed"] = work[changed_col].astype(str).str.strip().str.lower().isin(
+                    {"1", "true", "t", "yes", "y", "changed"}
+                ).astype(float)
+        elif initial_col is not None and final_col is not None:
+            work["_changed"] = (work[initial_col].astype(str) != work[final_col].astype(str)).astype(float)
+        else:
+            return {
+                "flags": {
+                    "tt_agent": {
+                        "error": "answer-change data must include changed, or initial_response and final_response columns.",
+                        "flagged": [],
+                        "methods": ["AnswerChangeRate"],
+                    }
+                }
+            }
+
+        grouped = work.groupby(examinee_col, sort=False)
+        stat = []
+        examinee_ids = list(grouped.groups.keys())
+        for examinee_id, g in grouped:
+            n_items = int(len(g))
+            n_changed = float(g["_changed"].sum())
+            stat.append(
+                {
+                    "Examinee_ID": str(examinee_id),
+                    "n_items": n_items,
+                    "n_changed": int(n_changed),
+                    "change_rate": float(n_changed / n_items) if n_items else 0.0,
+                }
+            )
+
+        rates = np.array([r["change_rate"] for r in stat], dtype=float)
+        counts = np.array([r["n_changed"] for r in stat], dtype=float)
+        if len(stat) >= 3:
+            rate_cut = float(np.nanquantile(rates, 0.95))
+            count_cut = float(max(3, np.nanquantile(counts, 0.95)))
+        else:
+            rate_cut = float(max(0.2, np.nanmax(rates) if len(rates) else 0))
+            count_cut = 3.0
+        flagged = [
+            i for i, r in enumerate(stat)
+            if r["n_changed"] >= count_cut and r["change_rate"] >= rate_cut and r["n_changed"] > 0
+        ]
+
+        item_hotspots = []
+        if item_col is not None:
+            item_summary = (
+                work.groupby(item_col, sort=False)["_changed"]
+                .agg(["count", "sum"])
+                .reset_index()
+                .rename(columns={"count": "n_records", "sum": "n_changed"})
+            )
+            item_summary["change_rate"] = item_summary["n_changed"] / item_summary["n_records"].replace(0, np.nan)
+            item_hotspots = (
+                item_summary.sort_values(["n_changed", "change_rate"], ascending=False)
+                .head(10)
+                .to_dict(orient="records")
+            )
+
+        return {
+            "flags": {
+                "tt_agent": {
+                    "stat": stat,
+                    "flagged": flagged,
+                    "methods": ["AnswerChangeRate"],
+                    "item_hotspots": item_hotspots,
+                    "n_records": int(len(work)),
+                    "n_examinees": int(len(examinee_ids)),
+                    "info": "Answer-change summary computed from uploaded CSV; full R detect_tt remains a future extension.",
+                }
+            }
+        }
+    except Exception as e:
+        return {"flags": {"tt_agent": {"error": str(e), "flagged": [], "methods": ["AnswerChangeRate"]}}}
 
 
 # ---------- 8. pk_agent (Preknowledge) ----------------------------------------
@@ -1686,15 +1912,29 @@ def pk_agent(state: State) -> dict:
         if len(keep_cols) < 2:
             return {"flags": {"pk_agent": {"error": "Preknowledge requires at least 2 items (one compromised, one secure)."}}}
         ci = list(range(1, len(keep_cols)))  # default: items 1..n-1, leave last as secure
+    ci_clean = sorted({int(i) for i in ci if 1 <= int(i) <= len(keep_cols)})
+    if not ci_clean:
+        return {"flags": {"pk_agent": {"error": f"No valid compromised item IDs within 1..{len(keep_cols)}."}}}
+    if len(ci_clean) >= len(keep_cols):
+        return {
+            "flags": {
+                "pk_agent": {
+                    "error": "Preknowledge requires at least one secure item; compromised CSV marks all response items as compromised.",
+                    "flagged": [],
+                    "methods": ["L_S", "S_S", "W_S"],
+                }
+            }
+        }
     try:
         import rpy2.robjects as ro
         ro.r("library(aberrance)")
         n_items = len(keep_cols)
-        ci_1based = [int(i) for i in ci]
+        ci_1based = ci_clean
         ci_r_str = "c(" + ",".join(map(str, ci_1based)) + ")"
         tmpdir = tempfile.mkdtemp(prefix="pk_agent_")
         path_x = str(Path(tmpdir) / "x.csv")
         path_psi = str(Path(tmpdir) / "psi.csv")
+        path_y = str(Path(tmpdir) / "y.csv")
         path_stat = str(Path(tmpdir) / "pk_stat.csv")
         path_flag = str(Path(tmpdir) / "pk_flag.csv")
         try:
@@ -1707,12 +1947,24 @@ def pk_agent(state: State) -> dict:
                 c = float(d.get("g", d.get("c", 0))) if ("g" in d or "c" in d) else 0.0
                 psi_rows.append({"a": a, "b": b, "c": c})
             pd.DataFrame(psi_rows).to_csv(path_psi, index=False)
+            rt_data = state.get("rt_data") or []
+            has_rt = bool(rt_data) and len(rt_data) == len(resp_df)
+            if has_rt:
+                rt_df = pd.DataFrame(rt_data)
+                if rt_df.shape[1] >= len(keep_cols):
+                    y_block = rt_df.iloc[:, :len(keep_cols)].apply(pd.to_numeric, errors="coerce").fillna(0.01)
+                    y_block = np.log(y_block.astype(float).clip(lower=0.001))
+                    y_block.to_csv(path_y, index=False, header=False)
+                else:
+                    has_rt = False
             path_x_r = path_x.replace("\\", "/")
             path_psi_r = path_psi.replace("\\", "/")
+            path_y_r = path_y.replace("\\", "/")
             path_stat_r = path_stat.replace("\\", "/")
             path_flag_r = path_flag.replace("\\", "/")
             ro.globalenv["path_x"] = path_x_r
             ro.globalenv["path_psi"] = path_psi_r
+            ro.globalenv["path_y"] = path_y_r
             ro.globalenv["path_stat"] = path_stat_r
             ro.globalenv["path_flag"] = path_flag_r
             ro.r("ci_r <- " + ci_r_str)
@@ -1721,35 +1973,69 @@ def pk_agent(state: State) -> dict:
                 psi_df <- read.csv(path_psi, header = TRUE)
                 psi <- as.matrix(psi_df[, c('a','b','c')])
                 ci <- ci_r
-                assign('pk_err', NULL, envir = .GlobalEnv)
-                pk_out <- tryCatch(
-                    detect_pk(method = c('L_S','S_S','W_S'), ci = ci, psi = psi, x = x, alpha = 0.05),
-                    error = function(e) { assign('pk_err', conditionMessage(e), envir = .GlobalEnv); NULL })
-                if (!is.null(pk_out)) {
-                    write.csv(pk_out$stat, path_stat, row.names = FALSE)
-                    flag_any <- as.logical(apply(pk_out$flag, 1, any))
-                    write.csv(data.frame(flagged = flag_any), path_flag, row.names = FALSE)
-                }
             """)
-            err_msg = str(ro.r("get0('pk_err', envir = .GlobalEnv, ifnotfound = '')"))
-            if err_msg:
-                return {"flags": {"pk_agent": {"error": f"detect_pk failed: {err_msg}"}}}
-            if not Path(path_stat).exists():
-                return {"flags": {"pk_agent": {"error": "detect_pk returned no output (no stat file)."}}}
-            stat_df = pd.read_csv(path_stat)
-            flag_df = pd.read_csv(path_flag)
-            methods = list(stat_df.columns)
-            records = []
-            for _, row in stat_df.iterrows():
-                records.append({k: float(row[k]) for k in methods})
-            flagged = [i for i, v in enumerate(flag_df["flagged"]) if v]
+            if has_rt:
+                ro.r("""
+                    y <- as.matrix(read.csv(path_y, header = FALSE))
+                    pk_beta_est <- apply(y, 2, mean)
+                    pk_alpha_est <- 1 / apply(y, 2, sd)
+                    pk_alpha_est[!is.finite(pk_alpha_est)] <- 1.0
+                    psi <- cbind(psi, alpha = pk_alpha_est, beta = pk_beta_est)
+                """)
+
+            stat_cols: dict[str, list] = {}
+            flagged_set: set[int] = set()
+            methods: list[str] = []
+            method_errors: list[str] = []
+
+            for method, args in [
+                *[(m, "x = x") for m in ["L_S", "ML_S", "LR_S", "S_S", "W_S"]],
+                *([(m, "y = y") for m in ["L_T", "W_T"]] if has_rt else []),
+                *([("L_ST", "x = x, y = y")] if has_rt else []),
+            ]:
+                ro.globalenv["pk_method_req"] = ro.StrVector([method])
+                ro.r(f"""
+                    assign('pk_err', NULL, envir = .GlobalEnv)
+                    pk_out <- tryCatch(
+                        detect_pk(method = pk_method_req, ci = ci, psi = psi, {args}, alpha = 0.05),
+                        error = function(e) {{ assign('pk_err', conditionMessage(e), envir = .GlobalEnv); NULL }})
+                """)
+                if not bool(ro.r("!is.null(pk_out)")[0]):
+                    err = "no output"
+                    try:
+                        if not bool(ro.r("is.null(get0('pk_err', envir = .GlobalEnv, ifnotfound = NULL))")[0]):
+                            err = str(ro.r("as.character(pk_err)")[0])
+                    except Exception:
+                        pass
+                    method_errors.append(f"{method}: {err}")
+                    continue
+                vals = [float(v) for v in ro.r("as.numeric(pk_out$stat[, 1])")]
+                stat_cols[method] = vals
+                try:
+                    pvals = [float(v) for v in ro.r("as.numeric(pk_out$pval[, 1])")]
+                    stat_cols[f"{method}_pval"] = pvals
+                except Exception:
+                    pass
+                try:
+                    flag_any = ro.r("as.logical(apply(pk_out$flag, 1, any))")
+                    flagged_set.update(i for i, v in enumerate(flag_any) if v)
+                except Exception:
+                    pass
+                methods.append(method)
+
+            if not methods:
+                return {"flags": {"pk_agent": {"error": "detect_pk failed for all methods: " + "; ".join(method_errors)}}}
+            stat_df = pd.DataFrame(stat_cols)
+            records = stat_df.to_dict(orient="records")
+            flagged = sorted(flagged_set)
             return {"flags": {"pk_agent": {
                 "stat": records,
                 "flagged": flagged,
                 "methods": methods or ["L_S", "S_S", "W_S"],
+                "method_errors": method_errors,
             }}}
         finally:
-            for p in (path_x, path_psi, path_stat, path_flag):
+            for p in (path_x, path_psi, path_y, path_stat, path_flag):
                 try:
                     Path(p).unlink(missing_ok=True)
                 except Exception:

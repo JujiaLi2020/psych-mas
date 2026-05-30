@@ -1,11 +1,11 @@
-# PsyMAS-Aberrance (v0.5.0)
+# PsyMAS-Aberrance (v0.6.0)
 
 **PsyMAS-Aberrance** is a Streamlit app for **forensic psychometrics**: it fits an IRT model (to produce ψ item parameters) and runs **aberrance detection agents**, then produces a **Forensic Verdict** (LLM-assisted).
 
 This repository is structured as a two-process system:
 
-- **UI**: Streamlit (`ui.py`) — runs locally (Windows-friendly).
-- **Backend**: FastAPI (`backend_service.py`) — runs on **Linux** (recommended via Docker). It hosts R/rpy2 + the LangGraph/agent logic.
+- **UI**: Streamlit (`ui.py`) — runs locally (Windows-friendly) or in Docker/Railway.
+- **Backend**: FastAPI (`backend_service.py`) — runs on **Linux** (recommended via Docker or Railway). It hosts R/rpy2 + the LangGraph/agent logic.
 
 Why split it?
 
@@ -15,64 +15,110 @@ Why split it?
 
 ---
 
-## What’s new in 0.5.0
+## What’s new in 0.6.0
 
-- **Backend IRT stability**: Fixed rpy2 conversion-context errors in `POST /irt` when running under uvicorn worker threads.
-- **Preknowledge defaults**: If no compromised items are provided for `detect_pk`, we default to **items 1..n-1** as compromised (leaving ≥1 secure item, as required by R `detect_pk`).
-- **Streamlit plotting stability**: Force headless matplotlib backend (`Agg`) to avoid missing GUI backend issues during rendering (e.g., collusion plots).
-- **Docs**: Added/updated `docs/FORENSIC_AGENTS_DATA_FLOW.md` to document data flow and R conversion rules.
+- **Railway & Docker Compose stack**: One-command local deploy (`docker compose up --build`) with backend + UI; `scripts/run_ui_railway.sh` for Streamlit behind proxies (Railway, Compose).
+- **Scalable job storage**: Detect and IRT jobs use **Redis** (multi-replica) → **disk** (`PSYMAS_JOB_DIR`, multi-worker Gunicorn) → in-memory fallback; `/health` reports `job_store` and whether jobs are shared safely.
+- **Async IRT**: `POST /irt/start` runs IRT in a subprocess; Preparation polls `GET /irt/{job_id}/status` and `GET /irt/{job_id}/result` (sync `POST /irt` remains for Tools/debug).
+- **Forensic reporting**: Branded **Test-Taker Report (PDF)** (compact 12pt layout), **person-level CSV/ZIP export** with column legend and agent index guide, and fixed navigation to **Aberrance Summary** after Detect.
+- **Pre-estimated ψ**: Upload item-parameter CSV in Preparation to skip IRT when ψ is already available.
+- **Railway URL handling**: UI normalizes `PSYMAS_BACKEND_URL` (adds `https://` for public Railway domains to avoid POST→GET redirects on `/irt`).
 
 ---
 
 ## Features
 
 - **Scenario**: Choose preset A, B, or D (Custom); optional LLM suggestion from a short description.
-- **Preparation**: Upload Response + optional RT CSV, generate ψ, set compromised items / tampering when needed, select agents, start Detect. Readiness strip and Detect button reflect only what’s required for selected agents.
+- **Preparation**: Upload Response + optional RT CSV; generate ψ (async IRT) or upload pre-estimated ψ; set compromised items / tampering when needed; select agents; start Detect.
 - **Detect Progress**: Progress bar, flow diagram with per-agent status, auto-refresh until done; **Generate Report** opens Aberrance Summary.
-- **Aberrance Summary**: Forensic Verdict, Collusion Graph and Effort Matrix (when data exists), Watchlist, agent-by-agent reports.
-- **Tools**: Aberrance / IRT / RT utilities + **Tools → Backend test** for troubleshooting.
+- **Aberrance Summary**: Forensic Verdict, Collusion Graph and Effort Matrix (when data exists), Watchlist, agent-by-agent reports, examinee-level export, Test-Taker PDF.
+- **Tools**: Aberrance / IRT / RT utilities + **Tools → Backend test** (sync and async IRT, detect polling).
 
 ---
 
 ## Quickstart (recommended on Windows)
 
-### 1) Start the backend in Docker (Linux + R)
+### Option A — Docker Compose (backend + UI)
 
 From the repo root:
 
 ```bash
-docker build -t psych-mas-backend .
-docker run --rm -p 8000:8000 -e PORT=8000 psych-mas-backend uvicorn backend_service:app --host 0.0.0.0 --port 8000
+cp .env.example .env
+# Edit .env: add OPENROUTER_API_KEY / GOOGLE_API_KEY as needed
+
+docker compose up --build
 ```
 
-Verify:
+First build installs R packages and can take **10–20 minutes**.
 
-- `http://localhost:8000/health` → `{"status":"ok"}`
-- `http://localhost:8000/docs` → FastAPI docs (should include `/irt` and `/detect`)
+| Service | URL |
+|---------|-----|
+| Streamlit UI | http://localhost:8501 |
+| FastAPI backend | http://localhost:9000 |
+| API docs | http://localhost:9000/docs |
+| Health | http://localhost:9000/health |
 
-### 2) Configure local environment
+On Windows, host port **9000** is used because TCP **8000** is often in an OS-reserved range (7971–8070).
 
-Create/update `.env` in the repo root (do **not** commit it):
+Stop: `docker compose down`
+
+**Backend only** (run Streamlit on the host with `uv`):
+
+```bash
+docker compose up --build backend
+```
+
+Then set `PSYMAS_BACKEND_URL=http://localhost:9000` in `.env` and run Streamlit locally (Option B, step 3).
+
+Optional Redis (multi-worker / multi-replica backend):
+
+```bash
+# In .env: REDIS_URL=redis://redis:6379/0 and PSYMAS_GUNICORN_WORKERS=4
+docker compose --profile redis up --build
+```
+
+### Option B — Manual Docker + host Streamlit
+
+**1) Backend in Docker**
+
+```bash
+docker build -t psych-mas-backend .
+docker run --rm -p 9000:8000 -e PORT=8000 psych-mas-backend
+```
+
+Default image CMD runs Gunicorn on port 8000 inside the container (mapped to host **9000** in the example above).
+
+Verify: `http://localhost:9000/health` → `{"status":"ok", ...}`
+
+**2) Configure `.env`**
 
 ```env
-PSYMAS_BACKEND_URL=http://localhost:4000
+PSYMAS_BACKEND_URL=http://localhost:9000
 OPENROUTER_API_KEY=...
 GOOGLE_API_KEY=...
 ```
 
-After changing `.env`, restart Streamlit.
-
-### 3) Run Streamlit locally
-
-In another terminal:
+**3) Run Streamlit on the host**
 
 ```bash
 uv sync
-uv run -- python -m streamlit run .\ui.py --server.port 4000
-
+uv run -- python -m streamlit run ui.py --server.port 8501
 ```
 
-Use any free port (don’t use `4000` — that’s the backend).
+Use a UI port other than the backend API port.
+
+---
+
+## Deploy on Railway
+
+Typical setup: **two services** from the same image (`psych-mas:latest`):
+
+| Service | Command / notes |
+|---------|-----------------|
+| **Backend** | Default Dockerfile `CMD` (Gunicorn + uvicorn workers). Set `PORT`; optional `REDIS_URL` + `PSYMAS_GUNICORN_WORKERS` for scale. |
+| **UI** | Override start command: `sh scripts/run_ui_railway.sh`. Set `PSYMAS_BACKEND_URL` to the backend’s **public HTTPS** URL (e.g. `https://your-api.up.railway.app`). |
+
+Secrets: `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, and optionally `REDIS_URL` (Railway Redis plugin). Without Redis on multiple backend replicas, use a single replica or rely on disk job dir only within one container.
 
 ---
 
@@ -80,13 +126,18 @@ Use any free port (don’t use `4000` — that’s the backend).
 
 The backend service exposes:
 
-- **`GET /health`**: lightweight health check used by the UI (“LangGraph Agents” status).
-- **`POST /irt`**: runs IRT in the backend and returns ψ (`result.item_params`).
-- **`POST /detect`**: starts a detect job and returns `{run_id}`.
-  - Requires `psi_data` (ψ is generated on Preparation; backend does **not** re-fit IRT during Detect).
+- **`GET /health`**: `{status, job_store, shared_detect_jobs, async_irt, irt_endpoints}` — used by the UI for backend readiness.
+- **`POST /irt/start`**: queues IRT in a subprocess; returns `{job_id, job_store}`.
+- **`GET /irt/{job_id}/status`**: `{status, progress, error}`.
+- **`GET /irt/{job_id}/result`**: `{status, result}` with `result.item_params` when done.
+- **`POST /irt`**: synchronous IRT (legacy / Tools); returns ψ immediately.
+- **`POST /detect`**: starts a detect job and returns `{run_id, job_store}`.
+  - Requires `psi_data` (ψ from Preparation; backend does **not** re-fit IRT during Detect).
   - Runs agents **sequentially** to avoid concurrent rpy2/R failures.
-- **`GET /detect/{run_id}/status`**: returns `{status, progress, irt_status, node_states, error}`.
-- **`GET /detect/{run_id}/result`**: returns the final result (`flags`, `final_report`, `psi_data`, etc.).
+- **`GET /detect/{run_id}/status`**: `{status, progress, irt_status, node_states, error}`.
+- **`GET /detect/{run_id}/result`**: final result (`flags`, `final_report`, `psi_data`, etc.).
+
+**Job store priority:** `REDIS_URL` (or Railway Redis env vars) → `PSYMAS_JOB_DIR` (default `/tmp/psymas_detect_jobs` in Docker) → in-memory (single worker only).
 
 ---
 
@@ -94,7 +145,7 @@ The backend service exposes:
 
 To avoid re-estimating IRT during Detect:
 
-- **Preparation → Generate item parameters** calls `POST /irt` and stores `item_params` in Streamlit session.
+- **Preparation → Generate item parameters** calls `POST /irt/start` (or upload a ψ CSV) and stores `item_params` in Streamlit session.
 - **Preparation → Detect** sends those params as `psi_data` in `POST /detect`.
 - If `psi_data` is missing, the backend returns an error (“Missing psi_data …”).
 
@@ -110,6 +161,7 @@ The Forensic Verdict uses the currently selected provider:
 Notes:
 
 - `ui.py` loads `.env` at startup using `python-dotenv`.
+- OpenRouter model lists live in `mmls.py`.
 - If keys are missing, the verdict falls back to a rule-based summary.
 
 ---
@@ -120,7 +172,7 @@ The **Tools → Backend test** page helps you debug:
 
 - whether ψ exists in session,
 - the exact JSON payload being sent to `/detect`,
-- direct calls to `/health`, `/irt`, `/detect`, `/status`, and `/result`.
+- direct calls to `/health`, `/irt/start`, `/irt`, `/detect`, `/status`, and `/result`.
 
 ---
 
@@ -129,11 +181,15 @@ The **Tools → Backend test** page helps you debug:
 | Path | Purpose |
 |------|---------|
 | `ui.py` | Streamlit UI (Preparation, Detect Progress, dashboards, Tools) |
-| `backend_service.py` | FastAPI backend (`/health`, `/irt`, `/detect`, polling) |
+| `backend_service.py` | FastAPI backend (`/health`, `/irt`, `/detect`, job storage) |
 | `graph.py` | IRT + aberrance agent implementations and synthesizer |
+| `mmls.py` | OpenRouter model metadata for the UI |
 | `Dockerfile` | Linux image (R + R packages + Python deps) |
+| `docker-compose.yml` | Local stack: `backend` + `ui` (+ optional `redis` profile) |
+| `scripts/run_ui_railway.sh` | Streamlit entrypoint for Railway / Compose UI service |
+| `.env.example` | Template for API keys and backend URL |
 | `install_r_packages.R`, `r_packages.txt` | R package install (container) |
-| `pyproject.toml` | Python dependencies |
+| `pyproject.toml` | Python dependencies (package version **0.6.0**) |
 
 ---
 

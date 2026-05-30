@@ -4,6 +4,7 @@ import os
 import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Literal
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -28,6 +29,7 @@ JobStatus = Literal["pending", "running", "done", "error"]
 class DetectRequest(BaseModel):
     responses: list[dict]
     rt_data: list[dict] = []
+    answer_changes: list[dict] = []
     itemtype: str = "2PL"
     compromised_items: list[int] = []
     model_settings: dict = {}
@@ -70,6 +72,19 @@ def _job_ttl_sec() -> int:
         return 604800
 
 
+def _normalize_redis_url(raw: str) -> str | None:
+    """redis-py requires redis://, rediss://, or unix://. Railway copies sometimes omit the scheme."""
+    u = raw.strip()
+    if not u:
+        return None
+    low = u.lower()
+    if low.startswith("redis://") or low.startswith("rediss://") or low.startswith("unix://"):
+        return u
+    if "://" in u:
+        return None
+    return f"redis://{u}"
+
+
 def _redis_url_from_env() -> str | None:
     for key in (
         "REDIS_URL",
@@ -79,9 +94,19 @@ def _redis_url_from_env() -> str | None:
         "REDISCLOUD_URL",
     ):
         v = os.getenv(key, "").strip()
-        if v:
-            return v
-    return None
+        if not v:
+            continue
+        n = _normalize_redis_url(v)
+        if n:
+            return n
+    host = os.getenv("REDIS_HOST", "").strip()
+    if not host:
+        return None
+    port = (os.getenv("REDIS_PORT", "6379") or "6379").strip()
+    pw = os.getenv("REDIS_PASSWORD", "").strip()
+    if pw:
+        return f"redis://:{quote(pw, safe='')}@{host}:{port}/0"
+    return f"redis://{host}:{port}/0"
 
 
 def _job_dir_from_env() -> str | None:
@@ -125,7 +150,13 @@ def _get_redis() -> Any:
         url = _redis_url_from_env()
         if not url:
             raise RuntimeError("REDIS_URL is not set")
-        _redis_client = redis_lib.from_url(url, decode_responses=True, socket_connect_timeout=5)
+        try:
+            _redis_client = redis_lib.from_url(url, decode_responses=True, socket_connect_timeout=5)
+        except ValueError as e:
+            raise RuntimeError(
+                "Invalid Redis URL: use redis:// or rediss:// (or set REDIS_HOST + REDIS_PORT). "
+                f"Original error: {e}"
+            ) from e
     return _redis_client
 
 
@@ -297,6 +328,7 @@ def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
             result: Dict[str, Any] = {
                 "responses": req.responses,
                 "rt_data": req.rt_data,
+                "answer_changes": req.answer_changes,
                 "theta": 0.0,
                 "latency_flags": [],
                 "next_step": "done",
@@ -304,7 +336,7 @@ def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
                 "is_verified": True,
                 "psi_data": psi_data,
                 "compromised_items": req.compromised_items,
-                "aberrance_functions": req.aberrance_functions or [],
+                "aberrance_functions": req.aberrance_functions or ["detect_nm"],
                 "flags": {
                     "stub": {
                         "note": "Stubbed LangGraph run (PSYMAS_STUB_LANGGRAPH=1); no R/aberrance executed."
@@ -327,23 +359,29 @@ def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
         except Exception:
             pass
 
+        selected_functions = req.aberrance_functions or ["detect_nm"]
+        psi_required = any(fn in selected_functions for fn in ("detect_pm", "detect_pk", "detect_ac", "detect_as"))
         psi_data = req.psi_data or []
-        if not psi_data:
+        if psi_required and not psi_data:
             sink.patch(
                 {
                     "irt_status": "missing",
                     "status": "error",
-                    "error": "Missing psi_data. Generate item parameters (ψ) on Preparation page and retry.",
+                    "error": (
+                        "Missing psi_data. Generate or upload item parameters (ψ) on the Preparation "
+                        "page for detect_pm, detect_pk, detect_ac, or detect_as, then retry."
+                    ),
                     "progress": 0,
                 }
             )
             return
 
-        sink.patch({"psi_data": psi_data, "irt_status": "provided", "progress": 35})
+        sink.patch({"psi_data": psi_data, "irt_status": "provided" if psi_data else "not_required", "progress": 35})
 
         forensic_state = {
             "responses": req.responses,
             "rt_data": req.rt_data,
+            "answer_changes": req.answer_changes,
             "theta": 0.0,
             "latency_flags": [],
             "next_step": "start",
@@ -351,7 +389,7 @@ def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
             "is_verified": True,
             "psi_data": psi_data,
             "compromised_items": req.compromised_items,
-            "aberrance_functions": req.aberrance_functions or [],
+            "aberrance_functions": selected_functions,
             "flags": {},
             "final_report": "",
         }

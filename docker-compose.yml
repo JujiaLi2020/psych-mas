@@ -1,0 +1,77 @@
+# PsyMAS local stack: FastAPI backend (Linux + R) + Streamlit UI
+#
+#   docker compose up --build
+#
+# Backend only (run Streamlit on the host):
+#   docker compose up --build backend
+#
+# Optional Redis for multi-worker backend:
+#   docker compose --profile redis up --build
+#
+# URLs (host ports):
+#   UI:      http://localhost:8501
+#   API:     http://localhost:9000  (container still listens on 8000 inside)
+# Windows often reserves TCP 7971-8070 — do not map host :8000 on Win10/11.
+
+services:
+  backend:
+    build: .
+    image: psych-mas:latest
+    container_name: psymas-backend
+    ports:
+      - "9000:8000"
+    environment:
+      PORT: "8000"
+      PSYMAS_JOB_DIR: /tmp/psymas_detect_jobs
+      PSYMAS_GUNICORN_WORKERS: ${PSYMAS_GUNICORN_WORKERS:-1}
+      REDIS_URL: ${REDIS_URL:-}
+      PYTHONWARNINGS: ignore::UserWarning:rpy2.rinterface
+      R_ENABLE_JIT: "0"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - psymas_jobs:/tmp/psymas_detect_jobs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  ui:
+    build: .
+    image: psych-mas:latest
+    container_name: psymas-ui
+    ports:
+      - "8501:8501"
+    environment:
+      PORT: "8501"
+      PSYMAS_BACKEND_URL: http://backend:8000
+      STREAMLIT_SERVER_HEADLESS: "true"
+    env_file:
+      - path: .env
+        required: false
+    command: ["sh", "scripts/run_ui_railway.sh"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    profiles: ["redis"]
+    image: redis:7-alpine
+    container_name: psymas-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  psymas_jobs:

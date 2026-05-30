@@ -1,10 +1,7 @@
 #!/usr/bin/env sh
-# Streamlit UI entrypoint for Railway and similar HTTPS-terminated proxies.
-# In Railway → UI service → Start Command:
+# Streamlit UI entrypoint for Railway, Docker Compose, and similar proxies.
+# Docker Compose / Railway UI service start command:
 #   sh scripts/run_ui_railway.sh
-# Optional Variables (recommended if uploads still return 400):
-#   STREAMLIT_BROWSER_SERVER_ADDRESS = your-ui.up.railway.app
-#   STREAMLIT_BROWSER_SERVER_PORT    = 443
 set -e
 PORT="${PORT:-8501}"
 export STREAMLIT_SERVER_HEADLESS="${STREAMLIT_SERVER_HEADLESS:-true}"

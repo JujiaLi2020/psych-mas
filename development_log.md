@@ -1,5 +1,25 @@
 # Development log
 
+## Week of 2026-04-28 — 2026-05-30 (v0.6.0)
+
+### Function
+
+- **Railway deployment** — Docker Compose stack (backend + UI), `run_ui_railway.sh`, HTTPS-aware `PSYMAS_BACKEND_URL` for public Railway domains.
+- **Async IRT** — `POST /irt/start` with status/result polling; Preparation uses async path by default.
+- **Test-Taker Report PDF** — Compact branded PDF per examinee from Aberrance Summary.
+- **Person-level export** — CSV/ZIP with column legend and per-agent index guide.
+- **Pre-estimated ψ upload** — Skip IRT when item parameters are supplied via CSV.
+- **Forensic navigation** — Reliable jump to Aberrance Summary after Detect completes.
+
+### Technology
+
+- **Job storage tiers** — Redis → `PSYMAS_JOB_DIR` disk → in-memory; subprocess workers for detect and IRT.
+- **Gunicorn + optional Redis** — Multi-worker backend documented in Dockerfile and Compose redis profile.
+- **mmls.py** — OpenRouter model list moved from `openrouter_models.py`.
+- **Version:** README, `pyproject.toml`, and UI set to **v0.6.0**.
+
+---
+
 ## Week of 2026-03-03 — 2026-03-06
 
 ### Function
