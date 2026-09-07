@@ -1,0 +1,2786 @@
+version: 1
+name: PsyMAS B3 index mapping
+source_csv: manuscript/rulebook_index.csv
+description: Maps aberrance/PsyMAS indices into Appendix Table B3 domain-level evidence
+  strength analysis.
+defaults:
+  alpha: 0.05
+  missing_flag_policy: do_not_count
+  descriptive_only_policy: exclude_from_B3
+  auxiliary_policy: audit_only
+B3_domain_strength_rules:
+  B3-00:
+    condition: required_data_unavailable
+    strength: unavailable
+  B3-01:
+    condition: no_primary_or_supporting_flags
+    strength: none
+  B3-02:
+    condition: one_supporting_no_primary
+    strength: weak
+  B3-03:
+    condition: one_or_more_primary_no_supporting
+    strength: moderate
+  B3-04:
+    condition: multiple_supporting_no_primary
+    strength: moderate
+  B3-05:
+    condition: primary_and_supporting
+    strength: strong
+domains:
+  SIM:
+    preferred_primary:
+    - OMG_S
+    - OMG_ST
+    fallback_primary:
+    - GBT_S
+    - OMG_S
+    supporting:
+    - GBT_R
+    - GBT_RT
+    - GBT_S
+    - GBT_ST
+    - M4_R
+    - M4_S
+    - OMG_R
+    - OMG_RT
+    - WOMG_R
+    - WOMG_S
+    auxiliary:
+    - pair_count
+    descriptive: []
+  CP:
+    auxiliary:
+    - cp_location
+  MF:
+    preferred_primary: []
+    fallback_primary: []
+    supporting:
+    - A_S
+    - C_S
+    - D_S
+    - ECI2_S_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+    - ECI4_S_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+    - E_S
+    - G_S
+    - L_R_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+    - MC_S
+    - NC_S
+    - PC_S
+    - Q_ST_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+    - U1_S
+    - U3_S
+    - L_ST_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - L_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - ECI2_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - ECI4_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - L_R_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - L_T
+    - Q_ST_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - Q_RT_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - L_RT_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - KL_T
+    auxiliary: []
+    descriptive: []
+  RT:
+    preferred_primary: []
+    fallback_primary: []
+    supporting:
+    - L_RT_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+    - Q_RT_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+    auxiliary:
+    - RTF
+    - unmotivated
+    descriptive:
+    - VI
+    - VITP
+  PK:
+    preferred_primary:
+    - L_ST
+    fallback_primary:
+    - L_S
+    supporting:
+    - LR_S
+    - L_T
+    - ML_S
+    - S_S
+    - W_S
+    - W_T
+    auxiliary: []
+    descriptive: []
+  TP:
+    preferred_primary:
+    - EDI_SD_CO
+    fallback_primary: []
+    supporting:
+    - EDI_R_CO
+    - GBT_R
+    - GBT_SD
+    - L_R
+    - L_SD
+    auxiliary: []
+    descriptive: []
+B3_inputs_by_domain:
+  SIM:
+    preferred_primary:
+    - detect_ac.OMG_S
+    - detect_as.OMG_ST
+    fallback_primary:
+    - detect_ac.GBT_S
+    - detect_as.OMG_S
+    supporting:
+    - detect_ac.GBT_R
+    - detect_ac.OMG_R
+    - detect_as.GBT_R
+    - detect_as.GBT_RT
+    - detect_as.GBT_S
+    - detect_as.GBT_ST
+    - detect_as.M4_R
+    - detect_as.M4_S
+    - detect_as.OMG_R
+    - detect_as.OMG_RT
+    - detect_as.WOMG_R
+    - detect_as.WOMG_S
+    auxiliary:
+    - PsyMAS-derived.pair_count
+    descriptive: []
+  CP: []
+  MF:
+    preferred_primary: []
+    fallback_primary: []
+    supporting:
+    - detect_pm.ECI2_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.ECI4_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.L_R_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.Q_ST_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.L_ST_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.L_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.L_T
+    - detect_pm.Q_RT_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_pm.L_RT_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+    - detect_nm.KL_T
+    auxiliary: []
+    descriptive: []
+  RT:
+    preferred_primary: []
+    fallback_primary: []
+    supporting: []
+    auxiliary:
+    - detect_rg.RTF
+    - detect_rg.unmotivated
+    descriptive:
+    - detect_rg.VI
+    - detect_rg.VITP
+  PK:
+    preferred_primary:
+    - detect_pk.L_ST
+    fallback_primary:
+    - detect_pk.L_S
+    supporting:
+    - detect_pk.LR_S
+    - detect_pk.L_T
+    - detect_pk.ML_S
+    - detect_pk.S_S
+    - detect_pk.W_S
+    - detect_pk.W_T
+    auxiliary: []
+    descriptive: []
+  TP:
+    preferred_primary:
+    - detect_tt.EDI_SD_CO
+    fallback_primary: []
+    supporting:
+    - detect_tt.EDI_R_CO
+    - detect_tt.GBT_R
+    - detect_tt.GBT_SD
+    - detect_tt.L_R
+    - detect_tt.L_SD
+    auxiliary: []
+    descriptive: []
+indices:
+- id: detect_ac.OMG_S
+  function: detect_ac
+  method: OMG_S
+  domain: SIM
+  role: preferred_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - ac_OMG_S
+    pvalue:
+    - ac_OMG_S_pval
+    flag:
+    - ac_OMG_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Conditional omega, score-based source-copier statistic
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_ac.GBT_S
+  function: detect_ac
+  method: GBT_S
+  domain: SIM
+  role: fallback_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - ac_GBT_S
+    pvalue:
+    - ac_GBT_S_pval
+    flag:
+    - ac_GBT_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Conditional generalized binomial test, score-based
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_ac.OMG_R
+  function: detect_ac
+  method: OMG_R
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - ac_OMG_R
+    pvalue:
+    - ac_OMG_R_pval
+    flag:
+    - ac_OMG_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Conditional omega, response-based
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_ac.GBT_R
+  function: detect_ac
+  method: GBT_R
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - ac_GBT_R
+    pvalue:
+    - ac_GBT_R_pval
+    flag:
+    - ac_GBT_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Conditional GBT, response-based
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.OMG_S
+  function: detect_as
+  method: OMG_S
+  domain: SIM
+  role: fallback_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_OMG_S
+    pvalue:
+    - as_OMG_S_pval
+    flag:
+    - as_OMG_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Unconditional omega, score-based
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.WOMG_S
+  function: detect_as
+  method: WOMG_S
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_WOMG_S
+    pvalue:
+    - as_WOMG_S_pval
+    flag:
+    - as_WOMG_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Weighted omega, score-based
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.GBT_S
+  function: detect_as
+  method: GBT_S
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_GBT_S
+    pvalue:
+    - as_GBT_S_pval
+    flag:
+    - as_GBT_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Unconditional GBT, score-based
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.M4_S
+  function: detect_as
+  method: M4_S
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_M4_S
+    pvalue:
+    - as_M4_S_pval
+    flag:
+    - as_M4_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: M4 score-based similarity
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.OMG_R
+  function: detect_as
+  method: OMG_R
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_OMG_R
+    pvalue:
+    - as_OMG_R_pval
+    flag:
+    - as_OMG_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based omega
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.WOMG_R
+  function: detect_as
+  method: WOMG_R
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_WOMG_R
+    pvalue:
+    - as_WOMG_R_pval
+    flag:
+    - as_WOMG_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Weighted response omega
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.GBT_R
+  function: detect_as
+  method: GBT_R
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_GBT_R
+    pvalue:
+    - as_GBT_R_pval
+    flag:
+    - as_GBT_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based GBT
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.M4_R
+  function: detect_as
+  method: M4_R
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_M4_R
+    pvalue:
+    - as_M4_R_pval
+    flag:
+    - as_M4_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: M4 response-based similarity
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.OMG_ST
+  function: detect_as
+  method: OMG_ST
+  domain: SIM
+  role: preferred_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_OMG_ST
+    pvalue:
+    - as_OMG_ST_pval
+    flag:
+    - as_OMG_ST_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-time omega similarity
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.GBT_ST
+  function: detect_as
+  method: GBT_ST
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_GBT_ST
+    pvalue:
+    - as_GBT_ST_pval
+    flag:
+    - as_GBT_ST_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-time GBT similarity
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.OMG_RT
+  function: detect_as
+  method: OMG_RT
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_OMG_RT
+    pvalue:
+    - as_OMG_RT_pval
+    flag:
+    - as_OMG_RT_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-time omega similarity
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_as.GBT_RT
+  function: detect_as
+  method: GBT_RT
+  domain: SIM
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - as_GBT_RT
+    pvalue:
+    - as_GBT_RT_pval
+    flag:
+    - as_GBT_RT_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-time GBT similarity
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_cp.L_T_MAX2
+  function: detect_cp
+  method: L_T_MAX2
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_L_T_MAX2
+    flag:
+    - cp_L_T_MAX2_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.L_T_MAX1
+  function: detect_cp
+  method: L_T_MAX1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_L_T_MAX1
+    flag:
+    - cp_L_T_MAX1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.L_T_MIN1
+  function: detect_cp
+  method: L_T_MIN1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat <= cutoff or extreme-tail rule
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_L_T_MIN1
+    flag:
+    - cp_L_T_MIN1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.L_S_MAX2
+  function: detect_cp
+  method: L_S_MAX2
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_L_S_MAX2
+    flag:
+    - cp_L_S_MAX2_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.L_S_MAX1
+  function: detect_cp
+  method: L_S_MAX1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_L_S_MAX1
+    flag:
+    - cp_L_S_MAX1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.L_S_MIN1
+  function: detect_cp
+  method: L_S_MIN1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat <= cutoff or extreme-tail rule
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_L_S_MIN1
+    flag:
+    - cp_L_S_MIN1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.S_S_MAX2
+  function: detect_cp
+  method: S_S_MAX2
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_S_S_MAX2
+    flag:
+    - cp_S_S_MAX2_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.S_S_MAX1
+  function: detect_cp
+  method: S_S_MAX1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_S_S_MAX1
+    flag:
+    - cp_S_S_MAX1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.S_S_MIN1
+  function: detect_cp
+  method: S_S_MIN1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat <= cutoff or extreme-tail rule
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_S_S_MIN1
+    flag:
+    - cp_S_S_MIN1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.W_S_MAX2
+  function: detect_cp
+  method: W_S_MAX2
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_W_S_MAX2
+    flag:
+    - cp_W_S_MAX2_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.W_S_MAX1
+  function: detect_cp
+  method: W_S_MAX1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_W_S_MAX1
+    flag:
+    - cp_W_S_MAX1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.W_S_MIN1
+  function: detect_cp
+  method: W_S_MIN1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat <= cutoff or extreme-tail rule
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_W_S_MIN1
+    flag:
+    - cp_W_S_MIN1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.W_T_MAX2
+  function: detect_cp
+  method: W_T_MAX2
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_W_T_MAX2
+    flag:
+    - cp_W_T_MAX2_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.W_T_MAX1
+  function: detect_cp
+  method: W_T_MAX1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat >= cutoff
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_W_T_MAX1
+    flag:
+    - cp_W_T_MAX1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.W_T_MIN1
+  function: detect_cp
+  method: W_T_MIN1
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - stat
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: stat <= cutoff or extreme-tail rule
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_W_T_MIN1
+    flag:
+    - cp_W_T_MIN1_Flag
+  threshold_rule: No independent flag.
+  notes: Change-point statistic retained for localization and interpretation only;
+    does not enter priority in the current rulebook.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_cp.cp_location
+  function: detect_cp
+  method: cp_location
+  domain: CP
+  role: auxiliary
+  feeds_B3: 'no'
+  feed_policy: auxiliary_only
+  package_output:
+  - cp
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: no independent flag
+  threshold_source: none; localization only in current rulebook
+  columns:
+    stat:
+    - cp_cp_location
+    flag: []
+  threshold_rule: No independent flag.
+  notes: Used to locate the estimated change point only; does not enter priority.
+  evidence_use: Support Only
+  variant_treatment: display_only
+- id: detect_nm.ZU3_S
+  function: detect_nm
+  method: ZU3_S
+  domain: MF
+  role: preferred_primary
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_ZU3_S
+    flag:
+    - nm_ZU3_S_Flag
+  threshold_rule:
+    enabled: true
+    operator: <
+    value: -2.0
+    threshold_source: operational_default
+    feeds_B3: false
+    note: Standardized U3 person-fit statistic; commonly screened in the lower tail.
+    evidence_tier: operational_screening_default
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+    requires_calibration: true
+  notes: Standardized U3; not available for polytomous scores | Excluded from B3 until
+    a literature-supported or study-calibrated cutoff is specified.
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.G_S
+  function: detect_nm
+  method: G_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_G_S
+    flag:
+    - nm_G_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: '>='
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    note: Number of Guttman errors; cutoff depends on test length and score distribution.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Guttman errors
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.NC_S
+  function: detect_nm
+  method: NC_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_NC_S
+    flag:
+    - nm_NC_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: <=
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    note: Norm conformity direction should be confirmed for the scoring model.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Norm conformity; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.U1_S
+  function: detect_nm
+  method: U1_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_U1_S
+    flag:
+    - nm_U1_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: '>='
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: U1 / G* statistic
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.U3_S
+  function: detect_nm
+  method: U3_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_U3_S
+    flag:
+    - nm_U3_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: '>='
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: U3 statistic
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.A_S
+  function: detect_nm
+  method: A_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_A_S
+    flag:
+    - nm_A_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: <=
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Agreement index; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.D_S
+  function: detect_nm
+  method: D_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_D_S
+    flag:
+    - nm_D_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: '>='
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Disagreement index; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.E_S
+  function: detect_nm
+  method: E_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_E_S
+    flag:
+    - nm_E_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: <=
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Dependability index; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.C_S
+  function: detect_nm
+  method: C_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_C_S
+    flag:
+    - nm_C_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: tail
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    note: Direction can vary by index convention; use simulated lower/upper tail.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Caution index; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.MC_S
+  function: detect_nm
+  method: MC_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_MC_S
+    flag:
+    - nm_MC_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: tail
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Modified caution index; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.PC_S
+  function: detect_nm
+  method: PC_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_PC_S
+    flag:
+    - nm_PC_S_Flag
+  threshold_rule:
+    enabled: false
+    operator: <=
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: Personal point-biserial; not for polytomous scores
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.HT_S
+  function: detect_nm
+  method: HT_S
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets external cutoff
+  threshold_source: YAML / simulation / sample percentile
+  columns:
+    stat:
+    - nm_HT_S
+    flag:
+    - nm_HT_S_Flag
+  threshold_rule:
+    enabled: true
+    operator: <=
+    value: sample_quantile
+    quantile: 0.05
+    threshold_source: sample_percentile
+    feeds_B3: false
+    note: Replace with simulation_null or historical_baseline for formal use.
+    evidence_tier: sample_screening_default
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+    requires_calibration: true
+  notes: HT statistic; not for polytomous scores | Excluded from B3 until a literature-supported
+    or study-calibrated cutoff is specified.
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_nm.KL_T
+  function: detect_nm
+  method: KL_T
+  domain: MF
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - stat
+  package_flag: 'no'
+  flag_type: external_threshold_required
+  default_rule: stat meets RT cutoff
+  threshold_source: YAML / simulation / RT baseline
+  columns:
+    stat:
+    - nm_KL_T
+    flag:
+    - nm_KL_T_Flag
+  threshold_rule:
+    enabled: false
+    operator: '>='
+    value: null
+    requires_calibration: true
+    threshold_source: simulation_null
+    feeds_B3: false
+    note: RT Kullback-Leibler cutoff should come from RT null simulation or secure
+      baseline.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+  notes: RT Kullback-Leibler divergence | Time-based nonparametric person-fit evidence;
+    not rapid-guessing scenario evidence.
+  evidence_use: display_only_until_threshold_calibrated
+  data_basis: time
+  aggregation_family: nm_KL_T
+  correction_variant: none
+  variant_treatment: single_index
+- id: detect_pk.L_ST
+  function: detect_pk
+  method: L_ST
+  domain: PK
+  role: preferred_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_L_ST
+    pvalue:
+    - pk_L_ST_pval
+    flag:
+    - pk_L_ST_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Constrained likelihood ratio using score + RT
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.L_S
+  function: detect_pk
+  method: L_S
+  domain: PK
+  role: fallback_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_L_S
+    pvalue:
+    - pk_L_S_pval
+    flag:
+    - pk_L_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-based signed likelihood ratio
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.ML_S
+  function: detect_pk
+  method: ML_S
+  domain: PK
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_ML_S
+    pvalue:
+    - pk_ML_S_pval
+    flag:
+    - pk_ML_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Modified signed likelihood ratio; package cutoff is numerical-stability cutoff
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.LR_S
+  function: detect_pk
+  method: LR_S
+  domain: PK
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_LR_S
+    pvalue:
+    - pk_LR_S_pval
+    flag:
+    - pk_LR_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Lugannani-Rice approximation; package cutoff is numerical-stability cutoff
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.S_S
+  function: detect_pk
+  method: S_S
+  domain: PK
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_S_S
+    pvalue:
+    - pk_S_S_pval
+    flag:
+    - pk_S_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Signed score test
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.W_S
+  function: detect_pk
+  method: W_S
+  domain: PK
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_W_S
+    pvalue:
+    - pk_W_S_pval
+    flag:
+    - pk_W_S_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Signed Wald test
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.L_T
+  function: detect_pk
+  method: L_T
+  domain: PK
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_L_T
+    pvalue:
+    - pk_L_T_pval
+    flag:
+    - pk_L_T_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: RT signed likelihood ratio
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pk.W_T
+  function: detect_pk
+  method: W_T
+  domain: PK
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pk_W_T
+    pvalue:
+    - pk_W_T_pval
+    flag:
+    - pk_W_T_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: RT signed Wald test
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_pm.L_ST_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: L_ST_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_L_ST_NO
+    - pm_L_ST_CF
+    - pm_L_ST_CS
+    - pm_L_ST_EW
+    - pm_L_ST_TS
+    - pm_L_ST_TSCF
+    - pm_L_ST_TSCS
+    - pm_L_ST_TSEW
+    pvalue:
+    - pm_L_ST_NO_pval
+    - pm_L_ST_CF_pval
+    - pm_L_ST_CS_pval
+    - pm_L_ST_EW_pval
+    - pm_L_ST_TS_pval
+    - pm_L_ST_TSCF_pval
+    - pm_L_ST_TSCS_pval
+    - pm_L_ST_TSEW_pval
+    flag:
+    - pm_L_ST_NO_pval_Flag
+    - pm_L_ST_CF_pval_Flag
+    - pm_L_ST_CS_pval_Flag
+    - pm_L_ST_EW_pval_Flag
+    - pm_L_ST_TS_pval_Flag
+    - pm_L_ST_TSCF_pval_Flag
+    - pm_L_ST_TSCS_pval_Flag
+    - pm_L_ST_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-time standardized log-likelihood; correction variant selected in method
+    name | Parametric person-fit evidence; data basis retained separately; correction
+    variants collapse to one family-level MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: score_time
+  aggregation_family: pm_L_ST
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.L_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: L_S_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_L_S_NO
+    - pm_L_S_CF
+    - pm_L_S_CS
+    - pm_L_S_EW
+    - pm_L_S_TS
+    - pm_L_S_TSCF
+    - pm_L_S_TSCS
+    - pm_L_S_TSEW
+    pvalue:
+    - pm_L_S_NO_pval
+    - pm_L_S_CF_pval
+    - pm_L_S_CS_pval
+    - pm_L_S_EW_pval
+    - pm_L_S_TS_pval
+    - pm_L_S_TSCF_pval
+    - pm_L_S_TSCS_pval
+    - pm_L_S_TSEW_pval
+    flag:
+    - pm_L_S_NO_pval_Flag
+    - pm_L_S_CF_pval_Flag
+    - pm_L_S_CS_pval_Flag
+    - pm_L_S_EW_pval_Flag
+    - pm_L_S_TS_pval_Flag
+    - pm_L_S_TSCF_pval_Flag
+    - pm_L_S_TSCS_pval_Flag
+    - pm_L_S_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-based standardized log-likelihood | Parametric person-fit evidence;
+    data basis retained separately; correction variants collapse to one family-level
+    MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: score
+  aggregation_family: pm_L_S
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.ECI2_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: ECI2_S_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_ECI2_S_NO
+    - pm_ECI2_S_CF
+    - pm_ECI2_S_CS
+    - pm_ECI2_S_EW
+    - pm_ECI2_S_TS
+    - pm_ECI2_S_TSCF
+    - pm_ECI2_S_TSCS
+    - pm_ECI2_S_TSEW
+    pvalue:
+    - pm_ECI2_S_NO_pval
+    - pm_ECI2_S_CF_pval
+    - pm_ECI2_S_CS_pval
+    - pm_ECI2_S_EW_pval
+    - pm_ECI2_S_TS_pval
+    - pm_ECI2_S_TSCF_pval
+    - pm_ECI2_S_TSCS_pval
+    - pm_ECI2_S_TSEW_pval
+    flag:
+    - pm_ECI2_S_NO_pval_Flag
+    - pm_ECI2_S_CF_pval_Flag
+    - pm_ECI2_S_CS_pval_Flag
+    - pm_ECI2_S_EW_pval_Flag
+    - pm_ECI2_S_TS_pval_Flag
+    - pm_ECI2_S_TSCF_pval_Flag
+    - pm_ECI2_S_TSCS_pval_Flag
+    - pm_ECI2_S_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Second standardized extended caution index | Parametric person-fit evidence;
+    data basis retained separately; correction variants collapse to one family-level
+    MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: score
+  aggregation_family: pm_ECI2_S
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.ECI4_S_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: ECI4_S_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_ECI4_S_NO
+    - pm_ECI4_S_CF
+    - pm_ECI4_S_CS
+    - pm_ECI4_S_EW
+    - pm_ECI4_S_TS
+    - pm_ECI4_S_TSCF
+    - pm_ECI4_S_TSCS
+    - pm_ECI4_S_TSEW
+    pvalue:
+    - pm_ECI4_S_NO_pval
+    - pm_ECI4_S_CF_pval
+    - pm_ECI4_S_CS_pval
+    - pm_ECI4_S_EW_pval
+    - pm_ECI4_S_TS_pval
+    - pm_ECI4_S_TSCF_pval
+    - pm_ECI4_S_TSCS_pval
+    - pm_ECI4_S_TSEW_pval
+    flag:
+    - pm_ECI4_S_NO_pval_Flag
+    - pm_ECI4_S_CF_pval_Flag
+    - pm_ECI4_S_CS_pval_Flag
+    - pm_ECI4_S_EW_pval_Flag
+    - pm_ECI4_S_TS_pval_Flag
+    - pm_ECI4_S_TSCF_pval_Flag
+    - pm_ECI4_S_TSCS_pval_Flag
+    - pm_ECI4_S_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Fourth standardized extended caution index | Parametric person-fit evidence;
+    data basis retained separately; correction variants collapse to one family-level
+    MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: score
+  aggregation_family: pm_ECI4_S
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.L_R_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: L_R_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_L_R_NO
+    - pm_L_R_CF
+    - pm_L_R_CS
+    - pm_L_R_EW
+    - pm_L_R_TS
+    - pm_L_R_TSCF
+    - pm_L_R_TSCS
+    - pm_L_R_TSEW
+    pvalue:
+    - pm_L_R_NO_pval
+    - pm_L_R_CF_pval
+    - pm_L_R_CS_pval
+    - pm_L_R_EW_pval
+    - pm_L_R_TS_pval
+    - pm_L_R_TSCF_pval
+    - pm_L_R_TSCS_pval
+    - pm_L_R_TSEW_pval
+    flag:
+    - pm_L_R_NO_pval_Flag
+    - pm_L_R_CF_pval_Flag
+    - pm_L_R_CS_pval_Flag
+    - pm_L_R_EW_pval_Flag
+    - pm_L_R_TS_pval_Flag
+    - pm_L_R_TSCF_pval_Flag
+    - pm_L_R_TSCS_pval_Flag
+    - pm_L_R_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based standardized log-likelihood | Parametric person-fit evidence;
+    data basis retained separately; correction variants collapse to one family-level
+    MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: response
+  aggregation_family: pm_L_R
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.L_T
+  function: detect_pm
+  method: L_T
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_L_T
+    pvalue:
+    - pm_L_T_pval
+    flag:
+    - pm_L_T_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: RT log-likelihood statistic | Parametric person-fit evidence; data basis
+    retained separately; correction variants collapse to one family-level MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: time
+  aggregation_family: pm_L_T
+  correction_variant: none
+  variant_treatment: family_level_signal
+- id: detect_pm.Q_ST_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: Q_ST_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_Q_ST_NO
+    - pm_Q_ST_CF
+    - pm_Q_ST_CS
+    - pm_Q_ST_EW
+    - pm_Q_ST_TS
+    - pm_Q_ST_TSCF
+    - pm_Q_ST_TSCS
+    - pm_Q_ST_TSEW
+    pvalue:
+    - pm_Q_ST_NO_pval
+    - pm_Q_ST_CF_pval
+    - pm_Q_ST_CS_pval
+    - pm_Q_ST_EW_pval
+    - pm_Q_ST_TS_pval
+    - pm_Q_ST_TSCF_pval
+    - pm_Q_ST_TSCS_pval
+    - pm_Q_ST_TSEW_pval
+    flag:
+    - pm_Q_ST_NO_pval_Flag
+    - pm_Q_ST_CF_pval_Flag
+    - pm_Q_ST_CS_pval_Flag
+    - pm_Q_ST_EW_pval_Flag
+    - pm_Q_ST_TS_pval_Flag
+    - pm_Q_ST_TSCF_pval_Flag
+    - pm_Q_ST_TSCS_pval_Flag
+    - pm_Q_ST_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Combined score-time statistic | Parametric person-fit evidence; data basis
+    retained separately; correction variants collapse to one family-level MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: score_time
+  aggregation_family: pm_Q_ST
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.Q_RT_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: Q_RT_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_Q_RT_NO
+    - pm_Q_RT_CF
+    - pm_Q_RT_CS
+    - pm_Q_RT_EW
+    - pm_Q_RT_TS
+    - pm_Q_RT_TSCF
+    - pm_Q_RT_TSCS
+    - pm_Q_RT_TSEW
+    pvalue:
+    - pm_Q_RT_NO_pval
+    - pm_Q_RT_CF_pval
+    - pm_Q_RT_CS_pval
+    - pm_Q_RT_EW_pval
+    - pm_Q_RT_TS_pval
+    - pm_Q_RT_TSCF_pval
+    - pm_Q_RT_TSCS_pval
+    - pm_Q_RT_TSEW_pval
+    flag:
+    - pm_Q_RT_NO_pval_Flag
+    - pm_Q_RT_CF_pval_Flag
+    - pm_Q_RT_CS_pval_Flag
+    - pm_Q_RT_EW_pval_Flag
+    - pm_Q_RT_TS_pval_Flag
+    - pm_Q_RT_TSCF_pval_Flag
+    - pm_Q_RT_TSCS_pval_Flag
+    - pm_Q_RT_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Combined response-time statistic | Parametric person-fit evidence; data basis
+    retained separately; correction variants collapse to one family-level MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: response_time
+  aggregation_family: pm_Q_RT
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_pm.L_RT_NO___CF___CS___EW___TS___TSCF___TSCS___TSEW
+  function: detect_pm
+  method: L_RT_NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  domain: MF
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - pm_L_RT_NO
+    - pm_L_RT_CF
+    - pm_L_RT_CS
+    - pm_L_RT_EW
+    - pm_L_RT_TS
+    - pm_L_RT_TSCF
+    - pm_L_RT_TSCS
+    - pm_L_RT_TSEW
+    pvalue:
+    - pm_L_RT_NO_pval
+    - pm_L_RT_CF_pval
+    - pm_L_RT_CS_pval
+    - pm_L_RT_EW_pval
+    - pm_L_RT_TS_pval
+    - pm_L_RT_TSCF_pval
+    - pm_L_RT_TSCS_pval
+    - pm_L_RT_TSEW_pval
+    flag:
+    - pm_L_RT_NO_pval_Flag
+    - pm_L_RT_CF_pval_Flag
+    - pm_L_RT_CS_pval_Flag
+    - pm_L_RT_EW_pval_Flag
+    - pm_L_RT_TS_pval_Flag
+    - pm_L_RT_TSCF_pval_Flag
+    - pm_L_RT_TSCS_pval_Flag
+    - pm_L_RT_TSEW_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-time standardized log-likelihood | Parametric person-fit evidence;
+    data basis retained separately; correction variants collapse to one family-level
+    MF signal.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+  data_basis: response_time
+  aggregation_family: pm_L_RT
+  correction_variant: NO / CF / CS / EW / TS / TSCF / TSCS / TSEW
+  variant_treatment: family_level_signal
+- id: detect_rg.CT
+  function: detect_rg
+  method: CT
+  domain: RT
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - thr
+  - flag
+  - rte
+  - rtf
+  - unmotivated
+  package_flag: partial
+  flag_type: rt_threshold_flag
+  default_rule: RT < thr
+  threshold_source: package threshold / YAML
+  columns:
+    stat:
+    - rg_CT
+    threshold_flag:
+    - rg_CT_Flag
+    person_summary:
+    - rg_RTE
+    - rg_RTE_*
+  threshold_rule:
+    enabled: true
+    method_flag_source: package_threshold
+    threshold_parameter: thr
+    default_thr_seconds: 3
+    operator: response_time <
+    threshold_source: package_threshold_or_program_rule
+    feeds_B3: false
+    note: Response-level flags are generated by aberrance::detect_rg using thr.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+    requires_calibration: true
+  notes: Custom response-time threshold | Excluded from B3 until a literature-supported
+    or study-calibrated cutoff is specified.
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_rg.NT
+  function: detect_rg
+  method: NT
+  domain: RT
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - thr
+  - flag
+  - rte
+  - rtf
+  - unmotivated
+  package_flag: partial
+  flag_type: rt_threshold_flag
+  default_rule: RT < normative threshold
+  threshold_source: package nt / YAML
+  columns:
+    stat:
+    - rg_NT
+    threshold_flag:
+    - rg_NT_Flag
+    person_summary:
+    - rg_RTE
+    - rg_RTE_*
+  threshold_rule:
+    enabled: true
+    method_flag_source: package_threshold
+    threshold_parameter: nt
+    default_nt_percent: 10
+    configured_nt_percent:
+    - 10
+    operator: response_time < normative_threshold
+    threshold_source: package_nt_or_program_rule
+    feeds_B3: false
+    note: Avoid many NT levels feeding B3 simultaneously unless multiplicity is addressed.
+    evidence_tier: literature_supported_screening_default
+    citation_note: NT10 is a common normative threshold starting point; adjust by
+      assessment context.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+    requires_calibration: true
+  notes: Normative threshold; default NT10 available | Excluded from B3 until a literature-supported
+    or study-calibrated cutoff is specified.
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_rg.CUMP
+  function: detect_rg
+  method: CUMP
+  domain: RT
+  role: supporting
+  feeds_B3: false
+  feed_policy: no_until_calibrated
+  package_output:
+  - thr
+  - flag
+  - rte
+  - rtf
+  - unmotivated
+  package_flag: partial
+  flag_type: rt_threshold_flag
+  default_rule: RT < CUMP threshold when threshold returned
+  threshold_source: package threshold / YAML
+  columns:
+    stat:
+    - rg_CUMP
+    threshold_flag:
+    - rg_CUMP_Flag
+    person_summary:
+    - rg_RTE
+    - rg_RTE_*
+  threshold_rule:
+    enabled: true
+    method_flag_source: package_threshold
+    operator: response_time < CUMP_threshold
+    threshold_source: package_threshold
+    feeds_B3: false
+    note: Some items may not return CUMP thresholds.
+    B3_eligible: false
+    evidence_use: display_only_until_threshold_calibrated
+    requires_calibration: true
+  notes: Some items may return no thresholds | Excluded from B3 until a literature-supported
+    or study-calibrated cutoff is specified.
+  evidence_use: display_only_until_threshold_calibrated
+- id: detect_rg.RTE
+  function: detect_rg
+  method: RTE
+  domain: RT
+  role: auxiliary
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - rte
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: no independent flag unless a documented program rule is calibrated
+  threshold_source: program calibration required
+  columns:
+    stat:
+    - rg_RTE
+    flag:
+    - rg_RTE_Flag
+  threshold_rule:
+    enabled: false
+    operator: <=
+    value: 0.8
+    requires_calibration: true
+    threshold_source: literature_supported_program_rule
+    feeds_B3: false
+    suggested_starting_points:
+      conservative: 0.8
+      lenient: 0.9
+    note: 'RTE is a person-level summary. Use only after the testing program defines
+      how much rapid responding is unacceptable for the assessment context.
+
+      '
+    evidence_tier: literature_supported_screening_default
+    citation_note: RTE <= .80 is commonly used as a rapid-guessing/non-effort screening
+      rule; programs may choose stricter/looser criteria.
+    B3_eligible: false
+    evidence_use: audit_or_display_only
+  notes: Person-level response-time effort summary; audit/display only unless promoted
+    by a documented calibrated rule.
+  evidence_use: audit_or_display_only
+- id: detect_rg.RTF
+  function: detect_rg
+  method: RTF
+  domain: RT
+  role: auxiliary
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - rtf
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: no independent flag unless program rule defines one
+  threshold_source: YAML / program rule
+  columns:
+    stat:
+    - rg_RTF
+    flag: []
+  threshold_rule:
+    type: auxiliary_only
+    source: YAML / program rule
+    note: no independent flag unless program rule defines one
+  notes: Item-level response-time fidelity
+  evidence_use: audit_or_display_only
+- id: detect_rg.unmotivated
+  function: detect_rg
+  method: unmotivated
+  domain: RT
+  role: auxiliary
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - unmotivated
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: no independent flag unless program rule defines one
+  threshold_source: YAML / program rule
+  columns:
+    stat:
+    - rg_unmotivated
+    flag: []
+  threshold_rule:
+    type: auxiliary_only
+    source: YAML / program rule
+    note: no independent flag unless program rule defines one
+  notes: Person/item label derived from threshold output
+  evidence_use: audit_or_display_only
+- id: detect_rg.VI
+  function: detect_rg
+  method: VI
+  domain: RT
+  role: descriptive
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - plots
+  package_flag: 'no'
+  flag_type: descriptive_only
+  default_rule: no independent flag
+  threshold_source: none
+  columns:
+    stat:
+    - rg_VI
+    flag: []
+  threshold_rule:
+    type: descriptive_only
+    source: none
+    note: no independent flag
+  notes: Visual inspection only
+  evidence_use: audit_or_display_only
+- id: detect_rg.VITP
+  function: detect_rg
+  method: VITP
+  domain: RT
+  role: descriptive
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - plots
+  package_flag: 'no'
+  flag_type: descriptive_only
+  default_rule: no independent flag
+  threshold_source: none
+  columns:
+    stat:
+    - rg_VITP
+    flag: []
+  threshold_rule:
+    type: descriptive_only
+    source: none
+    note: no independent flag
+  notes: Visual inspection with proportion correct
+  evidence_use: audit_or_display_only
+- id: detect_tt.EDI_SD_CO
+  function: detect_tt
+  method: EDI_SD_CO
+  domain: TP
+  role: preferred_primary
+  feeds_B3: true
+  feed_policy: 'yes'
+  aggregation_family: tt_EDI_SD
+  correction_variant: CO
+  data_basis: score
+  variant_treatment: family_level_signal
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_EDI_SD_CO
+    pvalue:
+    - tt_EDI_SD_CO_pval
+    flag:
+    - tt_EDI_SD_CO_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-distractor erasure detection; CO is the prespecified primary correction
+    for B3 entry.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_tt.EDI_SD_NO
+  function: detect_tt
+  method: EDI_SD_NO
+  domain: TP
+  role: preferred_primary
+  feeds_B3: false
+  feed_policy: sensitivity_only
+  aggregation_family: tt_EDI_SD
+  correction_variant: false
+  data_basis: score
+  variant_treatment: sensitivity_only
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_EDI_SD_NO
+    pvalue:
+    - tt_EDI_SD_NO_pval
+    flag:
+    - tt_EDI_SD_NO_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-distractor erasure detection; NO correction retained for sensitivity/audit
+    only.
+  evidence_use: sensitivity_or_audit_only
+- id: detect_tt.EDI_SD_TS
+  function: detect_tt
+  method: EDI_SD_TS
+  domain: TP
+  role: preferred_primary
+  feeds_B3: false
+  feed_policy: sensitivity_only
+  aggregation_family: tt_EDI_SD
+  correction_variant: TS
+  data_basis: score
+  variant_treatment: sensitivity_only
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_EDI_SD_TS
+    pvalue:
+    - tt_EDI_SD_TS_pval
+    flag:
+    - tt_EDI_SD_TS_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-distractor erasure detection; TS correction retained for sensitivity/audit
+    only.
+  evidence_use: sensitivity_or_audit_only
+- id: detect_tt.GBT_SD
+  function: detect_tt
+  method: GBT_SD
+  domain: TP
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_GBT_SD
+    pvalue:
+    - tt_GBT_SD_pval
+    flag:
+    - tt_GBT_SD_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-distractor GBT; not group-level
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_tt.L_SD
+  function: detect_tt
+  method: L_SD
+  domain: TP
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_L_SD
+    pvalue:
+    - tt_L_SD_pval
+    flag:
+    - tt_L_SD_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Score-distractor signed likelihood ratio; not group-level
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_tt.EDI_R_CO
+  function: detect_tt
+  method: EDI_R_CO
+  domain: TP
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  aggregation_family: tt_EDI_R
+  correction_variant: CO
+  data_basis: response
+  variant_treatment: family_level_signal
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_EDI_R_CO
+    pvalue:
+    - tt_EDI_R_CO_pval
+    flag:
+    - tt_EDI_R_CO_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based erasure detection; CO is the prespecified primary correction
+    for B3 entry.
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_tt.EDI_R_NO
+  function: detect_tt
+  method: EDI_R_NO
+  domain: TP
+  role: supporting
+  feeds_B3: false
+  feed_policy: sensitivity_only
+  aggregation_family: tt_EDI_R
+  correction_variant: false
+  data_basis: response
+  variant_treatment: sensitivity_only
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_EDI_R_NO
+    pvalue:
+    - tt_EDI_R_NO_pval
+    flag:
+    - tt_EDI_R_NO_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based erasure detection; NO correction retained for sensitivity/audit
+    only.
+  evidence_use: sensitivity_or_audit_only
+- id: detect_tt.EDI_R_TS
+  function: detect_tt
+  method: EDI_R_TS
+  domain: TP
+  role: supporting
+  feeds_B3: false
+  feed_policy: sensitivity_only
+  aggregation_family: tt_EDI_R
+  correction_variant: TS
+  data_basis: response
+  variant_treatment: sensitivity_only
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_EDI_R_TS
+    pvalue:
+    - tt_EDI_R_TS_pval
+    flag:
+    - tt_EDI_R_TS_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based erasure detection; TS correction retained for sensitivity/audit
+    only.
+  evidence_use: sensitivity_or_audit_only
+- id: detect_tt.GBT_R
+  function: detect_tt
+  method: GBT_R
+  domain: TP
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_GBT_R
+    pvalue:
+    - tt_GBT_R_pval
+    flag:
+    - tt_GBT_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based GBT; not group-level
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: detect_tt.L_R
+  function: detect_tt
+  method: L_R
+  domain: TP
+  role: supporting
+  feeds_B3: true
+  feed_policy: 'yes'
+  package_output:
+  - stat
+  - pval
+  - flag
+  package_flag: 'yes'
+  flag_type: package_pvalue_flag
+  default_rule: pval <= alpha
+  threshold_source: package alpha
+  columns:
+    stat:
+    - tt_L_R
+    pvalue:
+    - tt_L_R_pval
+    flag:
+    - tt_L_R_pval_Flag
+  threshold_rule:
+    type: package_pvalue
+    operator: <=
+    value: alpha
+    source: package alpha
+  notes: Response-based signed likelihood ratio; not group-level
+  evidence_use: may_feed_B3_as_package_pvalue_flag
+- id: PsyMAS-derived.pair_count
+  function: PsyMAS-derived
+  method: pair_count
+  domain: SIM
+  role: auxiliary
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - summary
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: no independent flag
+  threshold_source: derived from pair flags
+  columns:
+    stat: []
+    flag: []
+  threshold_rule:
+    type: auxiliary_only
+    source: derived from pair flags
+    note: no independent flag
+  notes: Used for audit and reporting
+  evidence_use: audit_or_display_only
+- id: PsyMAS-derived.missing_domain
+  function: PsyMAS-derived
+  method: missing_domain
+  domain: CTX / governance
+  role: auxiliary
+  feeds_B3: false
+  feed_policy: 'no'
+  package_output:
+  - summary
+  package_flag: 'no'
+  flag_type: auxiliary_only
+  default_rule: no independent flag
+  threshold_source: data validation rule
+  columns:
+    stat: []
+    flag: []
+  threshold_rule:
+    type: auxiliary_only
+    source: data validation rule
+    note: no independent flag
+  notes: Used to assign Unavailable/Limited states
+  evidence_use: audit_or_display_only
+evidence_policy:
+  principle: B3 consumes only index-level flags. Raw statistic-only indices without
+    a calibrated threshold are display/audit outputs, not evidence.
+  package_pvalue_flag: eligible when p-value/flag exists and alpha rule is configured
+  external_threshold_required: eligible only when config/index_thresholds.yaml marks
+    B3_eligible=true
+  rt_threshold_flag: eligible when aberrance threshold method returns response-level/person-level
+    flags
+  descriptive_or_auxiliary: excluded from B3 unless promoted by a documented program
+    rule
+governance_notes:
+  domain_assignment_principle: Assign evidence domain by the substantive behavior
+    tested by the index, not by data source alone; detect_pm time and joint response-time
+    variants remain MF person-fit evidence, while detect_rg supplies RT scenario evidence.
+  family_signal_principle: Raw correction variants are retained for audit, but each
+    aggregation_family contributes at most one signal to domain profiling.

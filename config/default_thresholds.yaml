@@ -1,0 +1,157 @@
+version: 1
+description: Default PsyMAS rule and threshold registry. Edit values, upload the YAML, then rerun Forensic Indices.
+defaults:
+  alpha: 0.05
+  enabled: true
+governance:
+  domain_strength:
+    B3-00:
+      condition: required_data_unavailable
+      evidence_pattern: Required data for the domain are unavailable
+      strength: unavailable
+    B3-01:
+      condition: no_indicators
+      evidence_pattern: No primary or supporting indicators are flagged
+      strength: none
+    B3-02:
+      condition: supporting_only
+      min_supporting: 1
+      max_supporting: 1
+      evidence_pattern: One supporting indicator is flagged, with no primary indicator
+      strength: weak
+    B3-03:
+      condition: primary_only
+      min_primary: 1
+      max_primary: 1
+      evidence_pattern: One isolated primary indicator is flagged
+      strength: moderate
+    B3-04:
+      condition: supporting_only
+      min_supporting: 2
+      evidence_pattern: Multiple supporting indicators are flagged, with no primary indicator
+      strength: moderate
+    B3-05:
+      condition: primary_and_supporting
+      min_primary: 1
+      min_supporting: 1
+      evidence_pattern: One primary indicator together with supporting indicators within the same domain
+      strength: strong
+    B3-06:
+      condition: multiple_primary
+      min_primary: 2
+      evidence_pattern: Multiple primary indicators are flagged within the same domain
+      strength: strong
+  review_priority:
+    purpose: Optional human-review queue ordering only
+    interpretation: Does not define a combined detector, case finding, or misconduct outcome
+    output_table: review_queue.csv
+    B6-01:
+      rule_id: RP-01
+      case_status: None
+      review_priority: Low
+    B6-02:
+      rule_id: RP-02
+      case_status: Weak
+      review_priority: Low
+    B6-03a:
+      rule_id: RP-03a
+      case_status: Isolated (Context-Dependent)
+      review_priority: Medium
+    B6-03b:
+      rule_id: RP-03b
+      case_status: Isolated (Verifiable)
+      review_priority: High
+    B6-04a:
+      rule_id: RP-04a
+      case_status: Convergent (Context-Dependent)
+      review_priority: High (Context-Heavy)
+    B6-04b:
+      rule_id: RP-04b
+      case_status: Convergent (Traceable)
+      review_priority: Critical / Expedited
+    B6-05:
+      rule_id: RP-05
+      case_status: No substantive evidence pattern
+      review_priority: Low
+  index_activation:
+    primary_flag_columns:
+      enabled: true
+      column_patterns:
+      - '*_flagged'
+      operator: truthy
+      applies_to: primary_hits
+    supporting_p_values:
+      enabled: true
+      column_patterns:
+      - '*_pval'
+      - '*_pval_*'
+      operator: <=
+      value: 0.05
+      applies_to: supporting_hits
+    supporting_positive_counts:
+      enabled: false
+      column_patterns: []
+      operator: '>'
+      value: 0
+      applies_to: supporting_hits
+rules:
+  detect_nm:
+    ZU3_S:
+      enabled: false
+      operator: <
+      value: -2.0
+      source: literature_or_study_calibration_required
+      requires_calibration: true
+    HT_S:
+      enabled: false
+      operator: <=
+      value: sample_quantile
+      quantile: 0.05
+      source: literature_or_study_calibration_required
+      requires_calibration: true
+  detect_pm:
+    alpha: 0.05
+    source: R aberrance model-based null distribution
+  detect_ac:
+    alpha: 0.05
+    source: R aberrance pair-level flag output
+  detect_as:
+    alpha: 0.05
+    source: R aberrance pair-level flag output
+  detect_pk:
+    alpha: 0.05
+    source: R aberrance model-based null distribution
+  detect_rg:
+    flag_methods:
+    - NT
+    CT:
+      enabled: true
+      thr: 3
+      feeds_B3: false
+      requires_calibration: true
+    NT:
+      enabled: true
+      nt:
+      - 5
+      - 10
+      - 15
+      - 20
+      - 25
+      - 30
+      - 35
+      feeds_B3: false
+      requires_calibration: true
+    CUMP:
+      enabled: true
+      outlier: 90
+      feeds_B3: false
+      requires_calibration: true
+    VI:
+      enabled: true
+      outlier: 90
+    VITP:
+      enabled: true
+      outlier: 90
+  detect_tt:
+    alpha: 0.05
+    source: R aberrance test-tampering p-value flag

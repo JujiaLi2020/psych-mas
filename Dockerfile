@@ -1,7 +1,12 @@
-# Psych-MAS: Streamlit + LangGraph/R backend for Railway
-# Build: docker build -t psych-mas .
-# Run UI locally:       docker run -p 8501:8501 -e PORT=8501 psych-mas
-# Run backend (example): docker run -p 8000:8000 psych-mas uvicorn backend_service:app --host 0.0.0.0 --port 8000
+# Psych-MAS: FastAPI backend (R/rpy2) + optional Streamlit UI
+#
+# Recommended local deploy:
+#   docker compose up --build
+#
+# Manual:
+#   docker build -t psych-mas .
+#   docker compose up backend          # API on :8000
+#   docker run -p 8501:8501 -e PORT=8501 -e PSYMAS_BACKEND_URL=http://host.docker.internal:8000 psych-mas sh scripts/run_ui_railway.sh
 
 # rpy2 + embedded R is much more stable on Python 3.11 than 3.13.
 FROM python:3.11-slim-bookworm
@@ -26,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY packages.txt install_r_packages.R r_packages.txt ./
 COPY pyproject.toml README.md ./
 COPY graph.py ui.py main.py mmls.py backend_service.py ./
+COPY psymas_ui psymas_ui
+COPY config config
+COPY data data
 
 # Install R packages (mirt, WrightMap, psych) - can take several minutes
 RUN Rscript install_r_packages.R
@@ -37,9 +45,10 @@ RUN pip install --no-cache-dir . gunicorn uvicorn
 # Streamlit config + Railway UI launcher (backend image may still be used for a UI service with overridden CMD)
 COPY .streamlit .streamlit
 COPY scripts/run_ui_railway.sh scripts/run_ui_railway.sh
-RUN chmod +x scripts/run_ui_railway.sh
+# Windows checkouts often use CRLF; strip before running in Linux.
+RUN sed -i 's/\r$//' scripts/run_ui_railway.sh && chmod +x scripts/run_ui_railway.sh
 
-EXPOSE 8501
+EXPOSE 8000 8501
 
 # Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud)
 ENV PYTHONWARNINGS="ignore::UserWarning:rpy2.rinterface"

@@ -10,14 +10,25 @@ wheels/
 .venv
 .venv/
 .env
+!.env.example
 __pycache__/
 *.py[cod]
 .DS_Store
 
 
+# Local-only (do not push to GitHub)
+.RData
+.Rhistory
+PsyMASPresentation/
+
 # Others
 R_Secmin/
 .langgraph_api/*.pckl
+
+# Generated run state and temporary artifacts
+data/output/
+tmp/
+.streamlit/secrets.toml
 
 
 # Files
@@ -25,3 +36,5 @@ Presentation/
 document/
 .Rproj.user
 Funding/
+.positai
+api/

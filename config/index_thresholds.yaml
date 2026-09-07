@@ -1,0 +1,342 @@
+version: 1
+name: PsyMAS index threshold registry
+source_mapping: config/b3_index_mapping.yaml
+description: 'Thresholds used to convert Forensic Indices into index-level *_Flag columns before Appendix Table B3 domain
+  evidence synthesis. B3 should consume only these index-level flags, not raw statistics.
+
+  '
+defaults:
+  enabled: true
+  alpha: 0.05
+  missing_threshold_policy: no_flag
+  missing_value_policy: no_flag
+  calibration_note: 'Thresholds marked requires_calibration should be estimated from a simulated null distribution, an operational
+    historical baseline, or a documented program rule before they are allowed to feed B3.
+
+    '
+threshold_sources:
+  package_alpha: 'The R package aberrance returns p-values and flag arrays; the usual default is pval <= alpha, alpha = 0.05.
+
+    '
+  operational_default: 'A defensible starting value used for demonstration or conservative operational screening. It should
+    be reviewed before formal reporting.
+
+    '
+  sample_percentile: 'A within-run empirical percentile. Useful for demonstration, but not a stable scientific cutoff unless
+    justified by a program policy.
+
+    '
+  simulation_null: 'Preferred source for statistic-only indices: simulate clean test-taking under the fitted model / observed
+    design and use tail cutoffs.
+
+    '
+  historical_baseline: 'Preferred operational source: prior secure administrations with similar population, test length, timing,
+    and item exposure conditions.
+
+    '
+  program_rule: 'A policy threshold set by the testing program, for example a minimum acceptable response-time effort.
+
+    '
+alpha_based_package_flags:
+  detect_ac:
+    enabled: true
+    alpha: 0.05
+    applies_to:
+    - OMG_S
+    - GBT_S
+    - OMG_R
+    - GBT_R
+    source: package_alpha
+  detect_as:
+    enabled: true
+    alpha: 0.05
+    multiple_comparison_adjustment:
+      method: none
+      recommended: BH_FDR_or_pair_level_review
+      note: 'Pairwise similarity/copying tests can over-flag examinees if min p-value over all pairs is mapped directly to
+        person-level evidence.
+
+        '
+    applies_to:
+    - OMG_S
+    - WOMG_S
+    - GBT_S
+    - M4_S
+    - OMG_R
+    - WOMG_R
+    - GBT_R
+    - M4_R
+    - OMG_ST
+    - GBT_ST
+    - OMG_RT
+    - GBT_RT
+    source: package_alpha
+  detect_pm:
+    enabled: true
+    alpha: 0.05
+    applies_to:
+    - L_ST_*
+    - L_S_*
+    - ECI2_S_*
+    - ECI4_S_*
+    - L_R_*
+    - L_T
+    - Q_ST_*
+    - Q_RT_*
+    - L_RT_*
+    source: package_alpha
+  detect_pk:
+    enabled: true
+    alpha: 0.05
+    applies_to:
+    - L_ST
+    - L_S
+    - ML_S
+    - LR_S
+    - S_S
+    - W_S
+    - L_T
+    - W_T
+    source: package_alpha
+  detect_tt:
+    enabled: true
+    alpha: 0.05
+    applies_to:
+    - EDI_SD_*
+    - GBT_SD
+    - L_SD
+    - EDI_R_*
+    - GBT_R
+    - L_R
+    source: package_alpha
+external_thresholds:
+  detect_nm:
+    ZU3_S:
+      enabled: false
+      operator: <
+      value: -2.0
+      threshold_source: literature_or_study_calibration_required
+      feeds_B3: false
+      note: Computed for display/audit only until a literature-supported or study-calibrated cutoff is specified.
+      evidence_tier: operational_screening_default
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+      requires_calibration: true
+    HT_S:
+      enabled: false
+      operator: <=
+      value: sample_quantile
+      quantile: 0.05
+      threshold_source: literature_or_study_calibration_required
+      feeds_B3: false
+      note: Computed for display/audit only until a literature-supported or study-calibrated cutoff is specified.
+      evidence_tier: sample_screening_default
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+      requires_calibration: true
+    G_S:
+      enabled: false
+      operator: '>='
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      note: Number of Guttman errors; cutoff depends on test length and score distribution.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    NC_S:
+      enabled: false
+      operator: <=
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      note: Norm conformity direction should be confirmed for the scoring model.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    U1_S:
+      enabled: false
+      operator: '>='
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    U3_S:
+      enabled: false
+      operator: '>='
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    A_S:
+      enabled: false
+      operator: <=
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    D_S:
+      enabled: false
+      operator: '>='
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    E_S:
+      enabled: false
+      operator: <=
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    C_S:
+      enabled: false
+      operator: tail
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      note: Direction can vary by index convention; use simulated lower/upper tail.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    MC_S:
+      enabled: false
+      operator: tail
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    PC_S:
+      enabled: false
+      operator: <=
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    KL_T:
+      enabled: false
+      operator: '>='
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      note: RT Kullback-Leibler cutoff should come from RT null simulation or secure baseline.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+  detect_cp:
+    L_T_MAX2: &id001
+      enabled: false
+      operator: '>='
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      note: Change-point statistics require model/design-specific null cutoffs.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    L_T_MAX1: *id001
+    L_S_MAX2: *id001
+    L_S_MAX1: *id001
+    S_S_MAX2: *id001
+    S_S_MAX1: *id001
+    W_S_MAX2: *id001
+    W_S_MAX1: *id001
+    W_T_MAX2: *id001
+    W_T_MAX1: *id001
+    L_T_MIN1: &id002
+      enabled: false
+      operator: <=
+      value: null
+      requires_calibration: true
+      threshold_source: simulation_null
+      feeds_B3: false
+      note: Use lower-tail or extreme-tail simulated null cutoff.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+    L_S_MIN1: *id002
+    S_S_MIN1: *id002
+    W_S_MIN1: *id002
+    W_T_MIN1: *id002
+  detect_rg:
+    CT:
+      enabled: true
+      method_flag_source: package_threshold
+      threshold_parameter: thr
+      default_thr_seconds: 3
+      operator: response_time <
+      threshold_source: literature_or_assessment_calibration_required
+      feeds_B3: false
+      note: Computed for display/audit only until the response-time threshold is justified by literature, assessment design,
+        or calibration.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+      requires_calibration: true
+    NT:
+      enabled: true
+      method_flag_source: package_threshold
+      threshold_parameter: nt
+      default_nt_percent: 10
+      configured_nt_percent:
+      - 10
+      operator: response_time < normative_threshold
+      threshold_source: literature_or_assessment_calibration_required
+      feeds_B3: false
+      note: Computed for display/audit only until the response-time threshold is justified by literature, assessment design,
+        or calibration.
+      evidence_tier: literature_supported_screening_default
+      citation_note: NT10 is a common normative threshold starting point; adjust by assessment context.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+      requires_calibration: true
+    CUMP:
+      enabled: true
+      method_flag_source: package_threshold
+      operator: response_time < CUMP_threshold
+      threshold_source: literature_or_assessment_calibration_required
+      feeds_B3: false
+      note: Computed for display/audit only until the response-time threshold is justified by literature, assessment design,
+        or calibration.
+      B3_eligible: false
+      evidence_use: display_only_until_threshold_calibrated
+      requires_calibration: true
+    RTE:
+      enabled: false
+      operator: <=
+      value: 0.8
+      requires_calibration: true
+      threshold_source: program_calibration_required
+      feeds_B3: false
+      suggested_starting_points:
+        conservative: 0.8
+        lenient: 0.9
+      note: Person-level response-time effort summary; audit/display only unless promoted by a documented calibrated program
+        rule.
+      evidence_tier: literature_supported_screening_default
+      citation_note: RTE <= .80 is commonly used as a rapid-guessing/non-effort screening rule; programs may choose stricter/looser
+        criteria.
+      B3_eligible: false
+      evidence_use: audit_or_display_only
+evidence_policy:
+  principle: Raw indices without a valid index-level flag are descriptive outputs, not B3 evidence.
+  eligible_for_B3:
+  - package_pvalue_flag with valid p-value/flag
+  - rt_threshold_flag returned by aberrance threshold methods
+  - external_threshold_required only when enabled=true and value/calibration is defined
+  not_eligible_for_B3_until_calibrated:
+  - external_threshold_required with value=null
+  - descriptive_only
+  - auxiliary_only

@@ -1,142 +1,229 @@
-# PsyMAS-Aberrance (v0.5.0)
+# PsyMAS Workbench (v0.7.3)
 
-**PsyMAS-Aberrance** is a Streamlit app for **forensic psychometrics**: it fits an IRT model (to produce ψ item parameters) and runs **aberrance detection agents**, then produces a **Forensic Verdict** (LLM-assisted).
+PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic aberrance-detection routines, rulebook-based evidence governance, AI-assisted case explanation, and human review records.
 
-This repository is structured as a two-process system:
+The system treats statistical flags as review triggers. It does not determine misconduct.
 
-- **UI**: Streamlit (`ui.py`) — runs locally (Windows-friendly).
-- **Backend**: FastAPI (`backend_service.py`) — runs on **Linux** (recommended via Docker). It hosts R/rpy2 + the LangGraph/agent logic.
+## What Is Included
 
-Why split it?
+This is a clean runnable distribution. It keeps only the files needed to run the app and the bundled demo:
 
-- Windows+rpy2+R is unstable for long-running, multi-agent workflows.
-- Running the backend in Linux (Docker/Railway) makes Detect runs reliable.
-- Detect Progress polls the backend and auto-refreshes until the job finishes.
+- Streamlit entry point and page composition: `ui.py`
+- FastAPI backend: `backend_service.py`
+- deterministic node implementations: `graph.py`
+- shared graph contracts and topology: `psymas_graph/`
+- UI support modules: `psymas_ui/`
+- rulebook and thresholds: `config/`
+- sample/demo data: `data/`
+- Docker and dependency files
 
----
+Manuscripts, screenshots, literature PDFs, old backups, tests, and temporary research exports have been removed from this clean copy.
 
-## What’s new in 0.5.0
+## Workflow
 
-- **Backend IRT stability**: Fixed rpy2 conversion-context errors in `POST /irt` when running under uvicorn worker threads.
-- **Preknowledge defaults**: If no compromised items are provided for `detect_pk`, we default to **items 1..n-1** as compromised (leaving ≥1 secure item, as required by R `detect_pk`).
-- **Streamlit plotting stability**: Force headless matplotlib backend (`Agg`) to avoid missing GUI backend issues during rendering (e.g., collusion plots).
-- **Docs**: Added/updated `docs/FORENSIC_AGENTS_DATA_FLOW.md` to document data flow and R conversion rules.
+The interface is organized as:
 
----
+1. Scenario
+2. Review Workspace
+   - 01 Data
+   - 02 Evidence
+   - 03 AI Review
+   - 04 Human Review
+   - 05 Record
+3. Research Tools
+4. Configuration
 
-## Features
+The Demo scenario loads bundled simulated data and the evaluated run snapshot so users can inspect results without recomputing all indices.
 
-- **Scenario**: Choose preset A, B, or D (Custom); optional LLM suggestion from a short description.
-- **Preparation**: Upload Response + optional RT CSV, generate ψ, set compromised items / tampering when needed, select agents, start Detect. Readiness strip and Detect button reflect only what’s required for selected agents.
-- **Detect Progress**: Progress bar, flow diagram with per-agent status, auto-refresh until done; **Generate Report** opens Aberrance Summary.
-- **Aberrance Summary**: Forensic Verdict, Collusion Graph and Effort Matrix (when data exists), Watchlist, agent-by-agent reports.
-- **Tools**: Aberrance / IRT / RT utilities + **Tools → Backend test** for troubleshooting.
+## Data Kept In This Copy
 
----
+| Path | Purpose |
+| --- | --- |
+| `data/sample/` | Minimal CSV examples for user input templates |
+| `data/upload/` | Bundled demo input files |
+| `data/psymas_demo_evaluated_snapshot.zip` | Demo snapshot loaded by the Demo scenario |
 
-## Quickstart (recommended on Windows)
+The application creates `data/output/psymas_run.sqlite` and export files locally at runtime. These generated records may contain review decisions and are excluded from version control. The bundled evaluated snapshot contains the reproducible demonstration state used by the Demo scenario.
 
-### 1) Start the backend in Docker (Linux + R)
+## Configuration Files
 
-From the repo root:
+| Path | Purpose |
+| --- | --- |
+| `config/rulebook_index.csv` | Software-readable index registry and evidence-use mapping |
+| `config/b3_index_mapping.yaml` | Domain-evidence mapping support |
+| `config/default_thresholds.yaml` | Default domain and threshold settings |
+| `config/index_thresholds.yaml` | Index-level threshold configuration |
+| `.env.example` | Local environment template |
+
+## Quickstart With Docker
+
+From the project root:
 
 ```bash
-docker build -t psych-mas-backend .
-docker run --rm -p 8000:8000 -e PORT=8000 psych-mas-backend uvicorn backend_service:app --host 0.0.0.0 --port 8000
+copy .env.example .env
+docker compose up --build
 ```
 
-Verify:
+Then open:
 
-- `http://localhost:8000/health` → `{"status":"ok"}`
-- `http://localhost:8000/docs` → FastAPI docs (should include `/irt` and `/detect`)
+```text
+http://localhost:8501
+```
 
-### 2) Configure local environment
+The backend is available at:
 
-Create/update `.env` in the repo root (do **not** commit it):
+```text
+http://localhost:9000
+```
+
+The first Docker build installs R and R packages, so it can take several minutes.
+
+## Quickstart Without Docker UI
+
+Run the backend in Docker:
+
+```bash
+docker compose up --build backend
+```
+
+Create `.env` from the template and set:
 
 ```env
-PSYMAS_BACKEND_URL=http://localhost:4000
-OPENROUTER_API_KEY=...
-GOOGLE_API_KEY=...
+PSYMAS_BACKEND_URL=http://localhost:9000
 ```
 
-After changing `.env`, restart Streamlit.
-
-### 3) Run Streamlit locally
-
-In another terminal:
+Install Python dependencies and start Streamlit:
 
 ```bash
 uv sync
-uv run -- python -m streamlit run .\ui.py --server.port 4000
-
+uv run -- python -m streamlit run ui.py --server.port 8501
 ```
 
-Use any free port (don’t use `4000` — that’s the backend).
+## LLM Configuration
 
----
+PsyMAS supports:
+
+- OpenRouter hosted models
+- Local Ollama models
+
+For OpenRouter, add the key to `.env`:
+
+```env
+OPENROUTER_API_KEY=your_key_here
+```
+
+For local Ollama, start Ollama separately and make sure the selected local model is available, for example:
+
+```bash
+ollama pull llama3.1:8b
+```
+
+The LLM is used only to summarize governed evidence and draft cautious reviewer-facing language. It cannot compute indices, change thresholds, create flags, infer intent, determine misconduct, or recommend sanctions.
 
 ## Backend API
 
-The backend service exposes:
+The backend provides:
 
-- **`GET /health`**: lightweight health check used by the UI (“LangGraph Agents” status).
-- **`POST /irt`**: runs IRT in the backend and returns ψ (`result.item_params`).
-- **`POST /detect`**: starts a detect job and returns `{run_id}`.
-  - Requires `psi_data` (ψ is generated on Preparation; backend does **not** re-fit IRT during Detect).
-  - Runs agents **sequentially** to avoid concurrent rpy2/R failures.
-- **`GET /detect/{run_id}/status`**: returns `{status, progress, irt_status, node_states, error}`.
-- **`GET /detect/{run_id}/result`**: returns the final result (`flags`, `final_report`, `psi_data`, etc.).
+- `GET /health`
+- `POST /irt/start`
+- `GET /irt/{job_id}/status`
+- `GET /irt/{job_id}/result`
+- `POST /irt`
+- `POST /detect`
+- `GET /detect/{run_id}/status`
+- `GET /detect/{run_id}/result`
 
----
+The backend runs R-based psychometric routines through `rpy2`; Docker is recommended on Windows.
 
-## ψ (IRT parameters) rules
+## Code Architecture
 
-To avoid re-estimating IRT during Detect:
+The runnable entry points remain stable while implementation details are split into focused packages:
 
-- **Preparation → Generate item parameters** calls `POST /irt` and stores `item_params` in Streamlit session.
-- **Preparation → Detect** sends those params as `psi_data` in `POST /detect`.
-- If `psi_data` is missing, the backend returns an error (“Missing psi_data …”).
+```text
+PsyMAS
+├── ui.py                    Streamlit entry point and page composition
+├── backend_service.py       FastAPI jobs and R-backed analysis endpoints
+├── graph.py                 Deterministic and IRT node implementations
+├── psymas_graph/            Shared graph state and workflow topology
+├── psymas_ui/               UI services, evidence logic, exports, and storage
+├── mmls.py                  Curated hosted/local LLM model metadata
+├── config/                  Rulebook, domain rules, and thresholds
+├── data/                    Samples, demo inputs, snapshots, and run database
+└── scripts/                 Deployment entry points
+```
 
----
+`ui.py` and `graph.py` are compatibility entry points. Streamlit still starts with `ui.py`, and `langgraph.json` still imports graph objects from `graph.py`. New reusable logic should be placed in `psymas_ui/` or `psymas_graph/` instead of expanding either entry point.
 
-## LLM configuration (Forensic Verdict)
+### Root Python Files
 
-The Forensic Verdict uses the currently selected provider:
+| Path | Responsibility |
+| --- | --- |
+| `ui.py` | Initializes Streamlit, manages session-level page routing, and composes the Data, Evidence, AI Review, Human Review, Record, Research Tools, and Configuration views. It imports reusable behavior from `psymas_ui/`. |
+| `backend_service.py` | FastAPI service for health checks, asynchronous IRT jobs, and deterministic detection jobs. It coordinates Python/R execution for the UI. |
+| `graph.py` | Implements IRT, detector, manager, synthesizer, and reporter nodes. It exports `psych_workflow`, `forensic_workflow`, and `app` for existing callers. Shared state, topology, thresholds, serialization, and RT plotting are imported from `psymas_graph/`. |
+| `mmls.py` | Defines the curated OpenRouter and local Ollama model catalog, display labels, pricing notes, and recommended uses. |
+| `main.py` | Minimal command-line placeholder retained for package/tool compatibility; it is not the Streamlit entry point. |
 
-- **OpenRouter**: set `OPENROUTER_API_KEY`
-- **Google Gemini**: set `GOOGLE_API_KEY`
+### `psymas_graph/`
 
-Notes:
+| Path | Responsibility |
+| --- | --- |
+| `psymas_graph/state.py` | Defines the typed shared LangGraph state and the reducer used to merge parallel specialist outputs. |
+| `psymas_graph/workflows.py` | Owns graph topology. It builds the parallel forensic workflow and the IRT/response-time workflow from injected node functions. |
+| `psymas_graph/thresholds.py` | Reads YAML-backed detector settings, normalizes alpha/threshold values, controls enabled indices, and orients pairwise flag matrices. |
+| `psymas_graph/serialization.py` | Converts pandas, NumPy, mapping, and sequence results into JSON-ready record lists. |
+| `psymas_graph/rt_visuals.py` | Generates the item-level response-time histogram artifact used by the psychometric workflow. |
+| `psymas_graph/llm_client.py` | Provides the small hosted-model HTTP clients used by graph prompt analysis and report-synthesis nodes. |
+| `psymas_graph/__init__.py` | Exposes the shared graph state as the package-level contract. |
 
-- `ui.py` loads `.env` at startup using `python-dotenv`.
-- If keys are missing, the verdict falls back to a rule-based summary.
+### `psymas_ui/`
 
----
+| Path | Responsibility |
+| --- | --- |
+| `psymas_ui/app_config.py` | Central application version, domain order/labels, detector-to-agent mapping, visualization palette, and demo paths. |
+| `psymas_ui/backend_client.py` | Normalizes backend URLs, performs backend HTTP requests, and summarizes backend/Detect status for the UI. |
+| `psymas_ui/input_data.py` | Cleans uploaded CSV tables, validates binary responses and answer-change records, aligns response-time columns, and parses compromised-item files. |
+| `psymas_ui/llm.py` | OpenRouter and Ollama clients, provider/model selection, model discovery, connection tests, and selected-model dispatch. |
+| `psymas_ui/components.py` | Shared Streamlit styling and reusable workspace/KPI components. |
+| `psymas_ui/evidence_governance.py` | Family-level evidence aggregation helpers, including correction-variant handling and B3 eligibility. |
+| `psymas_ui/evidence_tree.py` | Builds individual/cohort evidence-lineage visualizations and shared strength/priority styling. |
+| `psymas_ui/review.py` | Builds the final human-review queue from governed evidence and detector flags. |
+| `psymas_ui/run_store.py` | SQLite schema and persistence API for run inputs, indices, governed evidence, LLM outputs, review decisions, and audit records. |
+| `psymas_ui/run_snapshot.py` | Packs and restores portable evaluated-run snapshots used by the Demo workflow. |
+| `psymas_ui/exports.py` | Builds the consolidated master-results table. |
+| `psymas_ui/research_export.py` | Packages research-facing datasets, audit outputs, validation material, and expert-review templates. |
+| `psymas_ui/worked_example.py` | Selects worked-example cases and generates paper/tutorial tables and figures. |
+| `psymas_ui/__init__.py` | Marks the UI support package. |
 
-## Tools → Backend test
+### Runtime and Configuration Files
 
-The **Tools → Backend test** page helps you debug:
+| Path | Responsibility |
+| --- | --- |
+| `config/rulebook_index.csv` | Index registry: domain, family, role, evidence use, and provenance rules. |
+| `config/b3_index_mapping.yaml` | Domain-evidence mapping and aggregation support. |
+| `config/default_thresholds.yaml` | Default domain-strength and review-priority rules. |
+| `config/index_thresholds.yaml` | Index-level activation and threshold settings. |
+| `langgraph.json` | Registers `psych_workflow` and `forensic_workflow` for LangGraph tooling. |
+| `install_r_packages.R` | Installs the R packages required by the backend. |
+| `Dockerfile` | Builds the Python/R runtime image. |
+| `docker-compose.yml` | Starts the Streamlit UI and FastAPI backend locally. |
+| `scripts/run_ui_railway.sh` | Streamlit container entry point for Railway-style deployment. |
+| `pyproject.toml`, `uv.lock` | Python project metadata and reproducible dependency lock. |
+| `requirements.txt`, `packages.txt` | Compatibility dependency lists for deployment platforms. |
+| `r_packages.txt`, `r_packages.lock` | R package requirements and recorded versions. |
 
-- whether ψ exists in session,
-- the exact JSON payload being sent to `/detect`,
-- direct calls to `/health`, `/irt`, `/detect`, `/status`, and `/result`.
+## Dependency Direction
 
----
+To keep the codebase maintainable, dependencies should flow in one direction:
 
-## Project layout
+```text
+ui.py → psymas_ui/* → config and data
+backend_service.py → graph.py → psymas_graph/*
+graph.py → R/Python statistical libraries
+```
 
-| Path | Purpose |
-|------|---------|
-| `ui.py` | Streamlit UI (Preparation, Detect Progress, dashboards, Tools) |
-| `backend_service.py` | FastAPI backend (`/health`, `/irt`, `/detect`, polling) |
-| `graph.py` | IRT + aberrance agent implementations and synthesizer |
-| `Dockerfile` | Linux image (R + R packages + Python deps) |
-| `install_r_packages.R`, `r_packages.txt` | R package install (container) |
-| `pyproject.toml` | Python dependencies |
-
----
+Modules in `psymas_graph/` must not import `ui.py`. Modules in `psymas_ui/` should not import the Streamlit entry point. `graph.py` must remain usable without starting Streamlit.
 
 ## Security
 
-- Do **not** commit `.env` (API keys). Use `.env` locally or platform secrets in production.
+Do not share `.env` if it contains API keys. Use `.env.example` as the public template.

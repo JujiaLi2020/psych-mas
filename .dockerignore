@@ -22,10 +22,8 @@ venv
 # LangGraph local state
 .langgraph_api
 
-# Data and R workspace (not needed in image)
-data/
+# R workspace (not needed in image)
 R_Secmin/
-*.csv
 *.png
 *.rda
 *.RData

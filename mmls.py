@@ -16,24 +16,20 @@ GEMINI_MODEL_OPTIONS = [
 ]
 DEFAULT_GEMINI_MODEL_IDS = [api_id for _, api_id in GEMINI_MODEL_OPTIONS]
 
-# ----- OpenRouter (display label, model_id) -----
+# ----- OpenRouter curated US-model list (display label, model_id) -----
 OPENROUTER_FREE_MODELS = [
-    ("OpenAI GPT-5.4 Nano", "openai/gpt-5.4-nano"),
-    ("Google Gemini 3 Flash ($0.50/M,$3/M)", "google/gemini-3-flash-preview"),
-    ("Deepseek R1T2 Chimera (free)", "tngtech/deepseek-r1t2-chimera:free"),
-    ("GLM-4.5 Air (free)", "z-ai/glm-4.5-air:free"),
-    ("Deepseek R1T Chimera (free)", "tngtech/deepseek-r1t-chimera:free"),
-    ("Trinity Large Preview (free)", "arcee-ai/trinity-large-preview:free"),
-    ("Deepseek R1 0528 (free)", "deepseek/deepseek-r1-0528:free"),
-    ("TNG R1T Chimera (free)", "tngtech/tng-r1t-chimera:free"),
-    ("Nemotron 3 Nano 30B A3B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
-    ("Meta Llama 3.3 70B Instruct (free)", "meta-llama/llama-3.3-70b-instruct:free"),
-    ("Google Gemma 3 27B IT (free)", "google/gemma-3-27b-it:free"),
-    ("Qwen3 Coder (free)", "qwen/qwen3-coder:free"),
-    ("OpenAI GPT-OSS 120B (free)", "openai/gpt-oss-120b:free"),
-    ("Upstage Solar Pro 3 (free)", "upstage/solar-pro-3:free"),
-    ("Trinity Mini (free)", "arcee-ai/trinity-mini:free"),
-    ("OpenAI GPT-OSS 20B (free)", "openai/gpt-oss-20b:free"),
+    ("OpenAI GPT-4o Mini — $0.15/$0.60 per 1M — default low-cost report drafting model", "openai/gpt-4o-mini"),
+    ("OpenAI GPT-4.1 Mini — $0.40/$1.60 per 1M — stronger governed report writing", "openai/gpt-4.1-mini"),
+    ("OpenAI GPT-4.1 Nano — $0.10/$0.40 per 1M — cheap extraction, classification, and short summaries", "openai/gpt-4.1-nano"),
+    ("Anthropic Claude Haiku 4.5 — $1.00/$5.00 per 1M — natural reviewer-facing language", "anthropic/claude-haiku-4.5"),
+    ("OpenAI GPT-4.1 — $2.00/$8.00 per 1M — high-stakes final polish and complex cases", "openai/gpt-4.1"),
 ]
 
 OPENROUTER_FREE_MODEL_IDS = [mid for _, mid in OPENROUTER_FREE_MODELS]
+
+# ----- Local Ollama placeholders (display label, local model name) -----
+LOCAL_OLLAMA_MODELS = [
+    ("Local Llama 3.1 8B — Ollama — private, low-cost draft/support model", "llama3.1:8b"),
+    ("Local Llama 3.3 70B — Ollama — private, higher-quality local review model", "llama3.3:70b"),
+]
+LOCAL_OLLAMA_MODEL_IDS = [mid for _, mid in LOCAL_OLLAMA_MODELS]
