@@ -3,6 +3,9 @@
 # Or in R: source("install_r_packages.R")
 
 required_versions <- c(
+  # mirt imports Deriv. Pin it explicitly because the newest CRAN release can
+  # require a newer R than Debian Bookworm provides.
+  Deriv = "4.2.0",
   mirt = "1.46.1",
   aberrance = "0.3.0",
   WrightMap = "1.4",

@@ -59,6 +59,8 @@ services:
     env_file:
       - path: .env
         required: false
+    volumes:
+      - ./data/output:/app/data/output
     command: ["sh", "scripts/run_ui_railway.sh"]
     depends_on:
       backend:

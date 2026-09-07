@@ -2007,7 +2007,7 @@ wheels = [
 
 [[package]]
 name = "psych-mas"
-version = "0.7.3"
+version = "0.7.4"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

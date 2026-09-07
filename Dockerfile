@@ -32,6 +32,7 @@ COPY packages.txt install_r_packages.R r_packages.txt ./
 COPY pyproject.toml README.md ./
 COPY graph.py ui.py main.py mmls.py backend_service.py ./
 COPY psymas_ui psymas_ui
+COPY psymas_graph psymas_graph
 COPY config config
 COPY data data
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-APP_VERSION = "0.7.3"
+APP_VERSION = "0.7.4"
 
 PSYMAS_VIZ = {
     "ink": "#0F172A",

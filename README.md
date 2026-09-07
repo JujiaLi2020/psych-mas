@@ -1,4 +1,4 @@
-# PsyMAS Workbench (v0.7.3)
+# PsyMAS Workbench (v0.7.4)
 
 PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic aberrance-detection routines, rulebook-based evidence governance, AI-assisted case explanation, and human review records.
 
@@ -45,6 +45,20 @@ The Demo scenario loads bundled simulated data and the evaluated run snapshot so
 
 The application creates `data/output/psymas_run.sqlite` and export files locally at runtime. These generated records may contain review decisions and are excluded from version control. The bundled evaluated snapshot contains the reproducible demonstration state used by the Demo scenario.
 
+## Input Files
+
+Only `responses.csv` is required to start. Optional files enable additional evidence:
+
+| File | Requirement |
+| --- | --- |
+| `responses.csv` | Required response matrix |
+| `response_times.csv` | Optional response-time matrix |
+| `item_params.csv` | Optional; otherwise estimated from responses |
+| `compromised_items.csv` | Optional exposure labels |
+| `answer_changes.csv` | Optional initial/final response records |
+
+Example files are available in `data/sample/`.
+
 ## Configuration Files
 
 | Path | Purpose |
@@ -55,44 +69,107 @@ The application creates `data/output/psymas_run.sqlite` and export files locally
 | `config/index_thresholds.yaml` | Index-level threshold configuration |
 | `.env.example` | Local environment template |
 
-## Quickstart With Docker
+## Windows Installation (Recommended)
 
-From the project root:
+### 1. Check the requirements
+
+- Windows 10 or 11, 8 GB RAM, and 5-10 GB free disk space recommended
+- Internet access for the installer and container image
+- Available host ports `8501` and `9000`
+
+The installer uses Docker Desktop to provide the Python and R environment. Docker may require WSL 2, hardware virtualization, acceptance of Docker's terms, or a restart on first installation.
+
+### 2. Download the installer
+
+Download `PsyMAS-Setup-Windows-v0.7.4.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.4) and run it. Windows may ask you to confirm software downloaded from the internet.
+
+### 3. Complete the guided setup
+
+1. Allow the installer to install or start Docker Desktop when needed.
+2. Choose OpenRouter (recommended), No AI, or Local Ollama (advanced).
+3. Wait while the versioned PsyMAS image is downloaded and started.
+4. PsyMAS opens automatically at `http://localhost:8501`.
+
+The installer adds Start, Stop, and Configure PsyMAS AI shortcuts. Assessment and review records are stored under `%LOCALAPPDATA%\PsyMAS` and remain available across container updates.
+
+## Manual Docker Installation
+
+### 1. Install Docker Desktop
+
+Install Docker Desktop with Docker Compose v2, start it, and wait until the Docker engine is running.
+
+### 2. Download PsyMAS v0.7.4
 
 ```bash
-copy .env.example .env
-docker compose up --build
+git clone https://github.com/JujiaLi2020/psych-mas.git
+cd psych-mas
+git switch --detach v0.7.4
 ```
 
-Then open:
+### 3. Create the environment file
 
-```text
-http://localhost:8501
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-The backend is available at:
+macOS or Linux:
 
-```text
-http://localhost:9000
+```bash
+cp .env.example .env
 ```
 
-The first Docker build installs R and R packages, so it can take several minutes.
+API keys are optional unless AI-assisted reporting is used.
 
-## Quickstart Without Docker UI
+### 4. Pull and start the prebuilt image
 
-Run the backend in Docker:
+```bash
+docker compose -f docker-compose.release.yml pull
+docker compose -f docker-compose.release.yml up -d
+```
+
+This downloads the published Python/R environment instead of compiling R packages locally.
+
+### 5. Open and verify PsyMAS
+
+1. Open the interface at `http://localhost:8501`.
+2. Confirm backend health at `http://localhost:9000/health`.
+3. Select **Demo** to load the bundled data and evaluated snapshot without recomputing all indices.
+
+### 6. Stop or restart PsyMAS
+
+Stop the background services with:
+
+```bash
+docker compose -f docker-compose.release.yml down
+```
+
+Restart without rebuilding:
+
+```bash
+docker compose -f docker-compose.release.yml up -d
+```
+
+## Advanced: Run the UI Outside Docker
+
+### 1. Start only the backend
 
 ```bash
 docker compose up --build backend
 ```
 
-Create `.env` from the template and set:
+### 2. Configure the host UI
+
+Create `.env` and set:
 
 ```env
 PSYMAS_BACKEND_URL=http://localhost:9000
 ```
 
-Install Python dependencies and start Streamlit:
+### 3. Install and start the UI
+
+Python 3.11 and `uv` are required:
 
 ```bash
 uv sync
@@ -101,21 +178,29 @@ uv run -- python -m streamlit run ui.py --server.port 8501
 
 ## LLM Configuration
 
-PsyMAS supports:
+PsyMAS supports OpenRouter hosted models and local Ollama models. Choose one option:
 
-- OpenRouter hosted models
-- Local Ollama models
+### 1. OpenRouter
 
-For OpenRouter, add the key to `.env`:
+Add the key to `.env`:
 
 ```env
 OPENROUTER_API_KEY=your_key_here
 ```
 
-For local Ollama, start Ollama separately and make sure the selected local model is available, for example:
+### 2. Local Ollama
+
+Install Ollama, download a supported model, and start the service:
 
 ```bash
 ollama pull llama3.1:8b
+ollama serve
+```
+
+When both PsyMAS services run in Docker on Windows or macOS, add this to `.env`:
+
+```env
+OLLAMA_CHAT_URL=http://host.docker.internal:11434/api/chat
 ```
 
 The LLM is used only to summarize governed evidence and draft cautious reviewer-facing language. It cannot compute indices, change thresholds, create flags, infer intent, determine misconduct, or recommend sanctions.
@@ -134,6 +219,20 @@ The backend provides:
 - `GET /detect/{run_id}/result`
 
 The backend runs R-based psychometric routines through `rpy2`; Docker is recommended on Windows.
+
+## Persistent Run Records
+
+Docker Compose mounts `data/output/` into the UI container. The SQLite run database, human-review decisions, and generated exports therefore remain available after containers are recreated. Do not commit this directory because it may contain assessment and review data.
+
+## Troubleshooting
+
+```bash
+docker compose ps
+docker compose logs backend
+docker compose logs ui
+```
+
+Confirm backend health at `http://localhost:9000/health`. If a port is already occupied, change the host-side port in `docker-compose.yml`. To rebuild after dependency changes, run `docker compose up --build`.
 
 ## Code Architecture
 
@@ -227,3 +326,7 @@ Modules in `psymas_graph/` must not import `ui.py`. Modules in `psymas_ui/` shou
 ## Security
 
 Do not share `.env` if it contains API keys. Use `.env.example` as the public template.
+
+## License
+
+PsyMAS is released under the MIT License. See `LICENSE`.
