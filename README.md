@@ -71,14 +71,22 @@ Example files are available in `data/sample/`.
 
 ## Install the `psymas` CLI
 
-Install an isolated command from a downloaded release or cloned repository:
+The CLI requires Python 3.11 or newer and
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/). It installs
+PsyMAS in an isolated environment and adds the `psymas` command to your PATH.
+
+### Install directly from GitHub
+
+Install the current version from the `main` branch without cloning the
+repository:
 
 ```bash
-uv tool install .
+uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@main"
 ```
 
-`pipx install .` is equivalent. For development, keep the command linked to the
-checkout with `uv tool install --editable .`.
+The existing `v0.7.5` tag predates the CLI and must not be used for CLI
+installation. After a newer CLI-enabled release is published, replace `main`
+with its tag to obtain a reproducible installation, for example `@v0.7.6`.
 
 Verify the installation and launch the UI:
 
@@ -88,7 +96,49 @@ psymas doctor
 psymas ui
 ```
 
-If the analysis backend is already running elsewhere, pass its URL directly:
+If your shell cannot find `psymas`, run `uv tool update-shell`, restart the
+terminal, and try again.
+
+### Install from a local checkout
+
+Developers and users who have cloned or downloaded the repository can run this
+from the repository root (the directory containing `pyproject.toml`):
+
+```bash
+uv tool install .
+```
+
+`pipx install .` is equivalent. During development, keep the installed command
+linked to source edits:
+
+```bash
+uv tool install --editable .
+```
+
+### Upgrade or remove the CLI
+
+Upgrade an installation that tracks `main`:
+
+```bash
+uv tool upgrade psych-mas
+```
+
+To reinstall from GitHub when replacing an existing installation:
+
+```bash
+uv tool install --force "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@main"
+```
+
+Remove the CLI with:
+
+```bash
+uv tool uninstall psych-mas
+```
+
+### Connect the UI to the analysis backend
+
+The CLI launches the UI independently of the analysis backend. If a backend is
+already running, pass its URL directly:
 
 ```bash
 psymas ui --backend-url http://localhost:9000
@@ -102,9 +152,15 @@ psymas backend --port 9000
 ```
 
 The R-backed backend is not installed on native Windows. On Windows, use the
-recommended Installer or run `docker compose up --build backend`, then start the
-installed UI with the `--backend-url` command above. Use `psymas --help` for all
-options.
+recommended Installer for the complete application. Alternatively, clone the
+repository and run the backend with Docker:
+
+```powershell
+docker compose up --build backend
+psymas ui --backend-url http://localhost:9000
+```
+
+Use `psymas --help` for all available commands and options.
 
 ## Windows Installation (Recommended)
 
