@@ -83,6 +83,14 @@ The installer uses Docker Desktop to provide the Python and R environment. Docke
 
 Download `PsyMAS-Setup-Windows-v0.7.4.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.4) and run it. Windows may ask you to confirm software downloaded from the internet.
 
+Optional integrity check in PowerShell:
+
+```powershell
+Get-FileHash .\PsyMAS-Setup-Windows-v0.7.4.exe -Algorithm SHA256
+```
+
+Expected SHA-256: `871f58eca5157917c267b51c9625415c958fc43619aa70b1c96d2a8579540e07`. The same value is provided in the `.sha256` Release asset.
+
 ### 3. Complete the guided setup
 
 1. Allow the installer to install or start Docker Desktop when needed.

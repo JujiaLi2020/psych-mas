@@ -82,6 +82,13 @@ jobs:
         shell: pwsh
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\PsyMAS.iss'
 
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $name = "PsyMAS-Setup-Windows-v0.7.4.exe"
+          $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content "dist/$name.sha256" -Encoding ascii
+
       - name: Create or update GitHub Release
         shell: pwsh
         env:
@@ -91,10 +98,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             gh release create "${{ github.ref_name }}" --title "PsyMAS ${{ github.ref_name }}" --generate-notes
           }
-          gh release upload "${{ github.ref_name }}" "dist/PsyMAS-Setup-Windows-v0.7.4.exe" --clobber
+          gh release upload "${{ github.ref_name }}" "dist/PsyMAS-Setup-Windows-v0.7.4.exe" "dist/PsyMAS-Setup-Windows-v0.7.4.exe.sha256" --clobber
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
         with:
           name: PsyMAS-Setup-Windows-v0.7.4
-          path: dist/PsyMAS-Setup-Windows-v0.7.4.exe
+          path: |
+            dist/PsyMAS-Setup-Windows-v0.7.4.exe
+            dist/PsyMAS-Setup-Windows-v0.7.4.exe.sha256
