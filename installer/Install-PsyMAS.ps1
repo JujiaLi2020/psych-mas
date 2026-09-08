@@ -34,7 +34,7 @@ function Start-DockerDesktop {
     if ($desktop) { Start-Process $desktop }
 }
 
-Write-Host "PsyMAS v0.7.4 Setup" -ForegroundColor White
+Write-Host "PsyMAS v0.7.5 Setup" -ForegroundColor White
 Write-Host "This installer keeps assessment and review data in $RunDataPath."
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -70,7 +70,7 @@ if (-not (Test-DockerReady)) {
 New-Item -ItemType Directory -Force -Path $RunDataPath | Out-Null
 $dockerDataPath = $RunDataPath.Replace('\', '/')
 $settings = [ordered]@{
-    PSYMAS_IMAGE_TAG = "0.7.4"
+    PSYMAS_IMAGE_TAG = "0.7.5"
     PSYMAS_DATA_DIR = $dockerDataPath
     OPENROUTER_API_KEY = ""
 }
@@ -80,6 +80,9 @@ if (Test-Path $EnvFile) {
         if ($line -match '^([^#=]+)=(.*)$') { $settings[$matches[1].Trim()] = $matches[2] }
     }
 }
+# An upgrade may reuse the existing .env, but the application image must match
+# the installer version. User-managed data paths and LLM settings remain intact.
+$settings.PSYMAS_IMAGE_TAG = "0.7.5"
 
 if (-not $SkipLlmSetup) {
     Write-Step "Configure optional AI-assisted reporting"
@@ -112,18 +115,18 @@ $envLines = @($settings.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value
 [System.IO.File]::WriteAllLines($EnvFile, $envLines, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Step "Downloading the versioned PsyMAS image"
-& docker compose --env-file $EnvFile -f $ComposeFile pull
+& docker compose -p psymas-desktop --env-file $EnvFile -f $ComposeFile pull
 if ($LASTEXITCODE -ne 0) { throw "Could not download the PsyMAS container image." }
 
 Write-Step "Starting PsyMAS"
-& docker compose --env-file $EnvFile -f $ComposeFile up -d
+& docker compose -p psymas-desktop --env-file $EnvFile -f $ComposeFile up -d
 if ($LASTEXITCODE -ne 0) { throw "PsyMAS services could not be started." }
 
 $healthDeadline = (Get-Date).AddMinutes(3)
 $healthy = $false
 while ((Get-Date) -lt $healthDeadline) {
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:9000/health" -TimeoutSec 5
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8501/_stcore/health" -TimeoutSec 5
         if ($response.StatusCode -eq 200) { $healthy = $true; break }
     } catch { Start-Sleep -Seconds 4 }
 }

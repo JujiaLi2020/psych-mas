@@ -85,7 +85,7 @@ jobs:
       - name: Generate SHA-256 checksum
         shell: pwsh
         run: |
-          $name = "PsyMAS-Setup-Windows-v0.7.4.exe"
+          $name = "PsyMAS-Setup-Windows-${{ github.ref_name }}.exe"
           $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Set-Content "dist/$name.sha256" -Encoding ascii
 
@@ -98,12 +98,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             gh release create "${{ github.ref_name }}" --title "PsyMAS ${{ github.ref_name }}" --generate-notes
           }
-          gh release upload "${{ github.ref_name }}" "dist/PsyMAS-Setup-Windows-v0.7.4.exe" "dist/PsyMAS-Setup-Windows-v0.7.4.exe.sha256" --clobber
+          gh release upload "${{ github.ref_name }}" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe.sha256" --clobber
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
         with:
-          name: PsyMAS-Setup-Windows-v0.7.4
+          name: PsyMAS-Setup-Windows-${{ github.ref_name }}
           path: |
-            dist/PsyMAS-Setup-Windows-v0.7.4.exe
-            dist/PsyMAS-Setup-Windows-v0.7.4.exe.sha256
+            dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe
+            dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe.sha256

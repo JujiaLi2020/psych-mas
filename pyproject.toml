@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psych-mas"
-version = "0.7.4"
+version = "0.7.5"
 description = "Human-in-the-loop evidence governance for psychometric forensics"
 readme = "README.md"
 requires-python = ">=3.11"

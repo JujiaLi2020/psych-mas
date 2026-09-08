@@ -2,10 +2,7 @@ name: psymas
 
 services:
   backend:
-    image: ghcr.io/jujiali2020/psych-mas:${PSYMAS_IMAGE_TAG:-0.7.4}
-    container_name: psymas-backend
-    ports:
-      - "9000:8000"
+    image: ghcr.io/jujiali2020/psych-mas:${PSYMAS_IMAGE_TAG:-0.7.5}
     environment:
       PORT: "8000"
       PSYMAS_JOB_DIR: /tmp/psymas_detect_jobs
@@ -26,8 +23,7 @@ services:
     restart: unless-stopped
 
   ui:
-    image: ghcr.io/jujiali2020/psych-mas:${PSYMAS_IMAGE_TAG:-0.7.4}
-    container_name: psymas-ui
+    image: ghcr.io/jujiali2020/psych-mas:${PSYMAS_IMAGE_TAG:-0.7.5}
     ports:
       - "8501:8501"
     environment:

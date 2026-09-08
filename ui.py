@@ -642,16 +642,17 @@ def _ensure_demo_scenario_ready() -> bool:
                 return True
             st.session_state["_demo_load_warning"] = snap_msg
         return False
+    snap_ok, snap_msg = _restore_demo_evaluated_snapshot_if_available(force=True)
+    if snap_ok:
+        st.session_state["_demo_load_success"] = snap_msg
+        return True
+
     ok, msg = _load_demo_simulated_data()
     if ok:
-        snap_ok, snap_msg = _restore_demo_evaluated_snapshot_if_available(force=True)
-        if snap_ok:
-            st.session_state["_demo_load_success"] = f"{msg} {snap_msg}"
-        else:
-            st.session_state["_demo_load_success"] = msg
-            st.session_state["_demo_load_warning"] = snap_msg
+        st.session_state["_demo_load_success"] = msg
+        st.session_state["_demo_load_warning"] = snap_msg
     else:
-        st.session_state["_demo_load_error"] = msg
+        st.session_state["_demo_load_error"] = f"{snap_msg} {msg}"
     return True
 
 
@@ -11944,15 +11945,12 @@ def _render_data_run_storage_manager() -> None:
             else:
                 st.warning("No active demo run is available yet.")
         if st.button("Reload Clean Demo Snapshot", key="run_manager_reload_clean_demo", use_container_width=True):
-            ok, msg = _load_demo_simulated_data()
+            ok, msg = _restore_demo_evaluated_snapshot_if_available(
+                force=True,
+                preserve_review_decisions=False,
+            )
             if ok:
-                snap_ok, snap_msg = _restore_demo_evaluated_snapshot_if_available(
-                    force=True,
-                    preserve_review_decisions=False,
-                )
-                st.success(f"{msg} {snap_msg}" if snap_ok else msg)
-                if not snap_ok:
-                    st.warning(snap_msg)
+                st.success(msg)
                 st.rerun()
             st.error(msg)
 
@@ -17591,16 +17589,16 @@ def _render_scenario_page() -> None:
         _apply_ab_only_scenario(str(scenario_link))
         st.session_state["prep_compromised_items"] = st.session_state.get("ab_only_compromised_items") or []
         if str(scenario_link) == "C":
-            ok, msg = _load_demo_simulated_data()
-            if ok:
-                snap_ok, snap_msg = _restore_demo_evaluated_snapshot_if_available(force=True)
-                if snap_ok:
-                    st.session_state["_demo_load_success"] = f"{msg} {snap_msg}"
-                else:
+            snap_ok, snap_msg = _restore_demo_evaluated_snapshot_if_available(force=True)
+            if snap_ok:
+                st.session_state["_demo_load_success"] = snap_msg
+            else:
+                ok, msg = _load_demo_simulated_data()
+                if ok:
                     st.session_state["_demo_load_success"] = msg
                     st.session_state["_demo_load_warning"] = snap_msg
-            else:
-                st.session_state["_demo_load_error"] = msg
+                else:
+                    st.session_state["_demo_load_error"] = f"{snap_msg} {msg}"
                 try:
                     st.query_params.clear()
                 except Exception:
