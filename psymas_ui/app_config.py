@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 
@@ -38,7 +40,9 @@ ABERRANCE_FN_TO_AGENT = {
     "detect_pk": "pk_agent",
 }
 
-DEMO_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_source_root = Path(__file__).resolve().parent.parent
+_runtime_root = Path(os.environ.get("PSYMAS_HOME", sys.prefix)).expanduser()
+DEMO_DATA_DIR = (_source_root if (_source_root / "data").is_dir() else _runtime_root) / "data"
 DEMO_EVALUATED_SNAPSHOT_PATH = DEMO_DATA_DIR / "psymas_demo_evaluated_snapshot.zip"
 DEMO_AGENT_PRESET = ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"]
 

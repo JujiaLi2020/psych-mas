@@ -29,8 +29,22 @@ dependencies = [
     "uvicorn[standard]==0.49.0",
 ]
 
+[project.scripts]
+psymas = "psymas_cli:main"
+
 [tool.setuptools]
-py-modules = ["graph", "ui", "mmls"]
+py-modules = ["backend_service", "graph", "ui", "mmls", "psymas_cli"]
+
+[tool.setuptools.data-files]
+config = [
+    "config/b3_index_mapping.yaml",
+    "config/default_thresholds.yaml",
+    "config/index_thresholds.yaml",
+    "config/rulebook_index.csv",
+]
+data = ["data/psymas_demo_evaluated_snapshot.zip"]
+"data/sample" = ["data/sample/*.csv"]
+"data/upload" = ["data/upload/*.csv"]
 
 [tool.setuptools.packages.find]
-exclude = ["data", "R_Secmin"]
+exclude = ["config*", "data*", "tmp*", "R_Secmin*"]

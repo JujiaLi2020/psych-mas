@@ -89,14 +89,21 @@ from psymas_ui.llm import (
     call_ollama as _call_ollama,
     call_openrouter as _call_openrouter,
     call_selected_llm_text as _call_selected_llm_text,
+    clear_openrouter_api_key as _clear_openrouter_api_key,
+    configured_ollama_chat_url as _configured_ollama_chat_url,
+    configured_openrouter_api_key as _configured_openrouter_api_key,
     current_model_ids as _current_model_ids,
     current_model_options as _current_model_options,
     effective_llm_model as _effective_llm_model,
+    discover_ollama_models as _discover_ollama_models,
     llm_provider as _llm_provider,
     load_openrouter_model_options as _load_openrouter_model_options,
     model_settings_for_backend as _model_settings_for_backend,
     model_variants_with_selected_first as _model_variants_with_selected_first,
     preferred_llm_provider as _preferred_llm_provider,
+    persisted_llm_preferences as _persisted_llm_preferences,
+    save_llm_preferences as _save_llm_preferences,
+    save_openrouter_api_key as _save_openrouter_api_key,
     test_ollama_model as _test_ollama_model,
     test_openrouter_api_key as _test_openrouter_api_key,
     test_openrouter_model as _test_openrouter_model,
@@ -168,6 +175,42 @@ def _render_llm_settings() -> None:
     elif st.session_state.llm_provider == "openrouter":
         if "openrouter_api_key_test_result" not in st.session_state:
             st.session_state.openrouter_api_key_test_result = None
+        st.markdown("#### OpenRouter API key")
+        configured_key = _configured_openrouter_api_key()
+        if configured_key:
+            st.caption(f"Configured locally · key ending in `{configured_key[-4:]}`")
+        else:
+            st.caption("No API key is currently configured.")
+        with st.form("openrouter_api_key_form", clear_on_submit=True, border=False):
+            entered_key = st.text_input(
+                "API key",
+                type="password",
+                placeholder="sk-or-v1-...",
+                autocomplete="off",
+                help="Stored as a local configuration file in the persistent PsyMAS data directory and never included in exports.",
+            )
+            save_key, test_key = st.columns(2)
+            with save_key:
+                save_submitted = st.form_submit_button("Save key", use_container_width=True, type="primary")
+            with test_key:
+                test_submitted = st.form_submit_button("Test connection", use_container_width=True)
+        if save_submitted:
+            try:
+                _save_openrouter_api_key(entered_key)
+                st.session_state.openrouter_api_key_test_result = (True, "OpenRouter API key saved locally.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+        elif test_submitted:
+            key_to_test = entered_key.strip() or configured_key
+            ok, msg = _test_openrouter_api_key(key_to_test)
+            st.session_state.openrouter_api_key_test_result = (ok, msg)
+            st.rerun()
+        if configured_key and st.button("Remove saved key", key="remove_openrouter_api_key"):
+            _clear_openrouter_api_key()
+            st.session_state.openrouter_api_key_test_result = None
+            st.rerun()
+
         model_options_loaded, model_list_err, model_list_live = _load_openrouter_model_options()
         _ml_col1, _ml_col2 = st.columns([1, 2])
         with _ml_col1:
@@ -177,19 +220,13 @@ def _render_llm_settings() -> None:
                 st.rerun()
         with _ml_col2:
             st.caption(f"Curated list: {len(model_options_loaded):,} US models with price and recommended use.")
-        if st.button("Test API key", key="test_openrouter_api_key"):
-            load_dotenv()
-            key = os.getenv("OPENROUTER_API_KEY", "")
-            ok, msg = _test_openrouter_api_key(key)
-            st.session_state.openrouter_api_key_test_result = (ok, msg)
-            st.rerun()
         if st.session_state.openrouter_api_key_test_result is not None:
             ok, msg = st.session_state.openrouter_api_key_test_result
             if ok:
                 st.success(msg)
             else:
                 st.error(msg)
-        st.caption("OpenRouter models. Set OPENROUTER_API_KEY in .env for higher limits and private account access.")
+        st.caption("The key remains on this installation in a local configuration file. Protect access to the host data directory.")
     else:
         st.caption(f"Local Ollama endpoint: `{OLLAMA_CHAT_URL}`")
         st.caption("Install locally with `ollama pull llama3.1:8b` or `ollama pull llama3.3:70b`, then run `ollama serve`.")
@@ -1954,6 +1991,122 @@ def _active_threshold_config() -> dict:
 
 def _active_threshold_yaml() -> str:
     return yaml.safe_dump(_active_threshold_config(), sort_keys=False, allow_unicode=True)
+
+
+_THRESHOLD_VALUE_KEYS = ("alpha", "value", "thr", "nt", "outlier", "quantile")
+
+
+def _threshold_value_for_editor(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _threshold_editor_rows(config: dict | None = None) -> pd.DataFrame:
+    """Flatten detector thresholds into a compact CSV/editor-friendly table."""
+    config = config or _active_threshold_config()
+    rules = config.get("rules") if isinstance(config, dict) else {}
+    rows: list[dict] = []
+    for function_name, function_rules in (rules or {}).items():
+        if not isinstance(function_rules, dict):
+            continue
+        if "alpha" in function_rules:
+            rows.append(
+                {
+                    "Function": function_name,
+                    "Index": "All package indices",
+                    "Parameter": "alpha",
+                    "Value": _threshold_value_for_editor(function_rules.get("alpha")),
+                    "Enabled": True,
+                    "Operator": "p-value <=",
+                    "Calibration required": False,
+                    "Source": str(function_rules.get("source", "")),
+                }
+            )
+        for index_name, index_rules in function_rules.items():
+            if index_name in {"alpha", "source", "flag_methods"} or not isinstance(index_rules, dict):
+                continue
+            value_key = next((key for key in _THRESHOLD_VALUE_KEYS if key in index_rules), None)
+            if value_key is None:
+                continue
+            rows.append(
+                {
+                    "Function": function_name,
+                    "Index": index_name,
+                    "Parameter": value_key,
+                    "Value": _threshold_value_for_editor(index_rules.get(value_key)),
+                    "Enabled": bool(index_rules.get("enabled", True)),
+                    "Operator": str(index_rules.get("operator", "")),
+                    "Calibration required": bool(index_rules.get("requires_calibration", False)),
+                    "Source": str(index_rules.get("source", function_rules.get("source", ""))),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _parse_threshold_editor_value(raw_value: object, original: object) -> object:
+    text = "" if pd.isna(raw_value) else str(raw_value).strip()
+    if isinstance(original, list):
+        if not text:
+            return []
+        values = [part.strip() for part in text.split(",") if part.strip()]
+        exemplar = next((item for item in original if item is not None), None)
+        if isinstance(exemplar, int) and not isinstance(exemplar, bool):
+            return [int(float(item)) for item in values]
+        if isinstance(exemplar, float):
+            return [float(item) for item in values]
+        return values
+    if original is None:
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return text
+    if isinstance(original, int) and not isinstance(original, bool):
+        return int(float(text))
+    if isinstance(original, float):
+        return float(text)
+    return text
+
+
+def _threshold_config_from_editor(editor_df: pd.DataFrame, base_config: dict | None = None) -> dict:
+    """Merge edited/CSV threshold rows into a copy of the complete YAML profile."""
+    required = {"Function", "Index", "Parameter", "Value", "Enabled"}
+    if not isinstance(editor_df, pd.DataFrame) or not required.issubset(editor_df.columns):
+        missing = ", ".join(sorted(required.difference(getattr(editor_df, "columns", []))))
+        raise ValueError(f"Threshold CSV is missing required columns: {missing or 'unknown'}.")
+    config = json.loads(json.dumps(base_config or _active_threshold_config()))
+    rules = config.setdefault("rules", {})
+    for _, row in editor_df.iterrows():
+        function_name = str(row.get("Function", "")).strip()
+        index_name = str(row.get("Index", "")).strip()
+        parameter = str(row.get("Parameter", "")).strip()
+        if function_name not in rules or parameter not in _THRESHOLD_VALUE_KEYS:
+            raise ValueError(f"Unknown threshold setting: {function_name}.{index_name}.{parameter}.")
+        function_rules = rules[function_name]
+        if index_name == "All package indices":
+            if parameter not in function_rules:
+                raise ValueError(f"Unknown threshold setting: {function_name}.{parameter}.")
+            original = function_rules.get(parameter)
+            function_rules[parameter] = _parse_threshold_editor_value(row.get("Value"), original)
+            continue
+        if index_name not in function_rules or not isinstance(function_rules[index_name], dict):
+            raise ValueError(f"Unknown threshold index: {function_name}.{index_name}.")
+        index_rules = function_rules[index_name]
+        if parameter not in index_rules:
+            raise ValueError(f"Unknown threshold setting: {function_name}.{index_name}.{parameter}.")
+        original = index_rules.get(parameter)
+        index_rules[parameter] = _parse_threshold_editor_value(row.get("Value"), original)
+        enabled_value = row.get("Enabled", True)
+        if isinstance(enabled_value, str):
+            enabled_value = enabled_value.strip().lower() in {"1", "true", "yes", "enabled"}
+        index_rules["enabled"] = bool(enabled_value)
+    return config
 
 
 def _threshold_registry_rows(config: dict | None = None) -> list[dict]:
@@ -17176,42 +17329,415 @@ def _render_audit_page() -> None:
     )
 
 
-def _render_configuration_page() -> None:
-    _render_data_run_storage_manager()
-    st.divider()
-    _render_llm_settings()
-    st.divider()
-    st.markdown("#### Threshold profile")
-    left, right = st.columns(2)
-    with left:
-        st.download_button(
-            "Download Default Thresholds",
-            data=_default_threshold_yaml().encode("utf-8"),
-            file_name="psymas_thresholds.default.yaml",
-            mime="text/yaml",
-            use_container_width=True,
-            key="configuration_default_thresholds",
+def _render_flexible_llm_settings() -> None:
+    """Provider-specific model settings that remain editable after setup."""
+    load_dotenv()
+    preferences = _persisted_llm_preferences()
+    curated_openrouter_ids = [model_id for _, model_id in OPENROUTER_FREE_MODELS]
+
+    st.markdown(
+        """
+        <div class="psymas-model-note">
+          Provider and model choices are independent. Switching providers preserves
+          both selections, so you can return later without reconfiguring the model.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if st.session_state.get("llm_provider") not in {"openrouter", "local_ollama"}:
+        st.session_state["llm_provider"] = preferences["provider"]
+    provider = st.segmented_control(
+        "Active provider",
+        options=["openrouter", "local_ollama"],
+        format_func=lambda value: "OpenRouter · hosted" if value == "openrouter" else "Local Ollama · private",
+        key="llm_provider",
+        help="Changing provider does not erase the model saved for the other provider.",
+    ) or st.session_state["llm_provider"]
+
+    saved_openrouter = (
+        st.session_state.get("openrouter_selected_model")
+        or preferences["openrouter_model_id"]
+        or curated_openrouter_ids[0]
+    )
+    saved_ollama = (
+        st.session_state.get("ollama_selected_model")
+        or preferences["ollama_model_id"]
+        or LOCAL_OLLAMA_MODEL_IDS[0]
+    )
+
+    if provider == "openrouter":
+        st.markdown("#### OpenRouter connection")
+        configured_key = _configured_openrouter_api_key()
+        key_status = f"Configured locally · ending in `{configured_key[-4:]}`" if configured_key else "No API key saved"
+        st.caption(key_status)
+        with st.form("openrouter_api_key_form_v2", clear_on_submit=True, border=False):
+            entered_key = st.text_input(
+                "API key",
+                type="password",
+                placeholder="sk-or-v1-...",
+                autocomplete="off",
+                help="Saved only in the local persistent PsyMAS data directory.",
+            )
+            key_save_col, key_test_col = st.columns(2)
+            with key_save_col:
+                save_key = st.form_submit_button("Save key", type="primary", use_container_width=True)
+            with key_test_col:
+                test_key = st.form_submit_button("Test connection", use_container_width=True)
+        if save_key:
+            try:
+                _save_openrouter_api_key(entered_key)
+                st.session_state["llm_connection_result"] = (True, "OpenRouter API key saved locally.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+        if test_key:
+            ok, message = _test_openrouter_api_key(entered_key.strip() or configured_key)
+            st.session_state["llm_connection_result"] = (ok, message)
+        if configured_key and st.button("Remove saved key", key="remove_openrouter_api_key_v2"):
+            _clear_openrouter_api_key()
+            st.session_state["llm_connection_result"] = (True, "Saved OpenRouter key removed.")
+            st.rerun()
+
+        source_default = "Curated models" if saved_openrouter in curated_openrouter_ids else "Custom model ID"
+        source = st.radio(
+            "Model source",
+            ["Curated models", "Custom model ID"],
+            index=0 if source_default == "Curated models" else 1,
+            horizontal=True,
+            key="openrouter_model_source",
         )
-    with right:
-        st.download_button(
-            "Download Active Thresholds",
-            data=_active_threshold_yaml().encode("utf-8"),
-            file_name="psymas_thresholds.active.yaml",
-            mime="text/yaml",
-            use_container_width=True,
-            key="configuration_active_thresholds",
+        if source == "Curated models":
+            selected_openrouter = st.selectbox(
+                "OpenRouter model",
+                curated_openrouter_ids,
+                index=curated_openrouter_ids.index(saved_openrouter) if saved_openrouter in curated_openrouter_ids else 0,
+                format_func=lambda model_id: next(label for label, value in OPENROUTER_FREE_MODELS if value == model_id),
+                key="openrouter_curated_model",
+            )
+        else:
+            selected_openrouter = st.text_input(
+                "OpenRouter model ID",
+                value=saved_openrouter if saved_openrouter not in curated_openrouter_ids else "",
+                placeholder="provider/model-name",
+                key="openrouter_custom_model",
+                help="Use the exact model slug shown in the OpenRouter catalog.",
+            ).strip()
+        if selected_openrouter:
+            st.session_state["openrouter_selected_model"] = selected_openrouter
+        st.caption(f"Active candidate: `{selected_openrouter or 'enter a model ID'}`")
+    else:
+        st.markdown("#### Local Ollama connection")
+        ollama_url = st.text_input(
+            "Ollama chat endpoint",
+            value=preferences["ollama_chat_url"] or _configured_ollama_chat_url(),
+            placeholder="http://localhost:11434/api/chat",
+            key="ollama_chat_url_editor",
+        ).strip()
+        discover_col, guidance_col = st.columns([1, 2])
+        with discover_col:
+            discover = st.button("Discover installed models", key="discover_ollama_models", use_container_width=True)
+        with guidance_col:
+            st.caption("Queries the Ollama `/api/tags` endpoint; models stay on the configured server.")
+        if discover:
+            models, error = _discover_ollama_models(ollama_url)
+            st.session_state["ollama_discovered_models"] = models
+            st.session_state["ollama_discovery_error"] = error
+        discovered = st.session_state.get("ollama_discovered_models") or []
+        if st.session_state.get("ollama_discovery_error"):
+            st.warning(st.session_state["ollama_discovery_error"])
+        elif discovered:
+            st.success(f"Found {len(discovered):,} installed model(s).")
+        local_options = list(dict.fromkeys(discovered + [saved_ollama] + list(LOCAL_OLLAMA_MODEL_IDS)))
+        source = st.radio(
+            "Model source",
+            ["Available/recommended models", "Custom model name"],
+            horizontal=True,
+            key="ollama_model_source",
         )
-    uploaded = st.file_uploader("Upload threshold YAML", type=["yaml", "yml"], key="configuration_threshold_upload")
-    if uploaded is not None:
+        if source == "Available/recommended models":
+            selected_ollama = st.selectbox(
+                "Local model",
+                local_options,
+                index=local_options.index(saved_ollama) if saved_ollama in local_options else 0,
+                key="ollama_model_picker",
+            )
+        else:
+            selected_ollama = st.text_input(
+                "Ollama model name",
+                value=saved_ollama,
+                placeholder="llama3.1:8b",
+                key="ollama_custom_model",
+                help="Enter the exact name returned by `ollama list`.",
+            ).strip()
+        if selected_ollama:
+            st.session_state["ollama_selected_model"] = selected_ollama
+        st.caption(f"Active candidate: `{selected_ollama or 'enter a model name'}`")
+        selected_openrouter = saved_openrouter
+
+    selected_ollama = st.session_state.get("ollama_selected_model") or saved_ollama
+    selected_openrouter = st.session_state.get("openrouter_selected_model") or saved_openrouter
+    ollama_url = st.session_state.get("ollama_chat_url_editor") or preferences["ollama_chat_url"]
+
+    save_col, test_col = st.columns(2)
+    with save_col:
+        save_settings = st.button("Save provider & model settings", type="primary", key="save_llm_preferences", use_container_width=True)
+    with test_col:
+        test_model = st.button("Test selected model", key="test_selected_llm_model_v2", use_container_width=True)
+    if save_settings:
         try:
-            loaded = yaml.safe_load(uploaded.getvalue().decode("utf-8"))
-            if not isinstance(loaded, dict) or not isinstance(loaded.get("rules"), dict):
-                st.error("Threshold YAML must contain a top-level `rules` mapping.")
+            _save_llm_preferences(provider, selected_openrouter, selected_ollama, ollama_url)
+            st.session_state["selected_gemini_model"] = selected_openrouter if provider == "openrouter" else selected_ollama
+            st.session_state["pinned_llm_model"] = None
+            st.session_state["pinned_llm_provider"] = None
+            st.success("Provider and both model selections were saved for future sessions.")
+        except ValueError as exc:
+            st.error(str(exc))
+    if test_model:
+        with st.spinner("Testing selected model…"):
+            if provider == "openrouter":
+                ok, error, elapsed = _test_openrouter_model(_configured_openrouter_api_key(), selected_openrouter)
             else:
-                st.session_state["threshold_config"] = loaded
-                st.success("Threshold profile loaded for this session.")
-        except Exception as exc:
-            st.error(f"Could not parse threshold YAML: {exc}")
+                previous_url = os.environ.get("OLLAMA_CHAT_URL")
+                os.environ["OLLAMA_CHAT_URL"] = ollama_url
+                try:
+                    ok, error, elapsed = _test_ollama_model(selected_ollama)
+                finally:
+                    if previous_url is None:
+                        os.environ.pop("OLLAMA_CHAT_URL", None)
+                    else:
+                        os.environ["OLLAMA_CHAT_URL"] = previous_url
+            st.session_state["llm_connection_result"] = (
+                ok,
+                f"Model responded in {elapsed:.2f}s." if ok else f"Model test failed: {error}",
+            )
+    result = st.session_state.get("llm_connection_result")
+    if result:
+        (st.success if result[0] else st.error)(result[1])
+
+
+def _configuration_section_header(number: str, title: str, description: str) -> None:
+    st.markdown(
+        f"""
+        <div class="psymas-config-heading">
+          <span class="psymas-config-number">{html.escape(number)}</span>
+          <div>
+            <div class="psymas-config-title">{html.escape(title)}</div>
+            <div class="psymas-config-description">{html.escape(description)}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _activate_threshold_config(config: dict, message: str) -> None:
+    st.session_state["threshold_config"] = config
+    st.session_state["threshold_editor_revision"] = int(st.session_state.get("threshold_editor_revision", 0)) + 1
+    st.session_state["threshold_profile_message"] = message
+    st.session_state.pop("_governed_review_tables_cache", None)
+
+
+def _render_threshold_profile_settings() -> None:
+    active_config = _active_threshold_config()
+    editor_df = _threshold_editor_rows(active_config)
+    custom_active = bool(st.session_state.get("threshold_config"))
+    status_col, instruction_col = st.columns([1, 4], vertical_alignment="center")
+    with status_col:
+        st.markdown(f"**{'Custom profile' if custom_active else 'Default profile'}**")
+    with instruction_col:
+        st.caption("Edit values below, then apply them before starting the next Full Forensic Review.")
+
+    revision = int(st.session_state.get("threshold_editor_revision", 0))
+    edited_df = st.data_editor(
+        editor_df,
+        key=f"threshold_profile_editor_{revision}",
+        hide_index=True,
+        use_container_width=True,
+        height=min(410, 38 + max(1, len(editor_df)) * 35),
+        num_rows="fixed",
+        disabled=["Function", "Index", "Parameter", "Calibration required", "Source"],
+        column_config={
+            "Function": st.column_config.TextColumn(width="small"),
+            "Index": st.column_config.TextColumn(width="small"),
+            "Parameter": st.column_config.TextColumn(width="small"),
+            "Value": st.column_config.TextColumn(
+                width="medium",
+                help="Use a number, a named rule such as sample_quantile, or comma-separated values where shown.",
+            ),
+            "Enabled": st.column_config.CheckboxColumn(width="small"),
+            "Operator": st.column_config.TextColumn(width="small"),
+            "Calibration required": st.column_config.CheckboxColumn(width="small"),
+            "Source": st.column_config.TextColumn(width="large"),
+        },
+    )
+    apply_col, reset_col, csv_col = st.columns([1.2, 1, 1.2])
+    with apply_col:
+        if st.button("Apply Threshold Changes", key="apply_threshold_editor", type="primary", use_container_width=True):
+            try:
+                updated = _threshold_config_from_editor(pd.DataFrame(edited_df), active_config)
+                _activate_threshold_config(updated, "Threshold changes applied for the next forensic run.")
+                st.rerun()
+            except (TypeError, ValueError) as exc:
+                st.error(str(exc))
+    with reset_col:
+        if st.button("Restore Defaults", key="restore_default_thresholds", use_container_width=True):
+            st.session_state.pop("threshold_config", None)
+            st.session_state["threshold_editor_revision"] = revision + 1
+            st.session_state["threshold_profile_message"] = "Default threshold profile restored."
+            st.session_state.pop("_governed_review_tables_cache", None)
+            st.rerun()
+    with csv_col:
+        st.download_button(
+            "Download Threshold CSV",
+            data=_df_csv_bytes(editor_df),
+            file_name="psymas_thresholds.active.csv",
+            mime="text/csv",
+            key="configuration_active_threshold_csv",
+            use_container_width=True,
+        )
+    if st.session_state.get("threshold_profile_message"):
+        st.success(st.session_state.pop("threshold_profile_message"))
+
+    with st.expander("Import or export a threshold profile", expanded=False):
+        st.caption("CSV uses the editable table above. YAML preserves the complete governance and threshold structure.")
+        default_col, active_col = st.columns(2)
+        with default_col:
+            st.download_button(
+                "Download Default YAML",
+                data=_default_threshold_yaml().encode("utf-8"),
+                file_name="psymas_thresholds.default.yaml",
+                mime="text/yaml",
+                use_container_width=True,
+                key="configuration_default_thresholds",
+            )
+        with active_col:
+            st.download_button(
+                "Download Active YAML",
+                data=_active_threshold_yaml().encode("utf-8"),
+                file_name="psymas_thresholds.active.yaml",
+                mime="text/yaml",
+                use_container_width=True,
+                key="configuration_active_thresholds",
+            )
+        uploaded = st.file_uploader(
+            "Upload threshold CSV or YAML",
+            type=["csv", "yaml", "yml"],
+            key="configuration_threshold_upload",
+        )
+        if uploaded is not None:
+            try:
+                suffix = Path(uploaded.name).suffix.lower()
+                if suffix == ".csv":
+                    imported_df = pd.read_csv(io.BytesIO(uploaded.getvalue()))
+                    loaded = _threshold_config_from_editor(imported_df, active_config)
+                    import_label = "CSV"
+                else:
+                    loaded = yaml.safe_load(uploaded.getvalue().decode("utf-8"))
+                    if not isinstance(loaded, dict) or not isinstance(loaded.get("rules"), dict):
+                        raise ValueError("Threshold YAML must contain a top-level `rules` mapping.")
+                    import_label = "YAML"
+                st.caption(f"Ready to apply `{uploaded.name}` as the active threshold profile.")
+                if st.button("Apply Uploaded Profile", key="apply_uploaded_threshold_profile", type="primary"):
+                    _activate_threshold_config(loaded, f"Threshold {import_label} loaded for the next forensic run.")
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Could not read threshold profile: {exc}")
+
+
+def _render_configuration_page() -> None:
+    st.markdown(
+        """
+        <style>
+        /* Configuration is always rendered as a light surface.  Keep every
+           native Streamlit control readable even when the host theme is dark. */
+        main:has(.psymas-config-root) [data-testid="stWidgetLabel"],
+        main:has(.psymas-config-root) [data-testid="stWidgetLabel"] *,
+        main:has(.psymas-config-root) [data-testid="stCaptionContainer"],
+        main:has(.psymas-config-root) [data-testid="stCaptionContainer"] *,
+        main:has(.psymas-config-root) div[data-testid="stRadio"] label,
+        main:has(.psymas-config-root) div[data-testid="stRadio"] label * {
+          color:#26313D !important; -webkit-text-fill-color:#26313D !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stTextInput"] input,
+        main:has(.psymas-config-root) div[data-testid="stTextInput"] [data-baseweb="input"] {
+          background:#FFFFFF !important; color:#111827 !important; -webkit-text-fill-color:#111827 !important;
+          border-color:#9AA8B7 !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stTextInput"] input::placeholder {
+          color:#64748B !important; -webkit-text-fill-color:#64748B !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-baseweb="select"],
+        main:has(.psymas-config-root) div[data-baseweb="select"] > div,
+        main:has(.psymas-config-root) div[data-baseweb="select"] span,
+        main:has(.psymas-config-root) div[data-baseweb="select"] input {
+          background-color:#FFFFFF !important; color:#111827 !important;
+          -webkit-text-fill-color:#111827 !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button,
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button *,
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button,
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button *,
+        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button,
+        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button * {
+          background-color:#FFFFFF !important; color:#174E5F !important;
+          -webkit-text-fill-color:#174E5F !important; border-color:#7AA7B5 !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button[kind="primary"]:not(:disabled),
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button[kind="primary"]:not(:disabled) *,
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled),
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled) *,
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[kind="primary"]:not(:disabled),
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[kind="primary"]:not(:disabled) *,
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[data-testid*="baseButton-primary"]:not(:disabled),
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[data-testid*="baseButton-primary"]:not(:disabled) * {
+          background-color:#174E5F !important; color:#FFFFFF !important;
+          -webkit-text-fill-color:#FFFFFF !important; border-color:#174E5F !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button:disabled,
+        main:has(.psymas-config-root) div[data-testid="stButton"] > button:disabled *,
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button:disabled,
+        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button:disabled *,
+        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button:disabled,
+        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button:disabled * {
+          background-color:#E5E7EB !important; color:#374151 !important;
+          -webkit-text-fill-color:#374151 !important; border-color:#B8C2CE !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) details,
+        main:has(.psymas-config-root) details > summary,
+        main:has(.psymas-config-root) details > summary * {
+          background-color:#FFFFFF !important; color:#26313D !important;
+          -webkit-text-fill-color:#26313D !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"],
+        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] > div,
+        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] section {
+          background-color:#FFFFFF !important; color:#111827 !important; border-color:#7A8796 !important;
+        }
+        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] :where(p,small,span,div):not(button *) {
+          color:#111827 !important; -webkit-text-fill-color:#111827 !important; opacity:1 !important;
+        }
+        .psymas-config-heading {display:flex; align-items:flex-start; gap:.75rem; margin:.05rem 0 .8rem;}
+        .psymas-config-number {display:inline-flex; align-items:center; justify-content:center; width:1.8rem; height:1.8rem;
+          border-radius:50%; background:#174E5F; color:#FFFFFF !important; font-weight:700; font-size:.78rem; flex:0 0 auto;}
+        .psymas-config-title {color:#102A35 !important; font-weight:750; font-size:1.05rem; line-height:1.25;}
+        .psymas-config-description {color:#5C6875 !important; font-size:.84rem; line-height:1.4; margin-top:.12rem;}
+        .psymas-model-note {color:#334155 !important; background:#F0F8FA; border:1px solid #B8D8DF;
+          border-left:4px solid #0F7890; border-radius:8px; padding:.65rem .75rem; margin:0 0 .8rem; font-size:.84rem;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<span class="psymas-config-root" aria-hidden="true"></span>', unsafe_allow_html=True)
+    with st.container(border=True):
+        _configuration_section_header("1", "LLM", "Connect a hosted OpenRouter model or a local Ollama model for evidence-grounded reporting.")
+        _render_flexible_llm_settings()
+    with st.container(border=True):
+        _configuration_section_header("2", "Thresholds", "Adjust detector thresholds in the table or exchange the same profile as CSV or YAML.")
+        _render_threshold_profile_settings()
+    with st.container(border=True):
+        _configuration_section_header("3", "Data & Run", "Manage the SQLite run store, evaluated snapshots, and saved human-review records.")
+        _render_data_run_storage_manager()
 
     config_df = _table_df(_stage_table_options("Settings")[0]["records"])
     with st.expander("Configuration record", expanded=False):

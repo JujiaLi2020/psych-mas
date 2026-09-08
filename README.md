@@ -69,6 +69,43 @@ Example files are available in `data/sample/`.
 | `config/index_thresholds.yaml` | Index-level threshold configuration |
 | `.env.example` | Local environment template |
 
+## Install the `psymas` CLI
+
+Install an isolated command from a downloaded release or cloned repository:
+
+```bash
+uv tool install .
+```
+
+`pipx install .` is equivalent. For development, keep the command linked to the
+checkout with `uv tool install --editable .`.
+
+Verify the installation and launch the UI:
+
+```bash
+psymas --version
+psymas doctor
+psymas ui
+```
+
+If the analysis backend is already running elsewhere, pass its URL directly:
+
+```bash
+psymas ui --backend-url http://localhost:9000
+```
+
+On Linux or macOS with R and the required R packages installed, the backend can
+also be launched from the CLI:
+
+```bash
+psymas backend --port 9000
+```
+
+The R-backed backend is not installed on native Windows. On Windows, use the
+recommended Installer or run `docker compose up --build backend`, then start the
+installed UI with the `--backend-url` command above. Use `psymas --help` for all
+options.
+
 ## Windows Installation (Recommended)
 
 ### 1. Check the requirements
@@ -190,7 +227,9 @@ PsyMAS supports OpenRouter hosted models and local Ollama models. Choose one opt
 
 ### 1. OpenRouter
 
-Add the key to `.env`:
+Open **Configuration**, choose **OpenRouter**, enter the API key, and select **Save key**. Choose a curated model or enter any valid OpenRouter model ID, then use **Test selected model**. The key is stored locally in the persistent PsyMAS data directory and is not included in exports.
+
+For unattended deployments, the key can instead be added to `.env`:
 
 ```env
 OPENROUTER_API_KEY=your_key_here
@@ -204,6 +243,12 @@ Install Ollama, download a supported model, and start the service:
 ollama pull llama3.1:8b
 ollama serve
 ```
+
+In **Configuration**, set the Ollama chat endpoint and select **Discover installed
+models**, or enter an exact model name manually. PsyMAS stores separate model
+choices for OpenRouter and Ollama, so switching providers does not discard the
+other provider's selection. Select **Save provider & model settings** to retain
+the choices across restarts.
 
 When both PsyMAS services run in Docker on Windows or macOS, add this to `.env`:
 
@@ -250,6 +295,7 @@ The runnable entry points remain stable while implementation details are split i
 PsyMAS
 ├── ui.py                    Streamlit entry point and page composition
 ├── backend_service.py       FastAPI jobs and R-backed analysis endpoints
+├── psymas_cli.py            Installed `psymas` command
 ├── graph.py                 Deterministic and IRT node implementations
 ├── psymas_graph/            Shared graph state and workflow topology
 ├── psymas_ui/               UI services, evidence logic, exports, and storage
@@ -267,9 +313,10 @@ PsyMAS
 | --- | --- |
 | `ui.py` | Initializes Streamlit, manages session-level page routing, and composes the Data, Evidence, AI Review, Human Review, Record, Research Tools, and Configuration views. It imports reusable behavior from `psymas_ui/`. |
 | `backend_service.py` | FastAPI service for health checks, asynchronous IRT jobs, and deterministic detection jobs. It coordinates Python/R execution for the UI. |
+| `psymas_cli.py` | Implements the installed `psymas ui`, `psymas backend`, and `psymas doctor` commands. |
 | `graph.py` | Implements IRT, detector, manager, synthesizer, and reporter nodes. It exports `psych_workflow`, `forensic_workflow`, and `app` for existing callers. Shared state, topology, thresholds, serialization, and RT plotting are imported from `psymas_graph/`. |
 | `mmls.py` | Defines the curated OpenRouter and local Ollama model catalog, display labels, pricing notes, and recommended uses. |
-| `main.py` | Minimal command-line placeholder retained for package/tool compatibility; it is not the Streamlit entry point. |
+| `main.py` | Legacy placeholder retained for compatibility; the installed CLI entry point is `psymas_cli.py`. |
 
 ### `psymas_graph/`
 
