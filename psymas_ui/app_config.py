@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-APP_VERSION = "0.7.5"
+APP_VERSION = "0.7.6"
 
 PSYMAS_VIZ = {
     "ink": "#0F172A",

@@ -34,7 +34,7 @@ function Start-DockerDesktop {
     if ($desktop) { Start-Process $desktop }
 }
 
-Write-Host "PsyMAS v0.7.5 Setup" -ForegroundColor White
+Write-Host "PsyMAS v0.7.6 Setup" -ForegroundColor White
 Write-Host "This installer keeps assessment and review data in $RunDataPath."
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -70,7 +70,7 @@ if (-not (Test-DockerReady)) {
 New-Item -ItemType Directory -Force -Path $RunDataPath | Out-Null
 $dockerDataPath = $RunDataPath.Replace('\', '/')
 $settings = [ordered]@{
-    PSYMAS_IMAGE_TAG = "0.7.5"
+    PSYMAS_IMAGE_TAG = "0.7.6"
     PSYMAS_DATA_DIR = $dockerDataPath
     OPENROUTER_API_KEY = ""
 }
@@ -82,7 +82,7 @@ if (Test-Path $EnvFile) {
 }
 # An upgrade may reuse the existing .env, but the application image must match
 # the installer version. User-managed data paths and LLM settings remain intact.
-$settings.PSYMAS_IMAGE_TAG = "0.7.5"
+$settings.PSYMAS_IMAGE_TAG = "0.7.6"
 
 if (-not $SkipLlmSetup) {
     Write-Step "Configure optional AI-assisted reporting"

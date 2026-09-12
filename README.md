@@ -1,4 +1,4 @@
-# PsyMAS Workbench (v0.7.5)
+# PsyMAS Workbench (v0.7.6)
 
 PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic aberrance-detection routines, rulebook-based evidence governance, AI-assisted case explanation, and human review records.
 
@@ -84,16 +84,31 @@ repository:
 uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@main"
 ```
 
-The existing `v0.7.5` tag predates the CLI and must not be used for CLI
-installation. After a newer CLI-enabled release is published, replace `main`
-with its tag to obtain a reproducible installation, for example `@v0.7.6`.
+For a reproducible installation, install the CLI-enabled v0.7.6 release:
 
-Verify the installation and launch the UI:
+```bash
+uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.6"
+```
+
+Verify the installation and launch the complete UI + analysis backend stack:
 
 ```bash
 psymas --version
 psymas doctor
-psymas ui
+psymas start
+```
+
+`psymas start` checks Docker, downloads the versioned PsyMAS image, starts the
+UI and R-backed analysis backend, waits for the application to become healthy,
+and opens it at `http://localhost:8501`. No repository clone or separate R
+installation is required. The lifecycle commands below use the same persistent
+data directory:
+
+```bash
+psymas status
+psymas logs --follow
+psymas restart
+psymas stop
 ```
 
 If your shell cannot find `psymas`, run `uv tool update-shell`, restart the
@@ -135,10 +150,10 @@ Remove the CLI with:
 uv tool uninstall psych-mas
 ```
 
-### Connect the UI to the analysis backend
+### Advanced: run UI and backend separately
 
-The CLI launches the UI independently of the analysis backend. If a backend is
-already running, pass its URL directly:
+Most users should use `psymas start`. For development, the UI can instead
+connect to an independently running backend:
 
 ```bash
 psymas ui --backend-url http://localhost:9000
@@ -151,14 +166,8 @@ also be launched from the CLI:
 psymas backend --port 9000
 ```
 
-The R-backed backend is not installed on native Windows. On Windows, use the
-recommended Installer for the complete application. Alternatively, clone the
-repository and run the backend with Docker:
-
-```powershell
-docker compose up --build backend
-psymas ui --backend-url http://localhost:9000
-```
+The native R-backed backend is not installed on Windows; use the unified
+Docker-based `psymas start` command or the Windows Installer there.
 
 Use `psymas --help` for all available commands and options.
 
@@ -174,15 +183,15 @@ The installer uses Docker Desktop to provide the Python and R environment. Docke
 
 ### 2. Download the installer
 
-Download `PsyMAS-Setup-Windows-v0.7.5.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.5) and run it. Windows may ask you to confirm software downloaded from the internet.
+Download `PsyMAS-Setup-Windows-v0.7.6.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.6) and run it. Windows may ask you to confirm software downloaded from the internet.
 
 Optional integrity check in PowerShell:
 
 ```powershell
-Get-FileHash .\PsyMAS-Setup-Windows-v0.7.5.exe -Algorithm SHA256
+Get-FileHash .\PsyMAS-Setup-Windows-v0.7.6.exe -Algorithm SHA256
 ```
 
-Expected SHA-256: `871f58eca5157917c267b51c9625415c958fc43619aa70b1c96d2a8579540e07`. The same value is provided in the `.sha256` Release asset.
+Compare the result with the `.sha256` file attached to the same GitHub Release.
 
 ### 3. Complete the guided setup
 
@@ -199,12 +208,12 @@ The installer adds Start, Stop, and Configure PsyMAS AI shortcuts. Assessment an
 
 Install Docker Desktop with Docker Compose v2, start it, and wait until the Docker engine is running.
 
-### 2. Download PsyMAS v0.7.5
+### 2. Download PsyMAS v0.7.6
 
 ```bash
 git clone https://github.com/JujiaLi2020/psych-mas.git
 cd psych-mas
-git switch --detach v0.7.5
+git switch --detach v0.7.6
 ```
 
 ### 3. Create the environment file

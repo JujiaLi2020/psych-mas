@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psych-mas"
-version = "0.7.5"
+version = "0.7.6"
 description = "Human-in-the-loop evidence governance for psychometric forensics"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,6 +36,7 @@ psymas = "psymas_cli:main"
 py-modules = ["backend_service", "graph", "ui", "mmls", "psymas_cli"]
 
 [tool.setuptools.data-files]
+"." = ["docker-compose.release.yml"]
 config = [
     "config/b3_index_mapping.yaml",
     "config/default_thresholds.yaml",
@@ -47,4 +48,4 @@ data = ["data/psymas_demo_evaluated_snapshot.zip"]
 "data/upload" = ["data/upload/*.csv"]
 
 [tool.setuptools.packages.find]
-exclude = ["config*", "data*", "tmp*", "R_Secmin*"]
+exclude = ["build*", "config*", "data*", "dist*", "tmp*", "R_Secmin*"]
