@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy app files needed for R and Python install
 COPY packages.txt install_r_packages.R r_packages.txt ./
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md docker-compose.release.yml ./
 COPY graph.py ui.py main.py mmls.py backend_service.py ./
 COPY psymas_ui psymas_ui
 COPY psymas_graph psymas_graph
