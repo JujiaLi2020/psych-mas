@@ -6,7 +6,7 @@ The system treats statistical flags as review triggers. It does not determine mi
 
 ## What Is Included
 
-This is a clean runnable distribution. It keeps only the files needed to run the app and the bundled demo:
+This is a lastest runnable distribution. It keeps only the files needed to run the app and the bundled demo:
 
 - Streamlit entry point and page composition: `ui.py`
 - FastAPI backend: `backend_service.py`
@@ -17,7 +17,6 @@ This is a clean runnable distribution. It keeps only the files needed to run the
 - sample/demo data: `data/`
 - Docker and dependency files
 
-Manuscripts, screenshots, literature PDFs, old backups, tests, and temporary research exports have been removed from this clean copy.
 
 ## Workflow
 
