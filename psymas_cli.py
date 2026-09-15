@@ -13,7 +13,7 @@ import webbrowser
 from pathlib import Path
 
 
-VERSION = "0.7.6"
+VERSION = "0.7.7"
 COMPOSE_PROJECT = "psymas-cli"
 
 

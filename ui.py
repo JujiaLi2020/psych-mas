@@ -8,6 +8,7 @@ the UI reads the two files and passes them as initial state into the graph.
 import warnings
 import html
 import importlib
+import hashlib
 
 # Suppress rpy2 "R is not initialized by the main thread" warning (harmless in cloud/Streamlit)
 warnings.filterwarnings("ignore", message=".*main thread.*")
@@ -11781,6 +11782,48 @@ def _collect_snapshot_session_inputs() -> dict:
     return payload
 
 
+def _snapshot_json_sha256(value: object) -> str:
+    """Hash a JSON-serializable input payload for snapshot provenance."""
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _snapshot_input_provenance() -> dict:
+    """Record the source and hashes of inputs used by the saved run."""
+    state_keys = {
+        "responses": "last_uploaded_responses",
+        "response_times": "last_uploaded_rt_data",
+        "item_parameters": "last_irt_item_params",
+        "person_parameters": "forensic_person_params",
+        "answer_changes": "prep_answer_changes",
+        "compromised_items": "prep_compromised_items",
+    }
+    provenance: dict[str, object] = {
+        "item_parameter_source": "simulation_metadata" if st.session_state.get("demo_data_loaded") else (
+            "uploaded_file" if st.session_state.get("prep_item_params_file_name") else "mirt_fallback_or_unknown"
+        ),
+        "item_parameter_estimation": "not_reestimated_in_saved_demo_run" if st.session_state.get("demo_data_loaded") else "estimated_only_when_no_item_parameter_file_is_supplied",
+        "person_parameter_source": "mirt_when_irt_preparation_runs; provenance_recorded_if_available",
+        "generation_script": "reproducibility/generate_psymas_data.R",
+        "seed": 2026,
+        "input_hashes": {},
+    }
+    for label, key in state_keys.items():
+        value = st.session_state.get(key)
+        if value:
+            provenance["input_hashes"][label] = {
+                "kind": "canonical_session_payload",
+                "sha256": _snapshot_json_sha256(value),
+            }
+    source = st.session_state.get("demo_data_source")
+    provenance["source_data"] = {
+        "path": str(source) if source else "not_recorded",
+        "archived_in_snapshot": False,
+        "note": "The evaluated snapshot stores processed session inputs and SQLite outputs; archive response_long.csv separately for full regeneration.",
+    }
+    return provenance
+
+
 def _build_evaluated_snapshot_bytes() -> bytes | None:
     """Package integrated run DB + inputs for demo skip-rerun workflow."""
     if not st.session_state.get("forensic_result"):
@@ -11802,12 +11845,14 @@ def _build_evaluated_snapshot_bytes() -> bytes | None:
         return None
 
     manifest = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
+        "software_version": APP_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_id": run_id,
         "scenario": st.session_state.get("ab_only_scenario_select", "C"),
         "detect_agents": st.session_state.get("last_detect_agents") or [],
         "n_examinees": len(st.session_state.get("last_uploaded_responses") or []),
+        "reproducibility": _snapshot_input_provenance(),
     }
     return pack_snapshot(
         store_path=store.db_path,

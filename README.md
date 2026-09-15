@@ -1,4 +1,4 @@
-# PsyMAS Workbench (v0.7.6)
+# PsyMAS Workbench (v0.7.7)
 
 PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic aberrance-detection routines, rulebook-based evidence governance, AI-assisted case explanation, and human review records.
 
@@ -44,6 +44,16 @@ The Demo scenario loads bundled simulated data and the evaluated run snapshot so
 
 The application creates `data/output/psymas_run.sqlite` and export files locally at runtime. These generated records may contain review decisions and are excluded from version control. The bundled evaluated snapshot contains the reproducible demonstration state used by the Demo scenario.
 
+## Reproducibility Capsule
+
+The worked-example generation record is kept in `reproducibility/`:
+
+1. `generate_psymas_data.R` records the semi-simulation design and fixed seed (`2026`).
+2. `demo_manifest.json` records the saved run, parameter provenance, software version, and SHA-256 values.
+3. `data/psymas_demo_evaluated_snapshot.zip` restores the evaluated demonstration without rerunning the detectors.
+
+The saved Demo run used item parameters derived from simulation metadata. If `item_params.csv` is not supplied in a new run, PsyMAS estimates item parameters with `mirt` as a fallback. The snapshot does not contain the original `response_long.csv`; archive that source table and the auxiliary truth tables with the capsule when independent regeneration is required.
+
 ## Input Files
 
 Only `responses.csv` is required to start. Optional files enable additional evidence:
@@ -83,10 +93,10 @@ repository:
 uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@main"
 ```
 
-For a reproducible installation, install the CLI-enabled v0.7.6 release:
+For a reproducible installation, install the CLI-enabled v0.7.7 release:
 
 ```bash
-uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.6"
+uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.7"
 ```
 
 Verify the installation and launch the complete UI + analysis backend stack:
@@ -182,12 +192,12 @@ The installer uses Docker Desktop to provide the Python and R environment. Docke
 
 ### 2. Download the installer
 
-Download `PsyMAS-Setup-Windows-v0.7.6.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.6) and run it. Windows may ask you to confirm software downloaded from the internet.
+Download `PsyMAS-Setup-Windows-v0.7.7.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.7) and run it. Windows may ask you to confirm software downloaded from the internet.
 
 Optional integrity check in PowerShell:
 
 ```powershell
-Get-FileHash .\PsyMAS-Setup-Windows-v0.7.6.exe -Algorithm SHA256
+Get-FileHash .\PsyMAS-Setup-Windows-v0.7.7.exe -Algorithm SHA256
 ```
 
 Compare the result with the `.sha256` file attached to the same GitHub Release.
@@ -207,12 +217,12 @@ The installer adds Start, Stop, and Configure PsyMAS AI shortcuts. Assessment an
 
 Install Docker Desktop with Docker Compose v2, start it, and wait until the Docker engine is running.
 
-### 2. Download PsyMAS v0.7.6
+### 2. Download PsyMAS v0.7.7
 
 ```bash
 git clone https://github.com/JujiaLi2020/psych-mas.git
 cd psych-mas
-git switch --detach v0.7.6
+git switch --detach v0.7.7
 ```
 
 ### 3. Create the environment file
