@@ -10,7 +10,7 @@ Choose one method.
 
 1. Install and start [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 2. Download `PsyMAS-Setup-Windows-v0.7.7.exe` from the [v0.7.7 release](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.7).
-3. Run the installer.
+3. Run the installer. When prompted, choose OpenRouter, No AI, or Local Ollama.
 4. Open `http://localhost:8501`.
 
 Windows 10/11, Docker Desktop, 8 GB RAM, and 5-10 GB free disk space are recommended.
@@ -76,7 +76,7 @@ Sample files and downloadable templates are in `data/sample/` and the Data page.
 
 ## LLM Configuration
 
-LLM support is optional. In **Configuration**, choose OpenRouter and enter an API key, choose Local Ollama for an installed local model, or choose No LLM. For Ollama:
+LLM support is optional. The installer can install Ollama and download the default `llama3.1:8b` model when Local Ollama is selected. In **Configuration**, users can later change the provider, endpoint, and model. Choose OpenRouter and enter an API key, choose Local Ollama, or choose No LLM. For manual Ollama setup:
 
 ```bash
 ollama pull llama3.1:8b

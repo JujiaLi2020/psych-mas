@@ -34,6 +34,44 @@ function Start-DockerDesktop {
     if ($desktop) { Start-Process $desktop }
 }
 
+function Refresh-UserPath {
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+function Install-OllamaIfNeeded {
+    if (Get-Command ollama -ErrorAction SilentlyContinue) { return $true }
+
+    $answer = Read-Host "Ollama is not installed. Install it automatically with winget? [Y/n]"
+    if ($answer -and $answer -notmatch '^[Yy]') {
+        Start-Process "https://ollama.com/download/windows"
+        Write-Warning "Install Ollama, then run Configure PsyMAS AI from the Start menu."
+        return $false
+    }
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Start-Process "https://ollama.com/download/windows"
+        Write-Warning "Windows Package Manager is unavailable. Install Ollama manually, then configure it later."
+        return $false
+    }
+    & winget install --exact --id Ollama.Ollama --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Ollama installation did not complete. Configure it later from the PsyMAS settings."
+        return $false
+    }
+    Refresh-UserPath
+    return [bool](Get-Command ollama -ErrorAction SilentlyContinue)
+}
+
+function Ensure-OllamaModel([string]$ModelName) {
+    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { return $false }
+    Write-Step "Downloading local model $ModelName"
+    & ollama pull $ModelName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "The model could not be downloaded. You can run 'ollama pull $ModelName' later."
+        return $false
+    }
+    return $true
+}
+
 Write-Host "PsyMAS v0.7.7 Setup" -ForegroundColor White
 Write-Host "This installer keeps assessment and review data in $RunDataPath."
 
@@ -73,6 +111,9 @@ $settings = [ordered]@{
     PSYMAS_IMAGE_TAG = "0.7.7"
     PSYMAS_DATA_DIR = $dockerDataPath
     OPENROUTER_API_KEY = ""
+    PSYMAS_LLM_PROVIDER = "openrouter"
+    PSYMAS_OPENROUTER_MODEL_ID = "openai/gpt-4o-mini"
+    PSYMAS_OLLAMA_MODEL_ID = "llama3.1:8b"
 }
 
 if (Test-Path $EnvFile) {
@@ -94,18 +135,24 @@ if (-not $SkipLlmSetup) {
 
     switch ($choice) {
         "1" {
+            $settings.PSYMAS_LLM_PROVIDER = "openrouter"
             $key = Read-Host "Enter your OpenRouter API key, or press Enter to configure it later"
             $settings.OPENROUTER_API_KEY = $key.Trim()
             $settings.Remove("OLLAMA_CHAT_URL")
         }
         "3" {
             $settings.OPENROUTER_API_KEY = ""
+            $settings.PSYMAS_LLM_PROVIDER = "local_ollama"
+            $settings.PSYMAS_OLLAMA_MODEL_ID = "llama3.1:8b"
             $settings.OLLAMA_CHAT_URL = "http://host.docker.internal:11434/api/chat"
-            Write-Host "Install Ollama separately, run 'ollama pull llama3.1:8b', and keep Ollama running."
-            Start-Process "https://ollama.com/download/windows"
+            if (Install-OllamaIfNeeded) {
+                Ensure-OllamaModel $settings.PSYMAS_OLLAMA_MODEL_ID | Out-Null
+                Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+            }
         }
         default {
             $settings.OPENROUTER_API_KEY = ""
+            $settings.PSYMAS_LLM_PROVIDER = "openrouter"
             $settings.Remove("OLLAMA_CHAT_URL")
         }
     }

@@ -205,6 +205,19 @@ def discover_ollama_models(chat_url: str | None = None, timeout: int = 10) -> tu
         return [], f"{type(exc).__name__}: {exc}"
 
 
+def pull_ollama_model(model_id: str = "llama3.1:8b", chat_url: str | None = None, timeout: int = 900) -> tuple[bool, str]:
+    """Pull a model from a reachable Ollama server."""
+    model_id = str(model_id or "").strip()
+    endpoint = str(chat_url or configured_ollama_chat_url()).strip().rstrip("/")
+    base = endpoint[:-9] if endpoint.endswith("/api/chat") else endpoint
+    try:
+        response = requests.post(f"{base}/api/pull", json={"name": model_id, "stream": False}, timeout=timeout)
+        response.raise_for_status()
+        return True, f"Ollama model '{model_id}' is ready."
+    except requests.exceptions.RequestException as exc:
+        return False, f"Could not download '{model_id}' from Ollama: {exc}"
+
+
 def test_openrouter_model(api_key: str, model_id: str, timeout: int = 20) -> tuple[bool, str | None, float]:
     """Test one OpenRouter model with a minimal message."""
     t0 = time.perf_counter()

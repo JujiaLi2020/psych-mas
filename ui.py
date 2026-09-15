@@ -97,6 +97,7 @@ from psymas_ui.llm import (
     current_model_options as _current_model_options,
     effective_llm_model as _effective_llm_model,
     discover_ollama_models as _discover_ollama_models,
+    pull_ollama_model as _pull_ollama_model,
     llm_provider as _llm_provider,
     load_openrouter_model_options as _load_openrouter_model_options,
     model_settings_for_backend as _model_settings_for_backend,
@@ -17390,6 +17391,15 @@ def _render_flexible_llm_settings() -> None:
         unsafe_allow_html=True,
     )
 
+    st.info(
+        "LLM support is optional. PsyMAS can run indices, evidence governance, and human review without an AI provider. "
+        "Use an online API for the simplest setup, or Ollama for local model execution."
+    )
+    st.markdown("#### Choose an AI connection")
+    provider_help = {
+        "openrouter": "Online API: requires your own API key. The key is stored locally and is not included in exports.",
+        "local_ollama": "Local model: requires Ollama and a downloaded model on this computer.",
+    }
     if st.session_state.get("llm_provider") not in {"openrouter", "local_ollama"}:
         st.session_state["llm_provider"] = preferences["provider"]
     provider = st.segmented_control(
@@ -17399,6 +17409,7 @@ def _render_flexible_llm_settings() -> None:
         key="llm_provider",
         help="Changing provider does not erase the model saved for the other provider.",
     ) or st.session_state["llm_provider"]
+    st.caption(provider_help.get(provider, ""))
 
     saved_openrouter = (
         st.session_state.get("openrouter_selected_model")
@@ -17413,6 +17424,26 @@ def _render_flexible_llm_settings() -> None:
 
     if provider == "openrouter":
         st.markdown("#### OpenRouter connection")
+        st.markdown(
+            "**How to get an API key**  "
+            "1. Create an account or sign in.  "
+            "2. Open **Keys** and create a key.  "
+            "3. Paste it below, save it, and test the connection."
+        )
+        st.link_button(
+            "Get an OpenRouter API key",
+            "https://openrouter.ai/keys",
+            help="Opens the official OpenRouter key page in a new browser tab.",
+        )
+        st.caption("You can set a spending limit in OpenRouter. Free models may have rate and availability limits.")
+        with st.expander("CLI setup", expanded=False):
+            st.markdown("Set the key for the current PowerShell session, then start PsyMAS:")
+            st.code(
+                '$env:OPENROUTER_API_KEY = "sk-or-v1-..."\n'
+                'psymas start',
+                language="powershell",
+            )
+            st.caption("For persistent configuration, add the key to `.env` as `OPENROUTER_API_KEY=...`. Never commit `.env`.")
         configured_key = _configured_openrouter_api_key()
         key_status = f"Configured locally · ending in `{configured_key[-4:]}`" if configured_key else "No API key saved"
         st.caption(key_status)
@@ -17473,12 +17504,48 @@ def _render_flexible_llm_settings() -> None:
         st.caption(f"Active candidate: `{selected_openrouter or 'enter a model ID'}`")
     else:
         st.markdown("#### Local Ollama connection")
+        st.markdown(
+            "**Local setup**  "
+            "1. Install Ollama.  "
+            "2. Start Ollama.  "
+            "3. Download a model such as `llama3.1:8b`.  "
+            "4. Use the buttons below to check or discover it."
+        )
+        install_col, model_col = st.columns(2)
+        with install_col:
+            st.link_button(
+                "Install Ollama",
+                "https://ollama.com/download",
+                use_container_width=True,
+                help="Opens the official Ollama download page. A browser session cannot install software on the host computer directly.",
+            )
+        with model_col:
+            pull_default = st.button(
+                "Download Llama 3.1 8B",
+                key="pull_default_ollama_model",
+                use_container_width=True,
+                help="Downloads llama3.1:8b from the configured Ollama server.",
+            )
+        st.caption("For Docker on Windows or macOS, the endpoint is usually `http://host.docker.internal:11434/api/chat`. The model must be installed on the host computer.")
+        with st.expander("CLI setup", expanded=False):
+            st.markdown("Install Ollama from the official installer, then run these commands:")
+            st.code(
+                'ollama serve\n'
+                'ollama pull llama3.1:8b\n'
+                'ollama list',
+                language="powershell",
+            )
+            st.caption("When PsyMAS runs in Docker, set the endpoint to `http://host.docker.internal:11434/api/chat`. In native mode, use `http://localhost:11434/api/chat`.")
         ollama_url = st.text_input(
             "Ollama chat endpoint",
             value=preferences["ollama_chat_url"] or _configured_ollama_chat_url(),
             placeholder="http://localhost:11434/api/chat",
             key="ollama_chat_url_editor",
         ).strip()
+        if pull_default:
+            with st.spinner("Downloading llama3.1:8b from Ollama…"):
+                ok, message = _pull_ollama_model("llama3.1:8b", ollama_url)
+            st.session_state["llm_connection_result"] = (ok, message)
         discover_col, guidance_col = st.columns([1, 2])
         with discover_col:
             discover = st.button("Discover installed models", key="discover_ollama_models", use_container_width=True)
