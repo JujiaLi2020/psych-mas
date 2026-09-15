@@ -32,7 +32,7 @@ The interface is organized as:
 3. Research Tools
 4. Configuration
 
-The Demo scenario loads bundled simulated data and the evaluated run snapshot so users can inspect results without recomputing all indices.
+The Demo scenario loads bundled simulated data and the evaluated run snapshot so users can inspect results without recomputing all indices. The snapshot was generated with PsyMAS v0.7.6 and is restored in the v0.7.7 distribution; its original run ID is preserved.
 
 ## Data Kept In This Copy
 
@@ -52,7 +52,7 @@ The worked-example generation record is kept in `reproducibility/`:
 2. `demo_manifest.json` records the saved run, parameter provenance, software version, and SHA-256 values.
 3. `data/psymas_demo_evaluated_snapshot.zip` restores the evaluated demonstration without rerunning the detectors.
 
-The saved Demo run used item parameters derived from simulation metadata. If `item_params.csv` is not supplied in a new run, PsyMAS estimates item parameters with `mirt` as a fallback. The snapshot does not contain the original `response_long.csv`; archive that source table and the auxiliary truth tables with the capsule when independent regeneration is required.
+The saved Demo run used item parameters derived from simulation metadata and did not re-estimate them. If `item_params.csv` is not supplied in a new run, PsyMAS estimates item parameters with `mirt` as a fallback. The snapshot does not contain the original `response_long.csv`; archive that source table and the auxiliary truth tables with the capsule when independent regeneration is required.
 
 ## Input Files
 
