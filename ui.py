@@ -17832,6 +17832,33 @@ def _render_configuration_page() -> None:
         .psymas-config-description {color:#5C6875 !important; font-size:.84rem; line-height:1.4; margin-top:.12rem;}
         .psymas-model-note {color:#334155 !important; background:#F0F8FA; border:1px solid #B8D8DF;
           border-left:4px solid #0F7890; border-radius:8px; padding:.65rem .75rem; margin:0 0 .8rem; font-size:.84rem;}
+        /* Streamlit versions differ in the DOM used for link buttons. Keep
+           every LLM setup action readable even when the host theme is dark. */
+        main:has(.psymas-config-root) button[kind="secondary"],
+        main:has(.psymas-config-root) button[data-testid*="baseButton-secondary"],
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a,
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a:visited {
+          background:#FFFFFF !important;
+          color:#174E5F !important;
+          -webkit-text-fill-color:#174E5F !important;
+          border:1px solid #7AA7B5 !important;
+          box-shadow:none !important;
+          opacity:1 !important;
+        }
+        main:has(.psymas-config-root) button[kind="secondary"] *,
+        main:has(.psymas-config-root) button[data-testid*="baseButton-secondary"] *,
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a * {
+          color:#174E5F !important;
+          -webkit-text-fill-color:#174E5F !important;
+          opacity:1 !important;
+        }
+        main:has(.psymas-config-root) button[kind="secondary"]:hover,
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a:hover {
+          background:#EAF3F5 !important;
+          color:#123E4B !important;
+          -webkit-text-fill-color:#123E4B !important;
+          border-color:#256D85 !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
