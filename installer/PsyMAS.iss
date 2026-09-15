@@ -1,5 +1,5 @@
 #define MyAppName "PsyMAS"
-#define MyAppVersion "0.7.8"
+#define MyAppVersion "0.7.7"
 #define MyAppPublisher "Jujia Li"
 #define MyAppURL "https://github.com/JujiaLi2020/psych-mas"
 

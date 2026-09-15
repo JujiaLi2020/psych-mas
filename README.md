@@ -1,4 +1,4 @@
-# PsyMAS Workbench (v0.7.8)
+# PsyMAS Workbench (v0.7.7)
 
 PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic aberrance-detection routines, rulebook-based evidence governance, AI-assisted case explanation, and human review records.
 
@@ -6,7 +6,7 @@ The system treats statistical flags as review triggers. It does not determine mi
 
 ## What Is Included
 
-This is the latest runnable distribution. It keeps only the files needed to run the app and the bundled demo:
+This is a lastest runnable distribution. It keeps only the files needed to run the app and the bundled demo:
 
 - Streamlit entry point and page composition: `ui.py`
 - FastAPI backend: `backend_service.py`
@@ -32,7 +32,7 @@ The interface is organized as:
 3. Research Tools
 4. Configuration
 
-The Demo scenario loads bundled simulated data and the evaluated run snapshot so users can inspect results without recomputing all indices. The bundled snapshot was generated with PsyMAS v0.7.6 and is restored as an evaluated run in the v0.7.8 distribution; its original run ID is preserved.
+The Demo scenario loads bundled simulated data and the evaluated run snapshot so users can inspect results without recomputing all indices.
 
 ## Data Kept In This Copy
 
@@ -93,10 +93,10 @@ repository:
 uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@main"
 ```
 
-For a reproducible installation, install the CLI-enabled v0.7.8 release:
+For a reproducible installation, install the CLI-enabled v0.7.7 release:
 
 ```bash
-uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.8"
+uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.7"
 ```
 
 Verify the installation and launch the complete UI + analysis backend stack:
@@ -192,12 +192,12 @@ The installer uses Docker Desktop to provide the Python and R environment. Docke
 
 ### 2. Download the installer
 
-Download `PsyMAS-Setup-Windows-v0.7.8.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.8) and run it. Windows may ask you to confirm software downloaded from the internet.
+Download `PsyMAS-Setup-Windows-v0.7.7.exe` from [GitHub Releases](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.7) and run it. Windows may ask you to confirm software downloaded from the internet.
 
 Optional integrity check in PowerShell:
 
 ```powershell
-Get-FileHash .\PsyMAS-Setup-Windows-v0.7.8.exe -Algorithm SHA256
+Get-FileHash .\PsyMAS-Setup-Windows-v0.7.7.exe -Algorithm SHA256
 ```
 
 Compare the result with the `.sha256` file attached to the same GitHub Release.
@@ -217,12 +217,12 @@ The installer adds Start, Stop, and Configure PsyMAS AI shortcuts. Assessment an
 
 Install Docker Desktop with Docker Compose v2, start it, and wait until the Docker engine is running.
 
-### 2. Download PsyMAS v0.7.8
+### 2. Download PsyMAS v0.7.7
 
 ```bash
 git clone https://github.com/JujiaLi2020/psych-mas.git
 cd psych-mas
-git switch --detach v0.7.8
+git switch --detach v0.7.7
 ```
 
 ### 3. Create the environment file

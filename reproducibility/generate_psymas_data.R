@@ -5,7 +5,7 @@
 #
 # Purpose:
 #   Generate a semi-simulated dataset for demonstrating PsyMAS,
-#   a human-in-the-loop psychometric forensics workbench.
+#   a human-in-the-loop multi-agent system for psychometric
 #   test security review.
 #
 # Design:
@@ -18,10 +18,9 @@
 #   - Embedded forensic review scenarios
 #
 # Important design choice:
-#   This script creates simulation input data and records the generating
-#   parameters. The saved demonstration supplied item parameters derived from
-#   these simulation parameters; it did not re-estimate them with mirt.
-#   For new runs, PsyMAS uses mirt only when item_params.csv is absent.
+#   This script only creates simulation input data.
+#   The PsyMAS prototype estimates item and examinee parameters
+#   with a 2PL model using mirt during data preparation.
 #   The prototype also derives data-availability indicators
 #   from uploaded tables.
 #
