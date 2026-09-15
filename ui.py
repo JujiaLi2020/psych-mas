@@ -17381,21 +17381,7 @@ def _render_flexible_llm_settings() -> None:
     preferences = _persisted_llm_preferences()
     curated_openrouter_ids = [model_id for _, model_id in OPENROUTER_FREE_MODELS]
 
-    st.markdown(
-        """
-        <div class="psymas-model-note">
-          Provider and model choices are independent. Switching providers preserves
-          both selections, so you can return later without reconfiguring the model.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.info(
-        "LLM support is optional. PsyMAS can run indices, evidence governance, and human review without an AI provider. "
-        "Use an online API for the simplest setup, or Ollama for local model execution."
-    )
-    st.markdown("#### Choose an AI connection")
+    st.markdown("#### Provider and model")
     provider_help = {
         "openrouter": "Online API: requires your own API key. The key is stored locally and is not included in exports.",
         "local_ollama": "Local model: requires Ollama and a downloaded model on this computer.",
@@ -17423,7 +17409,7 @@ def _render_flexible_llm_settings() -> None:
     )
 
     if provider == "openrouter":
-        st.markdown("#### OpenRouter connection")
+        st.markdown("#### OpenRouter · hosted")
         st.markdown(
             "**How to get an API key**  "
             "1. Create an account or sign in.  "
@@ -17503,7 +17489,7 @@ def _render_flexible_llm_settings() -> None:
             st.session_state["openrouter_selected_model"] = selected_openrouter
         st.caption(f"Active candidate: `{selected_openrouter or 'enter a model ID'}`")
     else:
-        st.markdown("#### Local Ollama connection")
+        st.markdown("#### Ollama · local")
         st.markdown(
             "**Local setup**  "
             "1. Install Ollama.  "
@@ -17788,12 +17774,22 @@ def _render_configuration_page() -> None:
         }
         main:has(.psymas-config-root) div[data-testid="stButton"] > button,
         main:has(.psymas-config-root) div[data-testid="stButton"] > button *,
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a,
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a *,
         main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button,
         main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button *,
         main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button,
         main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button * {
           background-color:#FFFFFF !important; color:#174E5F !important;
           -webkit-text-fill-color:#174E5F !important; border-color:#7AA7B5 !important; opacity:1 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a {
+          display:flex !important; align-items:center !important; justify-content:center !important;
+          min-height:2.35rem !important; padding:.42rem .8rem !important; border:1px solid #7AA7B5 !important;
+          border-radius:6px !important; text-decoration:none !important; font-weight:650 !important;
+        }
+        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a:hover {
+          background-color:#EAF3F5 !important; color:#123E4B !important; border-color:#256D85 !important;
         }
         main:has(.psymas-config-root) div[data-testid="stButton"] > button[kind="primary"]:not(:disabled),
         main:has(.psymas-config-root) div[data-testid="stButton"] > button[kind="primary"]:not(:disabled) *,
