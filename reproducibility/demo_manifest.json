@@ -1,6 +1,8 @@
 {
-  "schema_version": "1.1",
-  "software_version": "0.7.7",
+  "schema_version": "1.2",
+  "generation_software_version": "0.7.6",
+  "package_software_version": "0.7.8",
+  "snapshot_status": "restored_evaluated_run; not recomputed at Demo startup",
   "run_id": "9458ac0d-ff96-4659-8cc9-43ce86f036b8",
   "scenario": "B",
   "seed": 2026,
@@ -15,15 +17,15 @@
   "parameter_provenance": {
     "item_parameters": "simulation_metadata; supplied to the saved demonstration run",
     "item_parameter_reestimation": "not used in the saved demonstration run; mirt is the fallback when item_params.csv is absent",
-    "person_parameters": "stored in the snapshot; the saved run does not record independent provenance"
+    "person_parameters": "stored in the snapshot; no independent re-estimation provenance was recorded for this saved run"
   },
   "bundled_file_sha256": {
-    "data/upload/responses.csv": "7D32E7045794CEC2AC603E4177907BAE32E2EABADD267491729AC1EB627AE175",
-    "data/upload/response_times.csv": "7C7E013176D5DE287881E807945AAB6FEC911758EEEB60B81A1787A4FF298B6B",
-    "data/upload/compromised_items.csv": "67A31184E17A737E809D91AC790247C2A15BC9179832E7C6117F4B0DB3EE6CC9",
-    "data/upload/answer_changes.csv": "657E93C1A93059B1C501E0AEB2273B934E8C42844F9BD9C7637180841C7A7D80",
-    "reproducibility/generate_psymas_data.R": "F1CADBEC506DB005E85A16617BD308DAE05D8536F5C04AA76FC1D9CE10D02669",
-    "data/psymas_demo_evaluated_snapshot.zip": "recorded externally in demo_snapshot.sha256"
+    "data/upload/responses.csv": "ED8EFBD09C5323A117C784A16F085E1FF3087E6B1BD45ADF82DEFCEE8642240F",
+    "data/upload/response_times.csv": "6392B9BD3FAC270C30B12D21AB35CEBCC09BC95F32E4AF9B22611966ECBF16E4",
+    "data/upload/compromised_items.csv": "8C437D8D0D9023DB693A11C3F5AF5D736AC4E05045A1FC4C3E6869F2141479CE",
+    "data/upload/answer_changes.csv": "A1010E381EBA0B910486975D465B639A219F260749741420E6C357A96623CE79",
+    "reproducibility/generate_psymas_data.R": "F72261B111C4C52226F2C53BABA774DD8978538862FC7728257D8A8DA4AFB4FA",
+    "data/psymas_demo_evaluated_snapshot.zip": "2887C901E243BBAAD897EBF6D1B14F96C0B4C5081A8FB02F26004366F1AD5D65"
   },
-  "regeneration_note": "The evaluated snapshot contains processed inputs and SQLite outputs. Archive the generated response_long.csv and auxiliary truth tables with the capsule for full independent regeneration."
+  "regeneration_note": "The evaluated snapshot restores processed inputs and SQLite outputs. Archive response_long.csv and auxiliary truth tables to regenerate the simulation independently."
 }
