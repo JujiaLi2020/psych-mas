@@ -8042,7 +8042,15 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("Evidence review workbench")
+    st.markdown(
+        """
+        <div style="margin:0.05rem 0 0.45rem 0;line-height:1.35;">
+          <div style="font-size:0.76rem;font-weight:650;color:#334155;">Detect aberrant test-taking behavior</div>
+          <div style="font-size:0.68rem;color:#64748B;">Trace evidence | support human review</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.divider()
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))
