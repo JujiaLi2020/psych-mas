@@ -102,7 +102,7 @@ Docker image:
 
 ```text
 ghcr.io/jujiali2020/psych-mas:0.7.7
-sha256:321f10aaa409557b877b5677b5d396a37602afb7508daa59c4c47c6204b59d58
+sha256:24ec49c3075212fc87ea0ef9624900997408f94397e1280238ede19dd7f11f2a
 ```
 
 Zenodo archive: [10.5281/zenodo.22761090](https://doi.org/10.5281/zenodo.22761090).
