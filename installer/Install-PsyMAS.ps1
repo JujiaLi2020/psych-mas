@@ -63,6 +63,16 @@ function Install-OllamaIfNeeded {
 
 function Ensure-OllamaModel([string]$ModelName) {
     if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { return $false }
+    $installedNames = @(
+        & ollama list 2>$null |
+            Select-Object -Skip 1 |
+            ForEach-Object { ($_ -split '\s+')[0] } |
+            Where-Object { $_ }
+    )
+    if ($installedNames -contains $ModelName) {
+        Write-Step "Ollama model $ModelName is already installed"
+        return $true
+    }
     Write-Step "Downloading local model $ModelName"
     & ollama pull $ModelName
     if ($LASTEXITCODE -ne 0) {

@@ -82,7 +82,7 @@ LLM support is optional. The installer can install Ollama and download the defau
 ollama pull llama3.1:8b
 ```
 
-The LLM summarizes governed indices and selected raw-data summaries. It cannot compute indices, create or change flags, change thresholds, infer intent, determine misconduct, or recommend sanctions.
+The LLM summarizes governed indices and selected raw-data summaries. It cannot compute indices, create or change flags, change thresholds, infer intent, determine misconduct, or recommend sanctions. On repeat installer runs, an already-installed Ollama model is detected and is not downloaded again.
 
 ## Outputs and Storage
 

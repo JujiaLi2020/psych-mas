@@ -72,14 +72,8 @@ from psymas_ui.evidence_governance import (
     variant_allowed_for_b3,
 )
 from psymas_ui.review import build_final_flag_review
-from psymas_ui.research_export import build_research_export_zip
 from psymas_ui.run_store import DATA_TABLES, get_run_store
 from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot
-from psymas_ui.worked_example import (
-    generate_worked_example_package,
-    load_worked_example_candidates,
-    recommended_worked_example_cases,
-)
 from psymas_ui.llm import (
     DEFAULT_GEMINI_MODEL_IDS,
     LOCAL_OLLAMA_MODEL_IDS,
@@ -7841,7 +7835,6 @@ st.markdown("""
 WORKFLOW_NAV = [
     "Scenario",
     "Review Workspace",
-    "Research Tools",
     "Configuration",
 ]
 FLOW_STAGES = [
@@ -7861,7 +7854,6 @@ _WORKFLOW_TARGETS = {
     "AI-Assisted Review": "_Workbench Evidence Review",
     "Human Review": "_Workbench Evidence Review",
     "Review Record": "_Workbench Audit",
-    "Research Tools": "_Workbench Research Tools",
     "Configuration": "_Workbench Configuration",
 }
 _STAGE_ALIASES = {
@@ -7884,8 +7876,6 @@ _STAGE_ALIASES = {
     "Audit & Configuration": "Configuration",
     "Settings": "Configuration",
     "Validation": "Deterministic Evidence",
-    "Simulation Validation": "Deterministic Evidence",
-    "Worked Example": "Research Tools",
 }
 _INTERNAL_NAV_OPTIONS = [
     "_Workbench Domain Evidence",
@@ -7893,12 +7883,9 @@ _INTERNAL_NAV_OPTIONS = [
     "_Workbench Review Report",
     "_Workbench Audit Configuration",
     "_Workbench Configuration",
-    "_Workbench Research Tools",
     "_Workbench Review Prioritization",
     "_Workbench Evidence Synthesis",
     "_Workbench Audit Trail",
-    "_Workbench Simulation Validation",
-    "_Workbench Worked Example",
     "_Workbench Evidence Governance",
     "_Workbench Report",
     "_Workbench Audit",
@@ -7915,8 +7902,6 @@ _INTERNAL_NAV_OPTIONS = [
     "Review Prioritization",
     "Report",
     "Audit",
-    "Simulation Validation",
-    "Worked Example",
     "Validation",
     "Student Profile",
     "Collusion Network",
@@ -7952,19 +7937,15 @@ if _nav_req in NAV_OPTIONS or _nav_req in FLOW_STAGES or _nav_req in _INTERNAL_N
         "_Workbench Review Prioritization": "Human Review",
         "_Workbench Evidence Synthesis": "AI-Assisted Review",
         "_Workbench Review Report": "Human Review",
-        "_Workbench Worked Example": "Research Tools",
-        "_Workbench Research Tools": "Research Tools",
         "_Workbench Audit Configuration": "Configuration",
         "_Workbench Configuration": "Configuration",
         "_Workbench Audit Trail": "Review Record",
-        "_Workbench Simulation Validation": "Deterministic Evidence",
         "_Workbench Evidence Governance": "AI-Assisted Review",
         "_Workbench Report": "Human Review",
         "_Workbench Audit": "Review Record",
         "Scenario": st.session_state.get("workflow_stage", "Assessment Data"),
         "Review Workspace": st.session_state.get("workflow_stage", "Assessment Data")
         if st.session_state.get("workflow_stage") in FLOW_STAGES else "Assessment Data",
-        "Research Tools": "Research Tools",
         "Configuration": "Configuration",
         "Preparation": st.session_state.get("workflow_stage", "Assessment Data")
         if st.session_state.get("workflow_stage") in {"Assessment Data", "Deterministic Evidence"} else "Assessment Data",
@@ -7982,8 +7963,6 @@ if _nav_req in NAV_OPTIONS or _nav_req in FLOW_STAGES or _nav_req in _INTERNAL_N
         "Audit": "Review Record",
         "Audit Trail": "Review Record",
         "Validation": "Deterministic Evidence",
-        "Simulation Validation": "Deterministic Evidence",
-        "Worked Example": "Research Tools",
         "Settings": "Configuration",
     }.get(_nav_req, st.session_state.get("workflow_stage", "Assessment Data"))
     if _nav_req != "Scenario":
@@ -8010,7 +7989,8 @@ _LEGACY_WORKBENCH_MODES = {
     "_Workbench Report": "_Workbench Evidence Review",
     "_Workbench Audit Trail": "_Workbench Audit",
     "_Workbench Audit Configuration": "_Workbench Configuration",
-    "_Workbench Worked Example": "_Workbench Research Tools",
+    "_Workbench Research Tools": "Preparation",
+    "_Workbench Worked Example": "Preparation",
     "_Workbench Simulation Validation": "Preparation",
 }
 if run_mode in _LEGACY_WORKBENCH_MODES:
@@ -8076,9 +8056,6 @@ with st.sidebar:
         "_Workbench Evidence Synthesis": _has_forensic,
         "_Workbench Review Report": _has_forensic,
         "_Workbench Audit Trail": _has_forensic,
-        "_Workbench Simulation Validation": _has_forensic,
-        "_Workbench Worked Example": True,
-        "_Workbench Research Tools": True,
         "_Workbench Audit": _has_forensic,
         "_Workbench Configuration": True,
         "Scenario": True,
@@ -8088,9 +8065,6 @@ with st.sidebar:
         "Evidence Synthesis": _has_forensic,
         "Review Prioritization": _has_forensic,
         "Domain Evidence": _has_forensic,
-        "Simulation Validation": _has_forensic,
-        "Worked Example": True,
-        "Research Tools": True,
         "Audit": _has_forensic,
         "Configuration": True,
         "Student Profile": _has_forensic,
@@ -8107,7 +8081,6 @@ with st.sidebar:
         "AI-Assisted Review": _has_forensic,
         "Human Review": _has_forensic,
         "Review Record": _has_forensic,
-        "Research Tools": True,
         "Configuration": True,
     }
     def _nav_label(x: str) -> str:
@@ -8118,7 +8091,6 @@ with st.sidebar:
             "AI-Assisted Review": "3. AI Review",
             "Human Review": "4. Human Review",
             "Review Record": "5. Review Record",
-            "Research Tools": "Research Tools",
             "Configuration": "Configuration",
         }
         return labels.get(x, x)
@@ -8141,7 +8113,7 @@ with st.sidebar:
             return "ready" if _has_forensic else "off"
         if x == "Review Record":
             return "ready" if _has_forensic else "off"
-        if x in {"Research Tools", "Configuration"}:
+        if x == "Configuration":
             return "ready"
         return "ready"
     if active_workflow_stage not in NAV_OPTIONS and active_workflow_stage not in FLOW_STAGES:
@@ -8442,94 +8414,6 @@ st.markdown(
         font-weight: 650;
         white-space: nowrap;
     }
-    div[data-testid="stSegmentedControl"] {
-        margin: 0 0 0.65rem 0 !important;
-    }
-    div[data-testid="stSegmentedControl"] button {
-        color: #26313D !important;
-        background: #FFFFFF !important;
-        border-color: #C9D2DC !important;
-    }
-    div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
-        color: #FFFFFF !important;
-        background: #174E5F !important;
-        border-color: #174E5F !important;
-    }
-    button[data-testid="stBaseButton-segmented_control"],
-    button[data-testid="stBaseButton-segmented_control"] * {
-        background: #FFFFFF !important;
-        color: #17212B !important;
-        border-color: #B9C5D2 !important;
-        opacity: 1 !important;
-    }
-    button[data-testid="stBaseButton-segmented_controlActive"],
-    button[data-testid="stBaseButton-segmented_controlActive"] * {
-        background: #174E5F !important;
-        color: #FFFFFF !important;
-        border-color: #174E5F !important;
-        opacity: 1 !important;
-    }
-    div[data-testid="stButton"] > button:not(:disabled) {
-        background-color: #FFFFFF !important;
-        color: #111827 !important;
-        border-color: #C9D2DC !important;
-        width: 100% !important;
-        min-width: 8rem;
-        border-radius: 6px !important;
-    }
-    div[data-testid="stButton"] > button:not(:disabled):hover {
-        background-color: #F6FAFB !important;
-        border-color: #256D85 !important;
-        color: #111827 !important;
-    }
-    div[data-testid="stButton"] > button:not(:disabled) * {
-        color: #111827 !important;
-    }
-    div[data-testid="stButton"] > button[kind="primary"]:not(:disabled),
-    div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled) {
-        background-color: #174E5F !important;
-        color: #FFFFFF !important;
-        border-color: #174E5F !important;
-    }
-    div[data-testid="stButton"] > button[kind="primary"]:not(:disabled) *,
-    div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled) * {
-        color: #FFFFFF !important;
-    }
-    div[data-testid="stButton"] {
-        width: 100% !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
-        background: linear-gradient(180deg, #FFFFFF, #FAFCFD) !important;
-        color: #102033 !important;
-        border: 1px solid #CBD6E2 !important;
-        border-radius: 10px !important;
-        min-height: 2.2rem;
-        padding: 0.32rem 0.58rem !important;
-        justify-content: flex-start !important;
-        text-align: left !important;
-        font-weight: 680 !important;
-        font-size: 0.86rem !important;
-        box-shadow: none !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
-        background: #EEF7FA !important;
-        border-color: #256D85 !important;
-        color: #111827 !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"],
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[data-testid="baseButton-primary"] {
-        background: linear-gradient(180deg, #FFFFFF, #EAF7FA) !important;
-        border-color: #0E7896 !important;
-        color: #073B4C !important;
-        -webkit-text-fill-color: #073B4C !important;
-        box-shadow: 0 0 0 1px rgba(14,120,150,0.08), 0 5px 14px rgba(14,120,150,0.10) !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] *,
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[data-testid="baseButton-primary"] * {
-        color: #073B4C !important;
-        -webkit-text-fill-color: #073B4C !important;
-        opacity: 1 !important;
-    }
     .psymas-nav-dot {
         width: 0.62rem;
         height: 0.62rem;
@@ -8575,116 +8459,6 @@ st.markdown(
         color: #111827 !important;
         font-weight: 650;
         margin: 0 0 0.75rem 0;
-    }
-    div[data-testid="stDownloadButton"] > button {
-        background: #FFFFFF !important;
-        color: #174E5F !important;
-        border: 1px solid #7AA7B5 !important;
-        border-radius: 6px !important;
-        font-weight: 650 !important;
-        min-height: 2.15rem !important;
-        padding: 0.35rem 0.75rem !important;
-    }
-    div[data-testid="stDownloadButton"] > button * {
-        color: #174E5F !important;
-    }
-    div[data-testid="stDownloadButton"] > button:disabled,
-    div[data-testid="stDownloadButton"] > button:disabled * {
-        background: #E5E7EB !important;
-        border-color: #CBD5E1 !important;
-        color: #4B5563 !important;
-        opacity: 1 !important;
-    }
-    div[data-testid="stFileUploaderDropzone"],
-    div[data-testid="stFileUploaderDropzone"] > div,
-    div[data-testid="stFileUploaderDropzone"] section {
-        background: #FFFFFF !important;
-        border-color: #6B7787 !important;
-        color: #111827 !important;
-    }
-    div[data-testid="stFileUploaderDropzone"] *,
-    div[data-testid="stFileUploaderFile"] *,
-    div[data-testid="stFileUploaderFile"] svg {
-        color: #111827 !important;
-        fill: currentColor !important;
-        stroke: currentColor !important;
-        opacity: 1 !important;
-    }
-    div[data-testid="stFileUploaderDropzone"] button,
-    div[data-testid="stFileUploaderDropzone"] button * {
-        background: #174E5F !important;
-        color: #FFFFFF !important;
-        border-color: #174E5F !important;
-    }
-    div[data-baseweb="select"],
-    div[data-baseweb="select"] > div,
-    div[data-baseweb="select"] div[role="button"],
-    div[data-baseweb="select"] input {
-        background: #FFFFFF !important;
-        color: #111827 !important;
-        border-color: #C9D2DC !important;
-    }
-    div[data-baseweb="select"] *,
-    div[data-baseweb="popover"] * {
-        color: #111827 !important;
-    }
-    /* Final contrast guardrails: ordinary surfaces are light; dark controls own white text. */
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"],
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] > div,
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] section {
-        background-color: #FFFFFF !important;
-        color: #111827 !important;
-        border: 2px dashed #6B7787 !important;
-    }
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] :where(p, span, small, div):not(button *) {
-        color: #111827 !important;
-        opacity: 1 !important;
-    }
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] svg {
-        color: #4B5563 !important;
-        fill: currentColor !important;
-        stroke: currentColor !important;
-        opacity: 1 !important;
-    }
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] button,
-    [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] button * {
-        background-color: #174E5F !important;
-        color: #FFFFFF !important;
-        border-color: #174E5F !important;
-        opacity: 1 !important;
-    }
-    div[data-testid="stButton"] > button:not(:disabled),
-    div[data-testid="stButton"] > button:not(:disabled) * {
-        opacity: 1 !important;
-    }
-    div[data-testid="stButton"] > button:not([kind="primary"]):not([data-testid="baseButton-primary"]):not(:disabled),
-    div[data-testid="stButton"] > button:not([kind="primary"]):not([data-testid="baseButton-primary"]):not(:disabled) *,
-    div[data-testid="stDownloadButton"] > button:not(:disabled),
-    div[data-testid="stDownloadButton"] > button:not(:disabled) * {
-        color: #111827 !important;
-        opacity: 1 !important;
-    }
-    div[data-testid="stDownloadButton"] > button:not(:disabled),
-    div[data-testid="stDownloadButton"] > button:not(:disabled) * {
-        color: #174E5F !important;
-    }
-    div[data-testid="stButton"] > button[kind="primary"]:not(:disabled),
-    div[data-testid="stButton"] > button[kind="primary"]:not(:disabled) *,
-    div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled),
-    div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled) * {
-        color: #FFFFFF !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button:not([kind="primary"]),
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button:not([kind="primary"]) * {
-        color: #111827 !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"],
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] *,
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[data-testid="baseButton-primary"],
-    section[data-testid="stSidebar"] div[data-testid="stButton"] > button[data-testid="baseButton-primary"] * {
-        color: #0F172A !important;
-        -webkit-text-fill-color: #0F172A !important;
-        opacity: 1 !important;
     }
     .psymas-figure-panel {
         border: 1px solid #CBD5E1;
@@ -8809,12 +8583,6 @@ _STAGE_CONTEXT = {
         "purpose": "Inspect evidence provenance, report checks, and reproducibility records.",
         "input": "Evidence record, rulebook, run log, and report audit output",
         "output": "Audit records",
-        "next": "Use configuration or research tools when needed.",
-    },
-    "Research Tools": {
-        "purpose": "Generate manuscript-facing worked examples and research export packages.",
-        "input": "Demo data, simulated truth labels, and PsyMAS output tables",
-        "output": "Worked-example figures, tables, and research export package",
         "next": "Return to the analysis workflow.",
     },
     "Configuration": {
@@ -8843,7 +8611,7 @@ def _stage_state(stage: str) -> str:
         return "Ready" if st.session_state.get("forensic_result") is not None else "Evidence unavailable"
     if stage == "Review Record":
         return "Ready" if st.session_state.get("forensic_result") is not None else "Evidence unavailable"
-    if stage in {"Research Tools", "Configuration"}:
+    if stage == "Configuration":
         return "Ready"
     if stage == "Project Setup":
         return "Complete" if st.session_state.get("ab_only_scenario_select") else "In Progress"
@@ -11427,7 +11195,7 @@ div[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] * {
                 hide_index=True,
                 height=min(310, 45 + 34 * len(output_rows)),
             )
-    st.caption("Detailed evidence tables are generated only when opened. Simulation validation has moved to Research Tools.")
+    st.caption("Detailed evidence tables are generated only when opened.")
 
     if n_export <= 0:
         st.info("No examinee data is available for detailed export.")
@@ -17506,10 +17274,13 @@ def _render_flexible_llm_settings() -> None:
                 help="Opens the official Ollama download page. A browser session cannot install software on the host computer directly.",
             )
         with model_col:
+            discovered_models = st.session_state.get("ollama_discovered_models") or []
+            model_downloaded = "llama3.1:8b" in discovered_models
             pull_default = st.button(
-                "Download Llama 3.1 8B",
+                "Downloaded" if model_downloaded else "Download Llama 3.1 8B",
                 key="pull_default_ollama_model",
                 use_container_width=True,
+                disabled=model_downloaded,
                 help="Downloads llama3.1:8b from the configured Ollama server.",
             )
         st.caption("For Docker on Windows or macOS, the endpoint is usually `http://host.docker.internal:11434/api/chat`. The model must be installed on the host computer.")
@@ -17532,6 +17303,10 @@ def _render_flexible_llm_settings() -> None:
             with st.spinner("Downloading llama3.1:8b from Ollama…"):
                 ok, message = _pull_ollama_model("llama3.1:8b", ollama_url)
             st.session_state["llm_connection_result"] = (ok, message)
+            if ok:
+                installed_after_pull = list(st.session_state.get("ollama_discovered_models") or [])
+                if "llama3.1:8b" not in installed_after_pull:
+                    st.session_state["ollama_discovered_models"] = installed_after_pull + ["llama3.1:8b"]
         discover_col, guidance_col = st.columns([1, 2])
         with discover_col:
             discover = st.button("Discover installed models", key="discover_ollama_models", use_container_width=True)
@@ -17612,7 +17387,6 @@ def _render_flexible_llm_settings() -> None:
     result = st.session_state.get("llm_connection_result")
     if result:
         (st.success if result[0] else st.error)(result[1])
-
 
 def _configuration_section_header(number: str, title: str, description: str) -> None:
     st.markdown(
@@ -17744,126 +17518,115 @@ def _render_threshold_profile_settings() -> None:
 
 
 def _render_configuration_page() -> None:
+    st.markdown('<span class="psymas-config-root" aria-hidden="true"></span>', unsafe_allow_html=True)
     st.markdown(
         """
         <style>
-        /* Configuration is always rendered as a light surface.  Keep every
-           native Streamlit control readable even when the host theme is dark. */
-        main:has(.psymas-config-root) [data-testid="stWidgetLabel"],
-        main:has(.psymas-config-root) [data-testid="stWidgetLabel"] *,
-        main:has(.psymas-config-root) [data-testid="stCaptionContainer"],
-        main:has(.psymas-config-root) [data-testid="stCaptionContainer"] *,
-        main:has(.psymas-config-root) div[data-testid="stRadio"] label,
-        main:has(.psymas-config-root) div[data-testid="stRadio"] label * {
-          color:#26313D !important; -webkit-text-fill-color:#26313D !important; opacity:1 !important;
+        /* Keep only the configuration controls readable; use plain Streamlit
+           surfaces and a single accent for primary actions. */
+        body:has(.psymas-config-root) [data-testid="stWidgetLabel"],
+        body:has(.psymas-config-root) [data-testid="stWidgetLabel"] *,
+        body:has(.psymas-config-root) [data-testid="stCaptionContainer"],
+        body:has(.psymas-config-root) [data-testid="stCaptionContainer"] *,
+        body:has(.psymas-config-root) div[data-testid="stRadio"] label,
+        body:has(.psymas-config-root) div[data-testid="stRadio"] label * {
+          color:#26313D !important; -webkit-text-fill-color:#26313D !important;
         }
-        main:has(.psymas-config-root) div[data-testid="stTextInput"] input,
-        main:has(.psymas-config-root) div[data-testid="stTextInput"] [data-baseweb="input"] {
-          background:#FFFFFF !important; color:#111827 !important; -webkit-text-fill-color:#111827 !important;
-          border-color:#9AA8B7 !important; opacity:1 !important;
+        body:has(.psymas-config-root) div[data-testid="stTextInput"] input,
+        body:has(.psymas-config-root) div[data-baseweb="select"] input,
+        body:has(.psymas-config-root) div[data-baseweb="select"] span {
+          background:#FFFFFF !important; color:#111827 !important;
+          -webkit-text-fill-color:#111827 !important;
         }
-        main:has(.psymas-config-root) div[data-testid="stTextInput"] input::placeholder {
-          color:#64748B !important; -webkit-text-fill-color:#64748B !important; opacity:1 !important;
+        body:has(.psymas-config-root) div[data-testid="stButton"] > button,
+        body:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button,
+        body:has(.psymas-config-root) div[data-testid="stLinkButton"] a,
+        body:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button {
+          background:#FFFFFF !important; color:#174E5F !important;
+          -webkit-text-fill-color:#174E5F !important;
+          border:1px solid #B9C5D2 !important; box-shadow:none !important;
+          opacity:1 !important;
         }
-        main:has(.psymas-config-root) div[data-baseweb="select"],
-        main:has(.psymas-config-root) div[data-baseweb="select"] > div,
-        main:has(.psymas-config-root) div[data-baseweb="select"] span,
-        main:has(.psymas-config-root) div[data-baseweb="select"] input {
-          background-color:#FFFFFF !important; color:#111827 !important;
-          -webkit-text-fill-color:#111827 !important; opacity:1 !important;
+        body:has(.psymas-config-root) div[data-testid="stButton"] > button *,
+        body:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button *,
+        body:has(.psymas-config-root) div[data-testid="stLinkButton"] a *,
+        body:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button * {
+          color:inherit !important; -webkit-text-fill-color:inherit !important;
         }
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button,
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button *,
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a,
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a *,
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button,
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button *,
-        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button,
-        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button * {
-          background-color:#FFFFFF !important; color:#174E5F !important;
-          -webkit-text-fill-color:#174E5F !important; border-color:#7AA7B5 !important; opacity:1 !important;
+        body:has(.psymas-config-root) button[kind="primary"],
+        body:has(.psymas-config-root) button[data-testid*="baseButton-primary"] {
+          background:#174E5F !important; color:#FFFFFF !important;
+          -webkit-text-fill-color:#FFFFFF !important; border-color:#174E5F !important;
         }
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a {
-          display:flex !important; align-items:center !important; justify-content:center !important;
-          min-height:2.35rem !important; padding:.42rem .8rem !important; border:1px solid #7AA7B5 !important;
-          border-radius:6px !important; text-decoration:none !important; font-weight:650 !important;
+        body:has(.psymas-config-root) button:disabled {
+          background:#E5E7EB !important; color:#475569 !important;
+          -webkit-text-fill-color:#475569 !important; border-color:#CBD5E1 !important;
         }
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] > a:hover {
-          background-color:#EAF3F5 !important; color:#123E4B !important; border-color:#256D85 !important;
-        }
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button[kind="primary"]:not(:disabled),
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button[kind="primary"]:not(:disabled) *,
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled),
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:not(:disabled) *,
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[kind="primary"]:not(:disabled),
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[kind="primary"]:not(:disabled) *,
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[data-testid*="baseButton-primary"]:not(:disabled),
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button[data-testid*="baseButton-primary"]:not(:disabled) * {
-          background-color:#174E5F !important; color:#FFFFFF !important;
-          -webkit-text-fill-color:#FFFFFF !important; border-color:#174E5F !important; opacity:1 !important;
-        }
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button:disabled,
-        main:has(.psymas-config-root) div[data-testid="stButton"] > button:disabled *,
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button:disabled,
-        main:has(.psymas-config-root) div[data-testid="stFormSubmitButton"] > button:disabled *,
-        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button:disabled,
-        main:has(.psymas-config-root) div[data-testid="stDownloadButton"] > button:disabled * {
-          background-color:#E5E7EB !important; color:#374151 !important;
-          -webkit-text-fill-color:#374151 !important; border-color:#B8C2CE !important; opacity:1 !important;
-        }
-        main:has(.psymas-config-root) details,
-        main:has(.psymas-config-root) details > summary,
-        main:has(.psymas-config-root) details > summary * {
-          background-color:#FFFFFF !important; color:#26313D !important;
-          -webkit-text-fill-color:#26313D !important; opacity:1 !important;
-        }
-        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"],
-        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] > div,
-        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] section {
-          background-color:#FFFFFF !important; color:#111827 !important; border-color:#7A8796 !important;
-        }
-        main:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] :where(p,small,span,div):not(button *) {
-          color:#111827 !important; -webkit-text-fill-color:#111827 !important; opacity:1 !important;
+        body:has(.psymas-config-root) details,
+        body:has(.psymas-config-root) details > summary,
+        body:has(.psymas-config-root) [data-testid="stFileUploaderDropzone"] {
+          background:#FFFFFF !important; color:#26313D !important;
         }
         .psymas-config-heading {display:flex; align-items:flex-start; gap:.75rem; margin:.05rem 0 .8rem;}
         .psymas-config-number {display:inline-flex; align-items:center; justify-content:center; width:1.8rem; height:1.8rem;
           border-radius:50%; background:#174E5F; color:#FFFFFF !important; font-weight:700; font-size:.78rem; flex:0 0 auto;}
         .psymas-config-title {color:#102A35 !important; font-weight:750; font-size:1.05rem; line-height:1.25;}
         .psymas-config-description {color:#5C6875 !important; font-size:.84rem; line-height:1.4; margin-top:.12rem;}
-        .psymas-model-note {color:#334155 !important; background:#F0F8FA; border:1px solid #B8D8DF;
-          border-left:4px solid #0F7890; border-radius:8px; padding:.65rem .75rem; margin:0 0 .8rem; font-size:.84rem;}
-        /* Streamlit versions differ in the DOM used for link buttons. Keep
-           every LLM setup action readable even when the host theme is dark. */
-        main:has(.psymas-config-root) button[kind="secondary"],
-        main:has(.psymas-config-root) button[data-testid*="baseButton-secondary"],
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a,
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a:visited {
+        /* Final native-control fallback. Streamlit may render button
+           containers differently across minor releases. */
+        div[data-testid="stButton"] > button,
+        div[data-testid="stFormSubmitButton"] > button,
+        div[data-testid="stLinkButton"] a,
+        div[data-testid="stDownloadButton"] > button {
+          min-height:2.25rem !important;
+          padding:.45rem .8rem !important;
           background:#FFFFFF !important;
           color:#174E5F !important;
           -webkit-text-fill-color:#174E5F !important;
-          border:1px solid #7AA7B5 !important;
+          border:1px solid #B9C5D2 !important;
+          border-radius:6px !important;
           box-shadow:none !important;
+          font-size:.875rem !important;
+          font-weight:600 !important;
           opacity:1 !important;
         }
-        main:has(.psymas-config-root) button[kind="secondary"] *,
-        main:has(.psymas-config-root) button[data-testid*="baseButton-secondary"] *,
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a * {
+        div[data-testid="stButton"] > button *,
+        div[data-testid="stFormSubmitButton"] > button *,
+        div[data-testid="stLinkButton"] a *,
+        div[data-testid="stDownloadButton"] > button * {
           color:#174E5F !important;
           -webkit-text-fill-color:#174E5F !important;
+          font-size:inherit !important;
           opacity:1 !important;
         }
-        main:has(.psymas-config-root) button[kind="secondary"]:hover,
-        main:has(.psymas-config-root) div[data-testid="stLinkButton"] a:hover {
-          background:#EAF3F5 !important;
-          color:#123E4B !important;
-          -webkit-text-fill-color:#123E4B !important;
-          border-color:#256D85 !important;
+        div[data-testid="stButton"] > button[kind="primary"],
+        div[data-testid="stButton"] > button[data-testid*="baseButton-primary"],
+        div[data-testid="stFormSubmitButton"] > button[kind="primary"],
+        div[data-testid="stFormSubmitButton"] > button[data-testid*="baseButton-primary"] {
+          background:#174E5F !important;
+          color:#FFFFFF !important;
+          -webkit-text-fill-color:#FFFFFF !important;
+          border-color:#174E5F !important;
+        }
+        div[data-testid="stButton"] > button[kind="primary"] *,
+        div[data-testid="stButton"] > button[data-testid*="baseButton-primary"] *,
+        div[data-testid="stFormSubmitButton"] > button[kind="primary"] *,
+        div[data-testid="stFormSubmitButton"] > button[data-testid*="baseButton-primary"] * {
+          color:#FFFFFF !important;
+          -webkit-text-fill-color:#FFFFFF !important;
+        }
+        div[data-testid="stButton"] > button:disabled,
+        div[data-testid="stFormSubmitButton"] > button:disabled,
+        div[data-testid="stDownloadButton"] > button:disabled {
+          background:#E5E7EB !important;
+          color:#475569 !important;
+          -webkit-text-fill-color:#475569 !important;
+          border-color:#CBD5E1 !important;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown('<span class="psymas-config-root" aria-hidden="true"></span>', unsafe_allow_html=True)
     with st.container(border=True):
         _configuration_section_header("1", "LLM", "Connect a hosted OpenRouter model or a local Ollama model for evidence-grounded reporting.")
         _render_flexible_llm_settings()
@@ -18098,8 +17861,6 @@ def _render_workbench_page(stage: str) -> None:
         _render_evidence_review_page()
     elif stage == "Review Record":
         _render_audit_page()
-    elif stage == "Research Tools":
-        _render_research_tools_page()
     elif stage == "Configuration":
         _render_configuration_page()
 
@@ -18110,7 +17871,6 @@ _render_workflow_shell(active_workflow_stage)
 _WORKBENCH_MODES = {
     "_Workbench Evidence Review",
     "_Workbench Audit",
-    "_Workbench Research Tools",
     "_Workbench Configuration",
 }
 if run_mode in _WORKBENCH_MODES:

@@ -1,6 +1,14 @@
 $ErrorActionPreference = "Stop"
-$ComposeFile = Join-Path $PSScriptRoot "docker-compose.release.yml"
-$EnvFile = Join-Path $PSScriptRoot ".env"
+$composeCandidates = @(
+    (Join-Path $PSScriptRoot "docker-compose.release.yml"),
+    (Join-Path $PSScriptRoot "..\docker-compose.release.yml")
+)
+$ComposeFile = $composeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$envCandidates = @(
+    (Join-Path $PSScriptRoot ".env"),
+    (Join-Path $PSScriptRoot "..\.env")
+)
+$EnvFile = $envCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 $AppDataRoot = Join-Path $env:LOCALAPPDATA "PsyMAS"
 $LogDirectory = Join-Path $AppDataRoot "logs"
 $LogFile = Join-Path $LogDirectory "start.log"
@@ -38,10 +46,10 @@ try {
     Start-Transcript -Path $LogFile -Append | Out-Null
     $transcriptStarted = $true
 
-    if (-not (Test-Path -LiteralPath $ComposeFile)) {
+    if (-not $ComposeFile) {
         throw "The PsyMAS service definition is missing. Reinstall PsyMAS."
     }
-    if (-not (Test-Path -LiteralPath $EnvFile)) {
+    if (-not $EnvFile) {
         throw "PsyMAS has not been configured. Open 'Configure PsyMAS AI' from the Start menu, then try again."
     }
 

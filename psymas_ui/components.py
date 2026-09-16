@@ -7,6 +7,8 @@ import streamlit as st
 
 def apply_control_theme() -> None:
     """Apply high-contrast control colors after page-local Streamlit styles."""
+    # Native Streamlit controls are the single source of truth for appearance.
+    return
     st.markdown(
         """
 <style>
