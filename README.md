@@ -2,6 +2,8 @@
 
 PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic forensic indices, rule-based evidence governance, AI-assisted explanation, and human review. Statistical flags are review triggers; PsyMAS does not determine misconduct.
 
+PsyMAS helps assessment teams organize and review unusual response behavior in a traceable workflow. It accepts response, response-time, item-parameter, exposure, and answer-change data; runs reproducible psychometric and forensic checks; maps eligible index flags into evidence domains; and prepares cautious case summaries for human review. The system keeps index values, rules, thresholds, source columns, domain profiles, reviewer decisions, and audit records connected so that a reviewer can see what was observed, why it was included, and what remains uncertain. It is intended for research, demonstrations, and review support rather than automatic misconduct classification.
+
 ## Install and Start
 
 Choose one method.
@@ -131,3 +133,13 @@ Check `http://localhost:9000/health`. If `psymas` is not found after CLI install
 ## License
 
 PsyMAS is released under the [MIT License](LICENSE).
+
+## Concepts
+
+**Psychometrics** uses statistical models to describe how examinees respond to test items. In PsyMAS, `mirt` can estimate item and person parameters when supplied item parameters are unavailable. These estimates support the analysis; they are not misconduct findings.
+
+**Forensic indices** are statistical indicators of unusual response, timing, similarity, preknowledge, answer-change, or change-pattern behavior. A flag means that an output meets its package rule or approved threshold. It is a reason to review a case, not proof of intent or misconduct.
+
+**Agents** are separate deterministic workers, such as rapid-guessing, person-fit, preknowledge, similarity, copying, tampering, and change-point workers. A workflow router runs only the workers supported by the available inputs, then writes their outputs to a shared evidence record. Agents compute or organize evidence; they do not independently decide the final case outcome.
+
+**Evidence governance** determines which outputs may count toward a domain profile. Package-returned or approved-threshold flags may be eligible; uncalibrated or descriptive outputs remain visible for context and audit. The LLM can explain governed evidence and selected raw-data summaries, but cannot create flags, alter rules, or replace human adjudication.
