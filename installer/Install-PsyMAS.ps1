@@ -63,17 +63,31 @@ function Install-OllamaIfNeeded {
 
 function Ensure-OllamaModel([string]$ModelName) {
     if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { return $false }
-    $installedNames = @(
+    Write-Step "Checking whether Ollama model $ModelName is already installed"
+
+    # Ollama can wait indefinitely when its background service is unavailable.
+    # Keep setup responsive; the model can be checked from Configuration later.
+    $probe = Start-Job -ScriptBlock {
+        param($RequestedModel)
         & ollama list 2>$null |
             Select-Object -Skip 1 |
             ForEach-Object { ($_ -split '\s+')[0] } |
             Where-Object { $_ }
-    )
+    } -ArgumentList $ModelName
+    $completed = Wait-Job -Job $probe -Timeout 20
+    if (-not $completed) {
+        Stop-Job -Job $probe -ErrorAction SilentlyContinue
+        Remove-Job -Job $probe -Force -ErrorAction SilentlyContinue
+        Write-Warning "Ollama did not respond within 20 seconds. Skipping model download; configure it later from PsyMAS."
+        return $false
+    }
+    $installedNames = @(Receive-Job -Job $probe -ErrorAction SilentlyContinue)
+    Remove-Job -Job $probe -Force -ErrorAction SilentlyContinue
     if ($installedNames -contains $ModelName) {
         Write-Step "Ollama model $ModelName is already installed"
         return $true
     }
-    Write-Step "Downloading local model $ModelName"
+    Write-Step "Downloading local model $ModelName (this may take several minutes and several GB)"
     & ollama pull $ModelName
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "The model could not be downloaded. You can run 'ollama pull $ModelName' later."
@@ -157,7 +171,9 @@ if (-not $SkipLlmSetup) {
             $settings.OLLAMA_CHAT_URL = "http://host.docker.internal:11434/api/chat"
             if (Install-OllamaIfNeeded) {
                 Ensure-OllamaModel $settings.PSYMAS_OLLAMA_MODEL_ID | Out-Null
-                Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+                if (-not (Get-Process -Name ollama -ErrorAction SilentlyContinue)) {
+                    Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+                }
             }
         }
         default {
