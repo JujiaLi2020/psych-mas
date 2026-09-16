@@ -66,23 +66,38 @@ function Ensure-OllamaModel([string]$ModelName) {
     Write-Step "Checking whether Ollama model $ModelName is already installed"
 
     # Ollama can wait indefinitely when its background service is unavailable.
-    # Keep setup responsive; the model can be checked from Configuration later.
-    $probe = Start-Job -ScriptBlock {
-        param($RequestedModel)
-        & ollama list 2>$null |
+    # Use a child process with a hard timeout instead of Start-Job, which can
+    # itself stall during PowerShell startup on some Windows installations.
+    $ollamaPath = (Get-Command ollama).Source
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $process.StartInfo.FileName = $ollamaPath
+    $process.StartInfo.Arguments = "list"
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.CreateNoWindow = $true
+    $process.StartInfo.RedirectStandardOutput = $true
+    $process.StartInfo.RedirectStandardError = $true
+    try {
+        $process.Start() | Out-Null
+        if (-not $process.WaitForExit(15000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            Write-Warning "Ollama did not respond within 15 seconds. Skipping model download; configure it later from PsyMAS."
+            return $false
+        }
+        $installedNames = @($process.StandardOutput.ReadToEnd() -split "`r?`n" |
             Select-Object -Skip 1 |
             ForEach-Object { ($_ -split '\s+')[0] } |
-            Where-Object { $_ }
-    } -ArgumentList $ModelName
-    $completed = Wait-Job -Job $probe -Timeout 20
-    if (-not $completed) {
-        Stop-Job -Job $probe -ErrorAction SilentlyContinue
-        Remove-Job -Job $probe -Force -ErrorAction SilentlyContinue
-        Write-Warning "Ollama did not respond within 20 seconds. Skipping model download; configure it later from PsyMAS."
+            Where-Object { $_ })
+    } catch {
+        Write-Warning "Ollama could not be checked. Skipping model download; configure it later from PsyMAS."
         return $false
+    } finally {
+        $process.Dispose()
     }
-    $installedNames = @(Receive-Job -Job $probe -ErrorAction SilentlyContinue)
-    Remove-Job -Job $probe -Force -ErrorAction SilentlyContinue
+    if (-not $installedNames) {
+        $installedNames = @()
+    }
     if ($installedNames -contains $ModelName) {
         Write-Step "Ollama model $ModelName is already installed"
         return $true
