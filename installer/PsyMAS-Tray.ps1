@@ -36,9 +36,13 @@ function Get-PsyMASStatus {
 }
 
 $icon = New-Object System.Windows.Forms.NotifyIcon
-$trayIconPath = Join-Path $AppRoot "mark-navy.ico"
-if (Test-Path -LiteralPath $trayIconPath) {
-    $icon.Icon = New-Object System.Drawing.Icon($trayIconPath)
+$trayIconCandidates = @(
+    (Join-Path $AppRoot "app-icon.ico"),
+    (Join-Path $AppRoot "mark-navy.ico")
+)
+$trayIconPath = $trayIconCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($trayIconPath) {
+    $icon.Icon = New-Object -TypeName System.Drawing.Icon -ArgumentList $trayIconPath
 } else {
     $icon.Icon = [System.Drawing.SystemIcons]::Application
 }
