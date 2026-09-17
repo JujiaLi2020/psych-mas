@@ -65,42 +65,18 @@ function Ensure-OllamaModel([string]$ModelName) {
     if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { return $false }
     Write-Step "Checking whether Ollama model $ModelName is already installed"
 
-    # Ollama can wait indefinitely when its background service is unavailable.
-    # Use a child process with a hard timeout instead of Start-Job, which can
-    # itself stall during PowerShell startup on some Windows installations.
-    $ollamaPath = (Get-Command ollama).Source
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $process.StartInfo.FileName = $ollamaPath
-    $process.StartInfo.Arguments = "list"
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.CreateNoWindow = $true
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
+    # Query the local HTTP endpoint instead of `ollama list`. The CLI can wait
+    # indefinitely when the Ollama service is installed but not responsive.
     try {
-        $process.Start() | Out-Null
-        if (-not $process.WaitForExit(15000)) {
-            $process.Kill()
-            $process.WaitForExit()
-            Write-Warning "Ollama did not respond within 15 seconds. Skipping model download; configure it later from PsyMAS."
-            return $false
+        $tags = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get -TimeoutSec 8
+        $installedNames = @($tags.models | ForEach-Object { [string]$_.name } | Where-Object { $_ })
+        if ($installedNames -contains $ModelName) {
+            Write-Step "Ollama model $ModelName is already installed"
+            return $true
         }
-        $installedNames = @($process.StandardOutput.ReadToEnd() -split "`r?`n" |
-            Select-Object -Skip 1 |
-            ForEach-Object { ($_ -split '\s+')[0] } |
-            Where-Object { $_ })
     } catch {
-        Write-Warning "Ollama could not be checked. Skipping model download; configure it later from PsyMAS."
+        Write-Warning "Ollama did not respond within 8 seconds. Skipping model download; configure it later from PsyMAS."
         return $false
-    } finally {
-        $process.Dispose()
-    }
-    if (-not $installedNames) {
-        $installedNames = @()
-    }
-    if ($installedNames -contains $ModelName) {
-        Write-Step "Ollama model $ModelName is already installed"
-        return $true
     }
     Write-Step "Downloading local model $ModelName (this may take several minutes and several GB)"
     & ollama pull $ModelName
