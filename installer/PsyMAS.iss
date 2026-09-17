@@ -23,6 +23,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=PsyMAS v{#MyAppVersion}
 LicenseFile=..\LICENSE
+SetupIconFile=..\icon\desktop\app-icon.ico
 
 [Files]
 Source: "Install-PsyMAS.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -30,6 +31,8 @@ Source: "Start-PsyMAS.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Stop-PsyMAS.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "PsyMAS-Tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "PsyMAS-Tray.vbs"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\icon\desktop\app-icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\icon\desktop\mark-navy.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Configure-PsyMAS.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docker-compose.release.yml"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\.env.example"; DestDir: "{app}"; Flags: ignoreversion
@@ -37,12 +40,12 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Start PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Start-PsyMAS.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Configure PsyMAS AI"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Configure-PsyMAS.ps1"""; WorkingDir: "{app}"
-Name: "{group}\Stop PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Stop-PsyMAS.ps1"""; WorkingDir: "{app}"
-Name: "{group}\PsyMAS Control"; Filename: "wscript.exe"; Parameters: """{app}\PsyMAS-Tray.vbs"""; WorkingDir: "{app}"
-Name: "{autodesktop}\PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Start-PsyMAS.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{userstartup}\PsyMAS Control"; Filename: "wscript.exe"; Parameters: """{app}\PsyMAS-Tray.vbs"""; WorkingDir: "{app}"
+Name: "{group}\Start PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Start-PsyMAS.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
+Name: "{group}\Configure PsyMAS AI"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Configure-PsyMAS.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
+Name: "{group}\Stop PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Stop-PsyMAS.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
+Name: "{group}\PsyMAS Control"; Filename: "wscript.exe"; Parameters: """{app}\PsyMAS-Tray.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
+Name: "{autodesktop}\PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Start-PsyMAS.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"; Tasks: desktopicon
+Name: "{userstartup}\PsyMAS Control"; Filename: "wscript.exe"; Parameters: """{app}\PsyMAS-Tray.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce

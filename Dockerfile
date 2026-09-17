@@ -35,6 +35,7 @@ COPY psymas_ui psymas_ui
 COPY psymas_graph psymas_graph
 COPY config config
 COPY data data
+COPY icon icon
 
 # Install R packages (mirt, WrightMap, psych) - can take several minutes
 RUN Rscript install_r_packages.R

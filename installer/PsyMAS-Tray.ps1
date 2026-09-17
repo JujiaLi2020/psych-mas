@@ -36,7 +36,12 @@ function Get-PsyMASStatus {
 }
 
 $icon = New-Object System.Windows.Forms.NotifyIcon
-$icon.Icon = [System.Drawing.SystemIcons]::Application
+$trayIconPath = Join-Path $AppRoot "mark-navy.ico"
+if (Test-Path -LiteralPath $trayIconPath) {
+    $icon.Icon = New-Object System.Drawing.Icon($trayIconPath)
+} else {
+    $icon.Icon = [System.Drawing.SystemIcons]::Application
+}
 $icon.Text = "PsyMAS · checking status"
 $icon.Visible = $true
 

@@ -6534,7 +6534,7 @@ def _render_results(final: dict, response_only: bool = False) -> None:
 
 st.set_page_config(
     page_title="PsyMAS",
-    page_icon="🧠",
+    page_icon=str(Path(__file__).resolve().parent / "icon" / "desktop" / "app-icon.ico"),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -8033,15 +8033,20 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:baseline;gap:0.45rem;margin-bottom:0.15rem;">
-          <div style="font-weight:800;color:#0F172A;font-size:1.0rem;">PsyMAS</div>
-          <div style="font-size:0.72rem;font-weight:750;color:#64748B;">v{APP_VERSION}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    _brand_logo = Path(__file__).resolve().parent / "icon" / "svg" / "logo-horizontal-navy.svg"
+    if _brand_logo.exists():
+        st.image(str(_brand_logo), width=150)
+    else:
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:baseline;gap:0.45rem;margin-bottom:0.15rem;">
+              <div style="font-weight:800;color:#0F172A;font-size:1.0rem;">PsyMAS</div>
+              <div style="font-size:0.72rem;font-weight:750;color:#64748B;">v{APP_VERSION}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.caption(f"v{APP_VERSION}")
     st.markdown(
         """
         <div style="margin:0.05rem 0 0.45rem 0;line-height:1.35;">
