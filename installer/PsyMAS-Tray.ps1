@@ -16,13 +16,15 @@ if (-not $createdNew) {
     exit 0
 }
 
-function Invoke-PsyMASScript([string]$ScriptPath) {
+function Invoke-PsyMASScript([string]$ScriptPath, [switch]$Wait) {
     if (-not (Test-Path -LiteralPath $ScriptPath)) {
         throw "PsyMAS control script not found: $ScriptPath"
     }
-    Start-Process powershell.exe -ArgumentList @(
+    $process = Start-Process powershell.exe -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $ScriptPath
-    ) -WindowStyle Hidden
+    ) -WindowStyle Hidden -PassThru
+    if ($Wait) { $process.WaitForExit() }
+    return $process
 }
 
 function Get-PsyMASStatus {
@@ -83,10 +85,18 @@ $restartItem.Add_Click({
     } catch { $icon.ShowBalloonTip(3500, "PsyMAS", $_.Exception.Message, [System.Windows.Forms.ToolTipIcon]::Error) }
 })
 $exitItem.Add_Click({
-    $icon.Visible = $false
-    $icon.Dispose()
-    $menu.Dispose()
-    [System.Windows.Forms.Application]::ExitThread()
+    try {
+        # Exiting the controller is an explicit end-of-session action. Stop
+        # the Compose project before releasing the notification resources.
+        Invoke-PsyMASScript $StopScript -Wait | Out-Null
+    } catch {
+        $icon.ShowBalloonTip(3500, "PsyMAS", $_.Exception.Message, [System.Windows.Forms.ToolTipIcon]::Error)
+    } finally {
+        $icon.Visible = $false
+        $icon.Dispose()
+        $menu.Dispose()
+        [System.Windows.Forms.Application]::ExitThread()
+    }
 })
 $icon.Add_DoubleClick({ Start-Process "http://localhost:8501" })
 

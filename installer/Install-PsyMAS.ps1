@@ -87,6 +87,24 @@ function Ensure-OllamaModel([string]$ModelName) {
     return $true
 }
 
+function Start-OllamaService {
+    $ollama = Get-Command ollama -ErrorAction SilentlyContinue
+    if (-not $ollama) { return $false }
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get -TimeoutSec 3 | Out-Null
+        return $true
+    } catch { }
+    Start-Process $ollama.Source -ArgumentList "serve" -WindowStyle Hidden | Out-Null
+    Start-Sleep -Seconds 2
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -Method Get -TimeoutSec 5 | Out-Null
+        return $true
+    } catch {
+        Write-Warning "Ollama service is not ready yet. The model can be downloaded later from Configuration."
+        return $false
+    }
+}
+
 Write-Host "PsyMAS v0.7.7 Setup" -ForegroundColor White
 Write-Host "This installer keeps assessment and review data in $RunDataPath."
 
@@ -161,10 +179,8 @@ if (-not $SkipLlmSetup) {
             $settings.PSYMAS_OLLAMA_MODEL_ID = "llama3.1:8b"
             $settings.OLLAMA_CHAT_URL = "http://host.docker.internal:11434/api/chat"
             if (Install-OllamaIfNeeded) {
+                Start-OllamaService | Out-Null
                 Ensure-OllamaModel $settings.PSYMAS_OLLAMA_MODEL_ID | Out-Null
-                if (-not (Get-Process -Name ollama -ErrorAction SilentlyContinue)) {
-                    Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
-                }
             }
         }
         default {

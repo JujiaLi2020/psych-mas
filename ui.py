@@ -7970,6 +7970,11 @@ if _nav_req in NAV_OPTIONS or _nav_req in FLOW_STAGES or _nav_req in _INTERNAL_N
     st.session_state.run_mode = _target
     st.session_state.workflow_stage = _stage
     st.session_state["sidebar_nav"] = _nav_req if _nav_req in NAV_OPTIONS else _stage
+    # Do not carry an AI-review dialog selection into another workspace stage.
+    # The dialog is rendered only by the AI Review overview and must not flash
+    # while Human Review is becoming active.
+    if _stage != "AI-Assisted Review":
+        st.session_state.pop("_case_review_modal_id", None)
     run_mode = _target
     active_workflow_stage = _stage
     st.session_state["_psymas_just_nav_programmatic"] = True
@@ -8168,6 +8173,8 @@ with st.sidebar:
                         st.session_state.workflow_stage = nav_item
                         st.session_state.run_mode = _WORKFLOW_TARGETS[nav_item]
                         st.session_state["sidebar_nav"] = nav_item
+                    if nav_item != "AI-Assisted Review":
+                        st.session_state.pop("_case_review_modal_id", None)
                     st.rerun()
     resp_loaded = bool(st.session_state.get("last_uploaded_responses"))
     rt_loaded = bool(st.session_state.get("last_uploaded_rt_data"))
@@ -10558,7 +10565,9 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
                 cellEditorParams={"values": decision_options},
             )
             gb.configure_column("Reviewer note", width=360, editable=True)
-            gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=20)
+            # Human Review is a batch workspace: keep a full 100-case page so
+            # reviewers can work through a queue without constant pagination.
+            gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
             gb.configure_selection(selection_mode="single", use_checkbox=False)
             grid_options = gb.build()
             grid_options.update(
@@ -10649,7 +10658,7 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
             }
             grid_kwargs = {
                 "gridOptions": grid_options,
-                "height": 430,
+                "height": 620,
                 "fit_columns_on_grid_load": False,
                 "allow_unsafe_jscode": JsCode is not None,
                 "enable_enterprise_modules": False,
@@ -10678,7 +10687,7 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
                 edited_table_df,
                 use_container_width=True,
                 hide_index=True,
-                height=430,
+                height=620,
                 row_height=28,
                 column_config={
                     "_Examinee_ID_Num": None,
@@ -10697,7 +10706,7 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
             edited_table_df,
             use_container_width=True,
             hide_index=True,
-            height=430,
+            height=620,
             row_height=28,
             column_config={
                 "_Examinee_ID_Num": None,
@@ -17888,6 +17897,9 @@ _WORKBENCH_MODES = {
 }
 if run_mode in _WORKBENCH_MODES:
     _render_workbench_page(active_workflow_stage)
+    # Workbench pages are complete page views. Stop before legacy/main-content
+    # rendering can append a previous module or case-review fragment.
+    st.stop()
 
 # ----- Main content: module title only when not Preparation -----
 if run_mode not in {"Preparation", *_WORKBENCH_MODES}:

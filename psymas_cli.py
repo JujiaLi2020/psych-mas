@@ -15,6 +15,7 @@ from pathlib import Path
 
 VERSION = "0.7.7"
 COMPOSE_PROJECT = "psymas-cli"
+DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
 
 
 def _runtime_root() -> Path:
@@ -97,6 +98,155 @@ def _doctor(_: argparse.Namespace) -> int:
     else:
         print("[warn] Docker was not found")
     return 1 if problems else 0
+
+
+def _ask_yes_no(question: str, default: bool = True) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input(f"{question} {suffix} ").strip().lower()
+    if not answer:
+        return default
+    return answer in {"y", "yes"}
+
+
+def _install_command(command: list[str], label: str) -> bool:
+    print(f"Installing {label}...")
+    try:
+        result = subprocess.run(command, check=False)
+    except FileNotFoundError:
+        print(f"Could not run the installer for {label}.", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        print(f"{label} installation returned exit code {result.returncode}.", file=sys.stderr)
+        return False
+    return True
+
+
+def _refresh_path() -> None:
+    if sys.platform != "win32":
+        return
+    machine = os.environ.get("Path", "")
+    user = os.environ.get("PATH", "")
+    os.environ["Path"] = ";".join(part for part in (machine, user) if part)
+
+
+def _install_docker() -> bool:
+    if shutil.which("docker"):
+        print("[ok] Docker command found")
+        return True
+    if sys.platform == "win32" and shutil.which("winget"):
+        installed = _install_command(
+            ["winget", "install", "--exact", "--id", "Docker.DockerDesktop",
+             "--accept-package-agreements", "--accept-source-agreements"],
+            "Docker Desktop",
+        )
+        _refresh_path()
+        return installed
+    if sys.platform == "darwin" and shutil.which("brew"):
+        return _install_command(["brew", "install", "--cask", "docker"], "Docker Desktop")
+    print(
+        "Docker Desktop is not installed. Install it from "
+        "https://www.docker.com/products/docker-desktop/ and run `psymas install` again.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _ollama_command() -> str | None:
+    command = shutil.which("ollama")
+    return str(command) if command else None
+
+
+def _install_ollama() -> bool:
+    if _ollama_command():
+        print("[ok] Ollama command found")
+        return True
+    if sys.platform == "win32" and shutil.which("winget"):
+        installed = _install_command(
+            ["winget", "install", "--exact", "--id", "Ollama.Ollama",
+             "--accept-package-agreements", "--accept-source-agreements"],
+            "Ollama",
+        )
+        _refresh_path()
+        return installed
+    if sys.platform == "darwin" and shutil.which("brew"):
+        return _install_command(["brew", "install", "ollama"], "Ollama")
+    print(
+        "Ollama is not installed. Follow https://ollama.com/download and run "
+        "`psymas install --ollama` again.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _ollama_is_ready() -> bool:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _start_ollama() -> bool:
+    if _ollama_is_ready():
+        return True
+    command = _ollama_command()
+    if not command:
+        return False
+    print("Starting Ollama service...")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    try:
+        subprocess.Popen([command, "serve"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, creationflags=creationflags)
+    except OSError:
+        return False
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if _ollama_is_ready():
+            return True
+        time.sleep(2)
+    return False
+
+
+def _ensure_ollama_model(model: str) -> bool:
+    if not _start_ollama():
+        print("Ollama did not become ready. The model can be installed later from Configuration.", file=sys.stderr)
+        return False
+    try:
+        tags = urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=5).read().decode("utf-8")
+        if f'"name":"{model}"' in tags or f'"name": "{model}"' in tags:
+            print(f"[ok] Ollama model {model} is already installed")
+            return True
+    except Exception:
+        pass
+    print(f"Downloading Ollama model {model}. This may take several minutes and several GB...")
+    result = subprocess.run([_ollama_command() or "ollama", "pull", model], check=False)
+    return result.returncode == 0
+
+
+def _install_cli(args: argparse.Namespace) -> int:
+    print(f"PsyMAS {VERSION} setup")
+    if not _install_docker():
+        return 1
+
+    if sys.platform == "win32" and shutil.which("docker"):
+        subprocess.run(["docker", "desktop", "start"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if args.ollama or (not args.no_ollama and _ask_yes_no("Install optional local Ollama support?", False)):
+        if _install_ollama():
+            model = args.model or DEFAULT_OLLAMA_MODEL
+            if _ensure_ollama_model(model):
+                env_file, _ = _ensure_runtime_env()
+                values = dict(line.split("=", 1) for line in env_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+                values["PSYMAS_LLM_PROVIDER"] = "local_ollama"
+                values["PSYMAS_OLLAMA_MODEL_ID"] = model
+                values["OLLAMA_CHAT_URL"] = "http://host.docker.internal:11434/api/chat" if sys.platform == "win32" else "http://host.docker.internal:11434/api/chat"
+                env_file.write_text("".join(f"{key}={value}\n" for key, value in values.items()), encoding="utf-8")
+
+    print("Dependencies are ready. Starting PsyMAS...")
+    start_args = argparse.Namespace(host=args.host, port=args.port, timeout=args.timeout,
+                                    no_browser=args.no_browser, no_pull=args.no_pull)
+    return _start_stack(start_args)
 
 
 def _user_runtime_dir() -> Path:
@@ -236,6 +386,19 @@ def _parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser("doctor", help="check the local runtime")
     doctor_parser.set_defaults(handler=_doctor)
+
+    install_parser = subparsers.add_parser(
+        "install", help="install/check Docker and optional Ollama, then start PsyMAS"
+    )
+    install_parser.add_argument("--ollama", action="store_true", help="install and configure local Ollama")
+    install_parser.add_argument("--no-ollama", action="store_true", help="skip the Ollama question")
+    install_parser.add_argument("--model", default=DEFAULT_OLLAMA_MODEL, help="Ollama model to install")
+    install_parser.add_argument("--host", default="localhost")
+    install_parser.add_argument("--port", type=int, default=8501)
+    install_parser.add_argument("--timeout", type=int, default=180)
+    install_parser.add_argument("--no-browser", action="store_true")
+    install_parser.add_argument("--no-pull", action="store_true", help="use the locally cached image")
+    install_parser.set_defaults(handler=_install_cli)
 
     start_parser = subparsers.add_parser("start", help="start the complete UI + backend Docker stack")
     start_parser.add_argument("--host", default="localhost")

@@ -19,15 +19,22 @@ Windows 10/11, Docker Desktop, 8 GB RAM, and 5-10 GB free disk space are recomme
 
 ### 2. CLI installation
 
-Requirements: Python 3.11+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+The CLI can install or check the runtime dependencies and then start the same Docker-based PsyMAS services used by the installer. Requirements are Python 3.11+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
 uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.7"
-psymas doctor
-psymas start
+psymas install
 ```
 
-Open `http://localhost:8501`. Useful commands:
+`psymas install` checks Docker Desktop, offers to install it when it is missing, optionally installs Ollama and the default `llama3.1:8b` model, creates the local PsyMAS data directory, pulls the versioned image, and starts the UI and backend. On Windows, dependency installation uses `winget`; on macOS it can use Homebrew. Linux users should install Docker and Ollama using their distribution's documented installers, then run `psymas install`.
+
+The CLI asks before installing optional software. To request local Ollama setup directly:
+
+```bash
+psymas install --ollama --model llama3.1:8b
+```
+
+Choose `No AI` by answering no to the Ollama question, or start later with OpenRouter/local Ollama from **Configuration**. Open `http://localhost:8501` after installation. Useful commands:
 
 ```bash
 psymas status
@@ -35,6 +42,8 @@ psymas logs --follow
 psymas restart
 psymas stop
 ```
+
+`psymas start` only starts an already-installed Docker environment; it does not install Docker or Ollama. `psymas doctor` checks the current environment without changing it.
 
 ### 3. Docker Compose
 

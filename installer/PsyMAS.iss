@@ -45,7 +45,9 @@ Name: "{group}\Configure PsyMAS AI"; Filename: "powershell.exe"; Parameters: "-N
 Name: "{group}\Stop PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Stop-PsyMAS.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
 Name: "{group}\PsyMAS Control"; Filename: "wscript.exe"; Parameters: """{app}\PsyMAS-Tray.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
 Name: "{autodesktop}\PsyMAS"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Start-PsyMAS.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"; Tasks: desktopicon
-Name: "{userstartup}\PsyMAS Control"; Filename: "wscript.exe"; Parameters: """{app}\PsyMAS-Tray.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\app-icon.ico"
+
+[InstallDelete]
+Type: files; Name: "{userstartup}\PsyMAS Control.lnk"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
