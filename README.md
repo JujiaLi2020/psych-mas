@@ -111,7 +111,7 @@ Docker image:
 
 ```text
 ghcr.io/jujiali2020/psych-mas:0.7.7
-sha256:8d13f02691ca994a96e1730b1b6556aa3cf93fabbfd9896f280c4b09d94fd708
+sha256:47ab7587b64ba4792fd13beb8f6e00a9a53e432fbc7c553dea5392b7d581fc4f
 ```
 
 Zenodo archive: [10.5281/zenodo.22761090](https://doi.org/10.5281/zenodo.22761090).
@@ -132,9 +132,9 @@ reproducibility/      Generation script, manifest, and checksums
 ## Troubleshooting
 
 ```bash
-docker compose ps
-docker compose logs backend
-docker compose logs ui
+docker compose -f docker-compose.release.yml ps
+docker compose -f docker-compose.release.yml logs backend
+docker compose -f docker-compose.release.yml logs ui
 ```
 
 Check `http://localhost:9000/health`. If `psymas` is not found after CLI installation, run `uv tool update-shell` and restart the terminal. Do not share `.env` when it contains an API key.
