@@ -10931,6 +10931,11 @@ def _generate_case_reviewer_explanation(
     load_dotenv()
     text, err = _call_selected_llm_text(prompt, model_id=model_id, timeout=90)
     if text and not err:
+        validated, violations = _validate_llm_case_report(
+            text, case_row, case_domains, case_trace, case_auxiliary
+        )
+        if violations:
+            return validated
         return text
     return _format_llm_error(err or "No selected LLM model returned a response.")
 
@@ -10999,6 +11004,8 @@ Decision boundary:
 - Do not infer intent, cheating, fraud, or misconduct.
 - Do not imply the examinee misused exposed items, had access to exposed content, or changed answers improperly. Describe only what the evidence pattern asks the reviewer to inspect.
 - Do not say "high likelihood of aberrance" or "potential misconduct" unless quoting the human-selected B9 outcome.
+- Do not use a human-selected B9 label in the narrative. B9 is displayed separately as a human adjudication field.
+- Never describe a binary flag value such as 1.0 as a probability, magnitude, or proof of unusually fast behavior.
 - Do not say the examinee "had prior familiarity", "used a strategy", "obtained answers without understanding", or "compromised integrity".
 - Preferred wording: "is consistent with", "may reflect", "requires review", "should be checked against context".
 - The human analyst selects the final B9 adjudication outcome.
@@ -11073,6 +11080,70 @@ def _case_reviewer_prompt_template() -> str:
 
 def _case_reviewer_prompt(case_context: str) -> str:
     return _case_reviewer_prompt_template().replace("{case_context}", str(case_context)[:9000])
+
+
+def _llm_report_fallback(
+    case_row: pd.Series,
+    case_domains: pd.DataFrame,
+    case_trace: pd.DataFrame,
+    case_auxiliary: pd.DataFrame,
+) -> str:
+    """Return a deterministic report when an LLM response crosses the evidence boundary."""
+    return _evidence_bound_case_summary(case_row, case_domains, case_trace, case_auxiliary)
+
+
+def _validate_llm_case_report(
+    text: str,
+    case_row: pd.Series,
+    case_domains: pd.DataFrame,
+    case_trace: pd.DataFrame,
+    case_auxiliary: pd.DataFrame,
+) -> tuple[str, list[str]]:
+    """Reject common overclaims before text reaches the UI, database, or PDF."""
+    report = str(text or "").strip()
+    lowered = report.lower()
+    violations: list[str] = []
+    prohibited = {
+        "evidence of misconduct": "misconduct conclusion",
+        "strong convergent evidence of misconduct": "misconduct conclusion",
+        "high likelihood of aberrance": "probability overclaim",
+        "potential misconduct is suspected": "misconduct conclusion",
+        "may have engaged in rapid responding": "behavioral overclaim",
+        "may have engaged in tampering": "behavioral overclaim",
+        "engaged in rapid responding": "behavioral overclaim",
+        "engaged in tampering": "behavioral overclaim",
+        "obtained answers without understanding": "unsupported interpretation",
+    }
+    for phrase, reason in prohibited.items():
+        if phrase in lowered:
+            violations.append(reason)
+
+    if re.search(r"\bvalue\s*(?:is|of)?\s*1(?:\.0+)?\b[^.\n]{0,80}\b(indicat|meaning|show)", lowered):
+        violations.append("binary flag interpreted as a magnitude")
+
+    if isinstance(case_domains, pd.DataFrame) and not case_domains.empty and "Domain" in case_domains.columns:
+        pk_rows = case_domains[case_domains["Domain"].astype(str).str.upper().eq("PK")]
+        if not pk_rows.empty:
+            pk_strength = str(pk_rows.iloc[0].get("Strength", "") or "").strip().lower()
+            if pk_strength in {"", "none", "unavailable", "localization only"}:
+                if re.search(r"\b(prior knowledge|preknowledge|prior familiarity|exposed-item advantage|misuse of exposed)", lowered):
+                    violations.append("PK context presented as governed PK evidence")
+
+    if violations:
+        return _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary), sorted(set(violations))
+    return report, []
+
+
+def _validated_case_report(
+    text: str,
+    case_row: pd.Series,
+    case_domains: pd.DataFrame,
+    case_trace: pd.DataFrame,
+    case_auxiliary: pd.DataFrame,
+) -> str:
+    """Normalize LLM output at the single boundary shared by UI and PDF export."""
+    validated, _ = _validate_llm_case_report(text, case_row, case_domains, case_trace, case_auxiliary)
+    return validated
 
 
 def _compact_ai_suggestion_text(text: str) -> str:
@@ -11228,20 +11299,21 @@ def _ask_case_review_llm(
     model_id: str | None = None,
 ) -> str:
     context = _build_case_reviewer_context(selected_id, case_row, case_domains, case_trace, case_auxiliary)
-    prompt = (
-        "You are assisting a human psychometric forensic reviewer. Answer the reviewer using only the supplied case evidence "
-        "and the reviewer's current adjudication notes. Do not make a final misconduct determination yourself. "
-        "Help the reviewer write cautious, evidence-bound language and identify what should be checked next. "
-        "B9 human adjudication outcomes are limited to Rule Violation, Potential Misconduct, and Definite Misconduct.\n\n"
-        f"Reviewer current final decision: {reviewer_decision}\n"
+    prompt = _case_reviewer_prompt(context)
+    prompt += (
+        "\n\nReviewer interaction context:\n"
+        f"Current human adjudication field (do not reinterpret): {reviewer_decision or 'not recorded'}\n"
         f"Reviewer note: {reviewer_note or 'None'}\n"
-        f"Reviewer question/request: {reviewer_question or 'Draft a concise final reviewer comment.'}\n\n"
-        f"Case evidence:\n{context[:9000]}"
+        f"Reviewer question: {reviewer_question or 'Draft a concise evidence-bound clarification.'}\n\n"
+        "Answer the reviewer question using only the evidence packet. Do not repeat or infer a human adjudication outcome."
     )
     load_dotenv()
     text, err = _call_selected_llm_text(prompt, model_id=model_id, timeout=90)
     if text and not err:
-        return text
+        validated, _ = _validate_llm_case_report(
+            text, case_row, case_domains, case_trace, case_auxiliary
+        )
+        return validated
     return _format_llm_error(err or "No selected LLM model returned a response.")
 
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -12098,8 +12170,18 @@ def _build_case_review_pdf(
             story.append(Spacer(1, 4))
     story.append(Paragraph("IV. Reviewer Determination and Attestation", h2))
     decision_data = [
-        ["Final Reviewer Decision", html.escape(str(final_decision))],
-        ["Reviewer Note", Paragraph(html.escape(str(reviewer_note or "No reviewer note entered.")), body)],
+        ["Human Adjudication (Recorded)", html.escape(str(final_decision or "No decision recorded"))],
+        [
+            "Reviewer Note",
+            Paragraph(
+                html.escape(
+                    str(reviewer_note).strip()
+                    if str(reviewer_note or "").strip() and str(reviewer_note).strip().lower() != "notes."
+                    else "No substantive reviewer note recorded."
+                ),
+                body,
+            ),
+        ],
         ["Attestation", Paragraph("The reviewer acknowledges that this report documents statistical evidence for review support and does not independently establish misconduct.", body)],
         ["Reviewer Signature / Date", "________________________________________"],
     ]
@@ -13439,6 +13521,20 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     key="case_reviewer_prompt_template",
                     height=300,
                 )
+        prompt_signature = hashlib.sha256(
+            (
+                str(_active_run_id())
+                + "\n"
+                + str(_case_reviewer_prompt_template())
+                + "\n"
+                + str(selected_case_model)
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        signature_key = f"case_report_signature_{selected_id}"
+        if st.session_state.get(signature_key) != prompt_signature:
+            st.session_state.pop(explanation_key, None)
+            st.session_state.pop(llm_support_key, None)
+            st.session_state[signature_key] = prompt_signature
         if refresh_suggestion:
             with st.spinner("Generating reviewer explanation from domain evidence and flagged indices..."):
                 explanation = _generate_case_reviewer_explanation(
@@ -13464,6 +13560,14 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 case_trace,
                 case_auxiliary,
             )
+        explanation_text = _validated_case_report(
+            str(explanation_text),
+            case_row,
+            case_domains,
+            case_trace,
+            case_auxiliary,
+        )
+        st.session_state[explanation_key] = explanation_text
         st.markdown(
             f"""
 <div class="psymas-ai-suggestion">
@@ -13475,8 +13579,16 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
         )
 
         if st.session_state.get(llm_support_key):
+            chat_support = _validated_case_report(
+                str(st.session_state[llm_support_key]),
+                case_row,
+                case_domains,
+                case_trace,
+                case_auxiliary,
+            )
+            st.session_state[llm_support_key] = chat_support
             with st.chat_message("assistant"):
-                st.markdown(str(st.session_state[llm_support_key]))
+                st.markdown(chat_support)
         reviewer_question = st.chat_input(
             "Ask about this case...",
             key=f"case_llm_chat_{selected_id}",
