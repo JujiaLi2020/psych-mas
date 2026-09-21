@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,14 @@ class RunStore:
     def __init__(self, db_path: Path | str = DEFAULT_DB_PATH) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._table_cache: dict[str, pd.DataFrame] = {}
+        self._review_decisions_cache: dict[str, dict[str, dict[str, str]]] = {}
         self.init_schema()
+
+    def clear_cache(self) -> None:
+        """Invalidate materialized tables after an external database update."""
+        self._table_cache.clear()
+        self._review_decisions_cache.clear()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -143,6 +151,10 @@ class RunStore:
     ) -> None:
         run_id = str(run_id)
         created_at = datetime.now(timezone.utc).isoformat()
+        # A saved run replaces the materialized tables. Any in-process table
+        # cache must be invalidated before the next page rerun.
+        self._table_cache.clear()
+        self._review_decisions_cache.clear()
         with self._connect() as conn:
             conn.execute("UPDATE runs SET is_active = 0")
             self._drop_data_tables(conn)
@@ -194,11 +206,16 @@ class RunStore:
     def load_table(self, name: str) -> pd.DataFrame:
         if name not in DATA_TABLES:
             return pd.DataFrame()
+        cached = self._table_cache.get(name)
+        if isinstance(cached, pd.DataFrame):
+            return cached.copy()
         with self._connect() as conn:
             try:
-                return pd.read_sql_query(f'SELECT * FROM "{name}"', conn)
+                table = pd.read_sql_query(f'SELECT * FROM "{name}"', conn)
             except Exception:
-                return pd.DataFrame()
+                table = pd.DataFrame()
+        self._table_cache[name] = table.copy()
+        return table
 
     def load_forensic_result(self, run_id: str | None = None) -> dict:
         run_id = str(run_id or self.active_run_id() or "")
@@ -238,6 +255,9 @@ class RunStore:
         run_id = str(run_id or self.active_run_id() or "")
         if not run_id:
             return {}
+        cached = self._review_decisions_cache.get(run_id)
+        if isinstance(cached, dict):
+            return {key: value.copy() for key, value in cached.items()}
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -253,6 +273,7 @@ class RunStore:
                 "reviewer_note": row["reviewer_note"] or "",
                 "llm_explanation": row["llm_explanation"] or "",
             }
+        self._review_decisions_cache[run_id] = {key: value.copy() for key, value in out.items()}
         return out
 
     def save_review_decision(
@@ -290,7 +311,15 @@ class RunStore:
                 ),
             )
             conn.commit()
+        self._review_decisions_cache.pop(run_id, None)
 
 
+@lru_cache(maxsize=4)
 def get_run_store(db_path: Path | str = DEFAULT_DB_PATH) -> RunStore:
+    """Return one store instance per database path during the app process.
+
+    Streamlit reruns the script for widget interactions. Reusing the store
+    instance avoids reopening the database and recreating the schema on every
+    rerun; materialized table reads are cached by ``RunStore.load_table``.
+    """
     return RunStore(db_path)

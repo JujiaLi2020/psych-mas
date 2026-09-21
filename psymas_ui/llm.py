@@ -397,18 +397,24 @@ def model_variants_with_selected_first() -> list[str]:
     return [effective] + [m for m in model_ids if m != effective]
 
 
-def call_selected_llm_text(prompt: str, *, timeout: int = 90) -> tuple[str | None, str | None]:
-    """Call the selected OpenRouter or local Ollama model for text-only prompts."""
+def call_selected_llm_text(
+    prompt: str,
+    *,
+    timeout: int = 90,
+    model_id: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Call the selected provider model, optionally overriding it for one case."""
     provider = llm_provider()
+    candidates = [str(model_id).strip()] if str(model_id or "").strip() else model_variants_with_selected_first()
     if provider == "local_ollama":
-        for model_id in model_variants_with_selected_first():
-            text, err = call_ollama(model_id, [{"role": "user", "content": prompt}], timeout=timeout)
+        for candidate in candidates:
+            text, err = call_ollama(candidate, [{"role": "user", "content": prompt}], timeout=timeout)
             if text and not err:
                 return text, None
-        return None, f"Local Ollama: no response. Start Ollama at {configured_ollama_chat_url()} and pull the selected model."
+        return None, f"Local Ollama: no response for '{candidates[0]}'. Start Ollama at {configured_ollama_chat_url()} and pull the selected model."
     api_key = os.getenv("OPENROUTER_API_KEY", "")
-    for model_id in model_variants_with_selected_first():
-        text, err = call_openrouter(api_key, model_id, [{"role": "user", "content": prompt}], timeout=timeout)
+    for candidate in candidates:
+        text, err = call_openrouter(api_key, candidate, [{"role": "user", "content": prompt}], timeout=timeout)
         if text and not err:
             return text, None
-    return None, "OpenRouter: no model returned a response. Try another model in Model engine or set OPENROUTER_API_KEY in .env."
+    return None, f"OpenRouter: model '{candidates[0]}' returned no response. Try another configured model or set OPENROUTER_API_KEY in .env."

@@ -31,15 +31,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tempfile
 import time
-import uuid
 from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
 from psymas_ui.components import (
     apply_control_theme,
     kpi_progress as _render_kpi_progress,
-    workspace_header as _render_workspace_header,
-    workspace_view as _workspace_view,
 )
 from psymas_ui.app_config import (
     ABERRANCE_FN_TO_AGENT,
@@ -72,16 +69,12 @@ from psymas_ui.evidence_governance import (
     variant_allowed_for_b3,
 )
 from psymas_ui.review import build_final_flag_review
-from psymas_ui.run_store import DATA_TABLES, get_run_store
+from psymas_ui.run_store import get_run_store
 from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot
 from psymas_ui.llm import (
     DEFAULT_GEMINI_MODEL_IDS,
     LOCAL_OLLAMA_MODEL_IDS,
-    LOCAL_OLLAMA_MODELS,
-    OPENROUTER_FREE_MODEL_IDS,
     OPENROUTER_FREE_MODELS,
-    OLLAMA_CHAT_URL,
-    call_ollama as _call_ollama,
     call_openrouter as _call_openrouter,
     call_selected_llm_text as _call_selected_llm_text,
     clear_openrouter_api_key as _clear_openrouter_api_key,
@@ -93,7 +86,6 @@ from psymas_ui.llm import (
     discover_ollama_models as _discover_ollama_models,
     pull_ollama_model as _pull_ollama_model,
     llm_provider as _llm_provider,
-    load_openrouter_model_options as _load_openrouter_model_options,
     model_settings_for_backend as _model_settings_for_backend,
     model_variants_with_selected_first as _model_variants_with_selected_first,
     preferred_llm_provider as _preferred_llm_provider,
@@ -139,299 +131,14 @@ def _graph_module():
     return graph
 
 
-def _render_llm_settings() -> None:
-    """Global LLM settings: provider, API keys test, model list, and lock/unlock."""
-    load_dotenv()
-    _api_key = os.getenv("GOOGLE_API_KEY")
-    _openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-    st.radio(
-        "LLM provider",
-        options=["openrouter", "local_ollama"],
-        format_func=lambda x: "OpenRouter" if x == "openrouter" else "Local Ollama",
-        key="llm_provider",
-        horizontal=True,
-        help="OpenRouter uses the curated 5-model list. Local Ollama is reserved for Llama 8B/70B and does not use OpenRouter.",
-    )
-    if st.session_state.llm_provider == "google":
-        if "api_key_test_result" not in st.session_state:
-            st.session_state.api_key_test_result = None
-        if _api_key:
-            if st.button("Test API key", key="test_api_key"):
-                ok, msg = _test_api_key(_api_key)
-                st.session_state.api_key_test_result = (ok, msg)
-                st.rerun()
-            if st.session_state.api_key_test_result is not None:
-                ok, msg = st.session_state.api_key_test_result
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-        else:
-            st.warning("GOOGLE_API_KEY not set in .env. Add it to use Psych-MAS Summary with Google.")
-    elif st.session_state.llm_provider == "openrouter":
-        if "openrouter_api_key_test_result" not in st.session_state:
-            st.session_state.openrouter_api_key_test_result = None
-        st.markdown("#### OpenRouter API key")
-        configured_key = _configured_openrouter_api_key()
-        if configured_key:
-            st.caption(f"Configured locally · key ending in `{configured_key[-4:]}`")
-        else:
-            st.caption("No API key is currently configured.")
-        with st.form("openrouter_api_key_form", clear_on_submit=True, border=False):
-            entered_key = st.text_input(
-                "API key",
-                type="password",
-                placeholder="sk-or-v1-...",
-                autocomplete="off",
-                help="Stored as a local configuration file in the persistent PsyMAS data directory and never included in exports.",
-            )
-            save_key, test_key = st.columns(2)
-            with save_key:
-                save_submitted = st.form_submit_button("Save key", use_container_width=True, type="primary")
-            with test_key:
-                test_submitted = st.form_submit_button("Test connection", use_container_width=True)
-        if save_submitted:
-            try:
-                _save_openrouter_api_key(entered_key)
-                st.session_state.openrouter_api_key_test_result = (True, "OpenRouter API key saved locally.")
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-        elif test_submitted:
-            key_to_test = entered_key.strip() or configured_key
-            ok, msg = _test_openrouter_api_key(key_to_test)
-            st.session_state.openrouter_api_key_test_result = (ok, msg)
-            st.rerun()
-        if configured_key and st.button("Remove saved key", key="remove_openrouter_api_key"):
-            _clear_openrouter_api_key()
-            st.session_state.openrouter_api_key_test_result = None
-            st.rerun()
-
-        model_options_loaded, model_list_err, model_list_live = _load_openrouter_model_options()
-        _ml_col1, _ml_col2 = st.columns([1, 2])
-        with _ml_col1:
-            if st.button("Reload curated model list", key="refresh_openrouter_model_list"):
-                model_options_loaded, model_list_err, model_list_live = _load_openrouter_model_options(force=True)
-                st.toast(f"Loaded {len(model_options_loaded):,} curated US models.")
-                st.rerun()
-        with _ml_col2:
-            st.caption(f"Curated list: {len(model_options_loaded):,} US models with price and recommended use.")
-        if st.session_state.openrouter_api_key_test_result is not None:
-            ok, msg = st.session_state.openrouter_api_key_test_result
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
-        st.caption("The key remains on this installation in a local configuration file. Protect access to the host data directory.")
-    else:
-        st.caption(f"Local Ollama endpoint: `{OLLAMA_CHAT_URL}`")
-        st.caption("Install locally with `ollama pull llama3.1:8b` or `ollama pull llama3.3:70b`, then run `ollama serve`.")
-    _model_options = _current_model_options()
-    _model_ids = _current_model_ids()
-    if "pinned_llm_model" not in st.session_state:
-        st.session_state.pinned_llm_model = None
-    if "pinned_llm_provider" not in st.session_state:
-        st.session_state.pinned_llm_provider = None
-    _pinned = st.session_state.pinned_llm_model if st.session_state.pinned_llm_provider == st.session_state.llm_provider else None
-    if "selected_gemini_model" not in st.session_state:
-        st.session_state.selected_gemini_model = (_pinned if _pinned and _pinned in _model_ids else None) or (_model_ids[0] if _model_ids else (LOCAL_OLLAMA_MODEL_IDS[0] if st.session_state.llm_provider == "local_ollama" else OPENROUTER_FREE_MODEL_IDS[0]))
-    if st.session_state.selected_gemini_model not in _model_ids:
-        st.session_state.selected_gemini_model = (_pinned if _pinned and _pinned in _model_ids else None) or (_model_ids[0] if _model_ids else (LOCAL_OLLAMA_MODEL_IDS[0] if st.session_state.llm_provider == "local_ollama" else OPENROUTER_FREE_MODEL_IDS[0]))
-    st.selectbox(
-        "LLM model for Psych-MAS Summary",
-        options=_model_ids,
-        format_func=lambda x: next((label for label, api_id in _model_options if api_id == x), _model_id_to_display_name(x) if "/" not in str(x) else str(x).split("/")[-1].replace("-", " ").title()),
-        key="selected_gemini_model",
-        help="OpenRouter and Local Ollama model lists are separated.",
-    )
-    _pinned_now = st.session_state.pinned_llm_model if st.session_state.pinned_llm_provider == st.session_state.llm_provider else None
-    _lock_col, _unlock_col = st.columns(2)
-    with _lock_col:
-        if st.button("Lock current model for all analyses", key="lock_llm_model", help="Use this model for every LLM call (prompt + Psych-MAS Summary) until you unlock."):
-            st.session_state.pinned_llm_model = st.session_state.selected_gemini_model
-            st.session_state.pinned_llm_provider = st.session_state.llm_provider
-            st.rerun()
-    with _unlock_col:
-        if _pinned_now and st.button("Unlock model", key="unlock_llm_model", help="Stop using the locked model; selection will follow the dropdown again."):
-            st.session_state.pinned_llm_model = None
-            st.session_state.pinned_llm_provider = None
-            st.rerun()
-    if _pinned_now:
-        _locked_label = next((label for label, api_id in _model_options if api_id == _pinned_now), _pinned_now.split("/")[-1].replace("-", " ").title() if "/" in _pinned_now else _pinned_now)
-        st.caption(f"🔒 **Locked:** {_locked_label} — all LLM analyses use this model until you unlock.")
-    else:
-        st.caption("✓ The selected model is active. Use **Analyze prompt** or any **Psych-MAS Summary** button to run with this model — no extra step needed.")
-    if "model_availability" not in st.session_state:
-        st.session_state.model_availability = None
-    if "model_availability_errors" not in st.session_state:
-        st.session_state.model_availability_errors = {}
-    if "model_availability_times" not in st.session_state:
-        st.session_state.model_availability_times = {}
-    if st.session_state.llm_provider == "openrouter":
-        if st.button("Check model availability", key="check_model_availability"):
-            with st.spinner("Testing selected OpenRouter model…"):
-                avail = {}
-                errs = {}
-                times = {}
-                model_id = st.session_state.get("selected_gemini_model") or (_current_model_ids()[0] if _current_model_ids() else "")
-                if model_id:
-                    ok, err, elapsed = _test_openrouter_model(_openrouter_key, model_id)
-                    avail[model_id] = ok
-                    if err:
-                        errs[model_id] = err
-                    times[model_id] = elapsed
-                st.session_state.model_availability = avail
-                st.session_state.model_availability_errors = errs
-                st.session_state.model_availability_times = times
-            st.rerun()
-        if st.session_state.model_availability is not None:
-            selected_id = st.session_state.get("selected_gemini_model", (_current_model_ids()[0] if _current_model_ids() else ""))
-            st.caption("Selected model status (available/unavailable; response time in seconds)")
-            for label, api_id in _current_model_options():
-                if api_id != selected_id:
-                    continue
-                status = st.session_state.model_availability.get(api_id, False)
-                err = st.session_state.model_availability_errors.get(api_id)
-                elapsed = st.session_state.model_availability_times.get(api_id, 0.0)
-                dot = "available" if status else "unavailable"
-                sel = " **(Selected)**" if api_id == selected_id else ""
-                extra = f" — {elapsed:.2f}s" if elapsed else ""
-                if err:
-                    st.caption(f"{dot} {label}{sel}{extra} — {err}")
-                else:
-                    st.caption(f"{dot} {label}{sel}{extra}")
-    elif st.session_state.llm_provider == "local_ollama":
-        if st.button("Check local model availability", key="check_local_ollama_availability"):
-            with st.spinner("Testing selected local Ollama model…"):
-                avail = {}
-                errs = {}
-                times = {}
-                model_id = st.session_state.get("selected_gemini_model") or (LOCAL_OLLAMA_MODEL_IDS[0] if LOCAL_OLLAMA_MODEL_IDS else "")
-                if model_id:
-                    ok, err, elapsed = _test_ollama_model(model_id)
-                    avail[model_id] = ok
-                    if err:
-                        errs[model_id] = err
-                    times[model_id] = elapsed
-                st.session_state.model_availability = avail
-                st.session_state.model_availability_errors = errs
-                st.session_state.model_availability_times = times
-            st.rerun()
-        if st.session_state.model_availability is not None:
-            selected_id = st.session_state.get("selected_gemini_model", LOCAL_OLLAMA_MODEL_IDS[0] if LOCAL_OLLAMA_MODEL_IDS else "")
-            for label, api_id in LOCAL_OLLAMA_MODELS:
-                if api_id != selected_id:
-                    continue
-                status = st.session_state.model_availability.get(api_id, False)
-                err = st.session_state.model_availability_errors.get(api_id)
-                elapsed = st.session_state.model_availability_times.get(api_id, 0.0)
-                dot = "available" if status else "unavailable"
-                extra = f" — {elapsed:.2f}s" if elapsed else ""
-                if err:
-                    st.caption(f"{dot} {label}{extra} — {err}")
-                else:
-                    st.caption(f"{dot} {label}{extra}")
 
 
-def _test_api_key(api_key: str, timeout: int = 15) -> tuple[bool, str]:
-    """Verify GOOGLE_API_KEY by listing models. Return (True, message) or (False, error_message)."""
-    if not api_key or not api_key.strip():
-        return False, "No API key provided (GOOGLE_API_KEY empty or missing in .env)."
-    try:
-        url = "https://generativelanguage.googleapis.com/v1beta/models"
-        resp = requests.get(url, params={"key": api_key.strip()}, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        models = data.get("models", [])
-        count = len(models)
-        return True, f"API key is valid. Found {count} model(s) available."
-    except requests.exceptions.HTTPError as e:
-        try:
-            err_body = e.response.json() if e.response is not None else {}
-            msg = err_body.get("error", {}).get("message", str(e))
-        except Exception:
-            msg = str(e)
-        code = e.response.status_code if e.response is not None else 0
-        if code == 403:
-            return False, f"Invalid or unauthorized key ({code}): {msg}"
-        if code == 429:
-            return False, f"Quota exceeded ({code}): {msg}"
-        return False, f"{code}: {msg}"
-    except requests.exceptions.Timeout:
-        return False, "Request timed out. Check your network."
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
 
 
-def _model_id_to_display_name(model_id: str) -> str:
-    """Turn e.g. models/gemini-2.5-flash into 'Gemini 2.5 Flash'."""
-    name = model_id.replace("models/", "").strip()
-    if not name:
-        return model_id
-    parts = name.replace("-", " ").split()
-    return " ".join(p.capitalize() for p in parts)
 
 
-def _discover_gemini_models(api_key: str, timeout: int = 20) -> list[tuple[str, str]]:
-    """Call ListModels and return [(display_name, model_id), ...] for models that support generateContent (Gemini)."""
-    if not api_key or not api_key.strip():
-        return []
-    try:
-        url = "https://generativelanguage.googleapis.com/v1beta/models"
-        resp = requests.get(url, params={"key": api_key.strip()}, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        models = data.get("models", [])
-        result = []
-        for m in models:
-            name = m.get("name", "")
-            if "gemini" not in name.lower():
-                continue
-            methods = m.get("supportedGenerationMethods", [])
-            if "generateContent" not in methods:
-                continue
-            display = _model_id_to_display_name(name)
-            result.append((display, name))
-        # Prefer flash, then pro; keep stable order
-        def order_key(item):
-            label, mid = item
-            mid_lower = mid.lower()
-            if "flash" in mid_lower:
-                return (0, mid_lower)
-            if "pro" in mid_lower:
-                return (1, mid_lower)
-            return (2, mid_lower)
-        result.sort(key=order_key)
-        return result
-    except Exception:
-        return []
 
 
-def _test_gemini_model(api_key: str, model_id: str, timeout: int = 20) -> tuple[bool, str | None, float]:
-    """Send a minimal generateContent request. Return (ok, error_message, response_time_sec)."""
-    t0 = time.perf_counter()
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent"
-        body = {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]}
-        resp = requests.post(url, params={"key": api_key}, json=body, timeout=timeout)
-        resp.raise_for_status()
-        elapsed = time.perf_counter() - t0
-        return True, None, elapsed
-    except requests.exceptions.HTTPError as e:
-        elapsed = time.perf_counter() - t0
-        try:
-            err_body = e.response.json() if e.response is not None else {}
-            msg = err_body.get("error", {}).get("message", str(e))
-        except Exception:
-            msg = str(e)
-        code = e.response.status_code if e.response is not None else 0
-        return False, f"{code}: {msg}", elapsed
-    except requests.exceptions.Timeout:
-        elapsed = time.perf_counter() - t0
-        return False, "Timeout", elapsed
-    except Exception as e:
-        elapsed = time.perf_counter() - t0
-        return False, f"{type(e).__name__}: {e}", elapsed
 
 
 def _check_models_availability(api_key: str, model_ids: list[str] | None = None) -> tuple[dict[str, bool], dict[str, str], dict[str, float]]:
@@ -1577,151 +1284,8 @@ def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
     return "", (last_err or "No model responded. Check Model engine and GOOGLE_API_KEY.")
 
 
-def _generate_agent_apa_summary(
-    agent_title: str, agent_key: str, data: dict, n_students: int, flagged_ids: list[int] | None = None
-) -> tuple[str | None, str | None]:
-    """Generate a brief research-oriented summary with interpretation in Pinker's style. Returns (summary_text, error_message)."""
-    load_dotenv()
-    methods = data.get("methods") or []
-    n_flagged = len(data.get("flagged", [])) + len(data.get("flagged_copiers", []))
-    rate = (n_flagged / n_students * 100) if n_students else 0
-    flagged_ids = flagged_ids or []
-    example_ids_str = ", ".join(str(i + 1) for i in sorted(flagged_ids)[:25]) if flagged_ids else "none"
-    prompt = (
-        "You are a psychometrics expert writing for a research paper. Write one or two short paragraphs that:\n"
-        "(1) Summarize the aberrant behavior detection result (method, sample size, number flagged).\n"
-        "(2) Interpret what the findings mean in practical terms.\n"
-        "(3) Discuss the abnormal test takers: mention that some examinees were flagged (e.g., by examinee/student numbers "
-        "if provided) and briefly describe their potential issues—e.g., what the aberrant pattern may indicate "
-        "(low effort, copying, preknowledge, misfit, tampering, etc.) and why it matters for validity or fairness.\n\n"
-        "Use Steven Pinker's style: clear, direct, concrete language; active voice and short sentences; explain what the "
-        "numbers and flags mean. You may use APA 7 conventions (past tense, third person).\n\n"
-        f"Detection method: {agent_title}.\n"
-        f"Indices/methods used: {', '.join(methods) or 'N/A'}.\n"
-        f"Sample size: N = {n_students}.\n"
-        f"Number flagged: {n_flagged} ({rate:.1f}%).\n"
-        f"Example flagged examinee numbers (1-based): {example_ids_str}.\n\n"
-        "Output only the paragraph(s), no heading or extra text."
-    )
-    text, err = _call_selected_llm_text(prompt, timeout=60)
-    if text and not err:
-        return (text.strip()[:2000] if text else None), None
-    return None, err or "No selected LLM model responded."
-    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    if not api_key:
-        return None, "GOOGLE_API_KEY not set. Add it to .env or use **Settings** → LLM provider → **OpenRouter** (no key required for free models)."
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-    last_err = None
-    for model_name in _model_variants_with_selected_first():
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
-            resp = requests.post(url, params={"key": api_key}, json=body, timeout=60)
-            resp.raise_for_status()
-            text = (resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "") or "").strip()
-            return (text[:2000] if text else None), None
-        except requests.exceptions.HTTPError as e:
-            last_err = f"{e.response.status_code}" if e.response is not None else str(e)
-            if e.response is not None and e.response.status_code == 404:
-                continue
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-    hint = f" Last error: {last_err}." if last_err else ""
-    return None, f"No Gemini model responded.{hint} Check GOOGLE_API_KEY in .env and that the key has Gemini API access. Or use **Settings** → LLM provider → **OpenRouter**."
 
 
-def _generate_student_abnormal_report(
-    student_id: int,
-    flags: dict,
-    responses: list,
-    rt_data: list,
-    n_students: int,
-) -> tuple[str | None, str | None]:
-    """Generate an LLM-based abnormal behavior report for one student. Returns (report_text, error_message)."""
-    load_dotenv()
-    sid = student_id - 1  # 0-based
-    # Build structured summary of this student's issues across all agents
-    parts = [f"Student ID: {student_id} (of {n_students} examinees)."]
-    if responses and sid < len(responses):
-        row = responses[sid]
-        vals = list(row.values())
-        correct = sum(1 for v in vals if v == 1)
-        total = len(vals)
-        parts.append(f"Total score: {correct}/{total} ({100*correct/total:.1f}%)" if total else "Total score: N/A")
-    flagged_agents = []
-    agent_descriptions = {
-        "nm_agent": "Nonparametric misfit (Guttman-style person-fit)",
-        "pm_agent": "Parametric misfit (IRT-based person-fit)",
-        "as_agent": "Answer similarity / collusion",
-        "ac_agent": "Answer copying",
-        "pk_agent": "Preknowledge (compromised items)",
-        "tt_agent": "Test tampering / erasure",
-        "cp_agent": "Change point (speed/performance shift)",
-        "rg_agent": "Rapid guessing / low effort",
-    }
-    for ag_name, ag_data in flags.items():
-        if not isinstance(ag_data, dict):
-            continue
-        fl = ag_data.get("flagged", []) + ag_data.get("flagged_copiers", [])
-        if sid in fl:
-            flagged_agents.append(ag_name)
-            desc = agent_descriptions.get(ag_name, ag_name)
-            line = f"- **{ag_name}** ({desc})"
-            if ag_data.get("stat") and sid < len(ag_data["stat"]):
-                rec = ag_data["stat"][sid]
-                # Include key indices (numeric)
-                key_vals = {k: v for k, v in rec.items() if isinstance(v, (int, float)) and k != "row"}
-                if key_vals:
-                    line += f" — indices: {key_vals}"
-            if ag_name == "rg_agent" and ag_data.get("rte") and sid < len(ag_data["rte"]):
-                line += f" — RTE: {ag_data['rte'][sid]:.4f}"
-            if ag_name == "ac_agent" and ag_data.get("pairs"):
-                partners = []
-                for p in ag_data["pairs"]:
-                    if p.get("Copier") == student_id:
-                        partners.append(f"Source={p.get('Source')}")
-                    elif p.get("Source") == student_id:
-                        partners.append(f"Copier={p.get('Copier')}")
-                if partners:
-                    line += f" — pairs: {partners[:5]}"
-            parts.append(line)
-    if not flagged_agents:
-        parts.append("This student was not flagged by any detection agent.")
-    else:
-        parts.insert(1, f"Flagged by {len(flagged_agents)} agent(s): {', '.join(flagged_agents)}")
-    context = "\n".join(parts)
-    prompt = (
-        "You are a test-security and psychometrics expert. Write a concise **Abnormal Behavior Report** for the following examinee based on forensic detection results.\n\n"
-        "**Input (detection results for this student):**\n"
-        f"{context}\n\n"
-        "**Required structure:**\n"
-        "1. **Summary** — One short paragraph: which detectors flagged this student and what that means in plain language.\n"
-        "2. **Detailed analysis** — For each detector that flagged the student, briefly explain the finding (what the index means, severity, and implication).\n"
-        "3. **Final determination** — One clear conclusion: overall risk level (e.g., low / moderate / high concern) and a one-sentence recommendation (e.g., no action, review response pattern, or escalate for review). Use a line starting with '**Final determination:**'.\n\n"
-        "Write in professional, neutral tone. Output only the report (no preamble)."
-    )
-    text, err = _call_selected_llm_text(prompt, timeout=90)
-    if text and not err:
-        return (text.strip()[:3500] if text else None), None
-    return None, err or "No selected LLM model responded."
-    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    if not api_key:
-        return None, "GOOGLE_API_KEY not set. Add it to .env or use Settings → LLM provider → OpenRouter."
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-    last_err = None
-    for model_name in _model_variants_with_selected_first():
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
-            resp = requests.post(url, params={"key": api_key}, json=body, timeout=90)
-            resp.raise_for_status()
-            text = (resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "") or "").strip()
-            return (text[:3500] if text else None), None
-        except requests.exceptions.HTTPError as e:
-            last_err = f"{e.response.status_code}" if e.response is not None else str(e)
-            if e.response is not None and e.response.status_code == 404:
-                continue
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-    return None, (last_err or "No model responded. Check Settings and API keys.")
 
 
 # Appendix Table B2 rulebook. Keep this as the single UI-facing catalog of
@@ -3399,40 +2963,6 @@ def _render_eligibility_summary(catalog_df: pd.DataFrame) -> None:
     )
 
 
-def _render_forensic_domain_tables(catalog_df: pd.DataFrame, *, key_prefix: str = "forensic_domain") -> None:
-    if catalog_df is None or catalog_df.empty:
-        st.info("No index catalog is available for domain grouping.")
-        return
-    present_domains = [d for d in _DOMAIN_ORDER if d in set(catalog_df["Domain"].astype(str))]
-    present_domains.extend(sorted(set(catalog_df["Domain"].astype(str)) - set(present_domains)))
-    labels = {f"{d} · {_DOMAIN_LABELS.get(d, d)}": d for d in present_domains}
-    selected_label = st.segmented_control(
-        "Domain",
-        options=list(labels),
-        default=list(labels)[0],
-        key=f"{key_prefix}_selected_domain",
-        label_visibility="collapsed",
-    )
-    domain = labels.get(selected_label, present_domains[0])
-    domain_df = catalog_df[catalog_df["Domain"].astype(str) == domain].copy()
-    display_cols = [
-        "Function",
-        "Index",
-        "Evidence Use",
-        "Flag Column",
-        "Role",
-        "Flag Type",
-        "Rule / Threshold",
-        "Threshold Source",
-        "Flagged Examinees",
-        "Rows With Values",
-        "Column",
-    ]
-    _render_aggrid_table(
-        domain_df[[c for c in display_cols if c in domain_df.columns]],
-        key=f"{key_prefix}_{domain}_aggrid",
-        height=min(520, 150 + 34 * max(1, min(len(domain_df), 10))),
-    )
 
 
 def _forensic_visible_agents() -> set[str]:
@@ -5086,333 +4616,6 @@ def _escape_reportlab_text(text: str) -> str:
     return s.replace("\n", "<br/>")
 
 
-def _build_test_taker_report_pdf(
-    student_id: int,
-    correct: int,
-    total_items: int,
-    resp_row: dict,
-    flags: dict,
-    rt_row: list | None,
-    rt_medians: list | None,
-    percentile: float,
-    aberrant_rows: list[dict],
-    report_text: str | None,
-    all_scores: list[int] | None = None,
-) -> tuple[bytes, str | None]:
-    """Build a letter-size PDF for the Test-Taker Report (PsyMAS branding, 12pt body). Returns (pdf_bytes, error_message)."""
-    try:
-        import datetime
-
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import letter
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import inch
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
-    except ImportError as e:
-        return b"", f"reportlab not installed: {e}"
-
-    black = colors.HexColor("#000000")
-    lightgrey = colors.HexColor("#e5e7eb")
-    green = colors.HexColor("#40916c")
-    red = colors.HexColor("#ef4444")
-    navy = colors.HexColor("#1a1a2e")
-    accent = colors.HexColor("#0d9488")
-    muted = colors.HexColor("#64748b")
-    footer_bg = colors.HexColor("#f1f5f9")
-
-    temp_files = []
-    try:
-        buffer = io.BytesIO()
-        margin = 0.45 * inch
-        doc = SimpleDocTemplate(
-            buffer, pagesize=letter,
-            rightMargin=margin, leftMargin=margin,
-            topMargin=margin, bottomMargin=margin,
-        )
-        content_w = letter[0] - 2 * margin
-        gen_date = datetime.date.today().strftime("%Y-%m-%d")
-
-        styles = getSampleStyleSheet()
-        styles.add(ParagraphStyle(
-            name="TtrBrandTitle",
-            parent=styles["Normal"],
-            fontName="Helvetica-Bold",
-            textColor=colors.white,
-            fontSize=22,
-            leading=26,
-            alignment=1,
-            spaceAfter=2,
-        ))
-        styles.add(ParagraphStyle(
-            name="TtrBrandSub",
-            parent=styles["Normal"],
-            textColor=colors.HexColor("#c4c9d4"),
-            fontSize=11,
-            leading=13,
-            alignment=1,
-            spaceAfter=2,
-        ))
-        styles.add(ParagraphStyle(
-            name="TtrBrandTag",
-            parent=styles["Normal"],
-            textColor=accent,
-            fontSize=10,
-            leading=12,
-            alignment=1,
-            spaceAfter=0,
-        ))
-        styles.add(ParagraphStyle(
-            name="TtrHeading1",
-            parent=styles["Heading1"],
-            fontName="Helvetica-Bold",
-            textColor=black,
-            fontSize=15,
-            leading=18,
-            spaceAfter=4,
-        ))
-        styles.add(ParagraphStyle(
-            name="TtrHeading2",
-            parent=styles["Heading2"],
-            fontName="Helvetica-Bold",
-            textColor=black,
-            fontSize=12,
-            leading=14,
-            spaceBefore=6,
-            spaceAfter=4,
-        ))
-        styles.add(ParagraphStyle(
-            name="TtrNormal",
-            parent=styles["Normal"],
-            textColor=black,
-            fontSize=12,
-            leading=14,
-            spaceAfter=2,
-        ))
-        styles.add(ParagraphStyle(
-            name="TtrFooter",
-            parent=styles["Normal"],
-            textColor=muted,
-            fontSize=9,
-            leading=11,
-            alignment=1,
-            spaceBefore=4,
-            spaceAfter=0,
-        ))
-        story = []
-
-        # ── PsyMAS header band ──
-        banner_rows = [
-            [Paragraph("PsyMAS", styles["TtrBrandTitle"])],
-            [Paragraph("Psychometric Modeling Assistant System", styles["TtrBrandSub"])],
-            [Paragraph("Forensic drill-down · Individual examinee report", styles["TtrBrandTag"])],
-        ]
-        banner = Table(banner_rows, colWidths=[content_w])
-        banner.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), navy),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, 0), 16),
-            ("BOTTOMPADDING", (0, -1), (-1, -1), 14),
-            ("LEFTPADDING", (0, 0), (-1, -1), 12),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-        ]))
-        story.append(banner)
-        accent_bar = Table([[""]], colWidths=[content_w], rowHeights=[3])
-        accent_bar.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), accent)]))
-        story.append(accent_bar)
-        story.append(Spacer(1, 0.12 * inch))
-
-        story.append(Paragraph(
-            f"<b>Test-Taker Report</b> — Student {student_id}",
-            styles["TtrHeading1"],
-        ))
-        story.append(Paragraph(
-            "Response pattern, score placement, response-time profile, and narrative summary "
-            "(when generated in the app). Green / red cells = correct / incorrect.",
-            styles["TtrNormal"],
-        ))
-        story.append(Spacer(1, 0.06 * inch))
-
-        pct = 100 * correct / total_items if total_items else 0
-        summary_line = Paragraph(
-            f"Score {correct}/{total_items} ({pct:.1f}%) · Percentile {percentile:.0f}th",
-            styles["TtrNormal"],
-        )
-
-        # ── Response Record: chunk columns so table width ≤ page (avoids overflow) ──
-        if resp_row:
-            story.append(Paragraph("Response Record", styles["TtrHeading2"]))
-            vals = list(resp_row.values())
-            max_items = min(len(vals), 48)
-            chunk = 16
-            tbl_font = 9
-            tot_w = 0.45 * inch
-            for start in range(0, max_items, chunk):
-                end = min(start + chunk, max_items)
-                n = end - start
-                slice_vals = vals[start:end]
-                last_chunk = end >= max_items
-                if last_chunk:
-                    header_row = [f"{start + i + 1}" for i in range(n)] + ["Tot"]
-                    data_row = [str(int(v)) if v in (0, 1) else str(v) for v in slice_vals] + [
-                        f"{correct}/{total_items}"
-                    ]
-                    col_w = (content_w - tot_w) / n
-                    col_widths = [col_w] * n + [tot_w]
-                    tot_col = n
-                else:
-                    header_row = [f"{start + i + 1}" for i in range(n)]
-                    data_row = [str(int(v)) if v in (0, 1) else str(v) for v in slice_vals]
-                    col_w = content_w / n
-                    col_widths = [col_w] * n
-                    tot_col = None
-                cell_data = [header_row, data_row]
-                t = Table(cell_data, colWidths=col_widths)
-                style_list = [
-                    ("FONTSIZE", (0, 0), (-1, -1), tbl_font),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 1),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 1),
-                    ("TOPPADDING", (0, 0), (-1, -1), 1),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), black),
-                    ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
-                ]
-                last_col = len(data_row) - 1
-                style_list.append(("TEXTCOLOR", (0, 1), (last_col - 1, 1), colors.white))
-                if tot_col is not None:
-                    style_list.append(("BACKGROUND", (tot_col, 1), (tot_col, 1), lightgrey))
-                    style_list.append(("TEXTCOLOR", (tot_col, 1), (tot_col, 1), black))
-                for j in range(n):
-                    gi = start + j
-                    if gi < len(vals) and vals[gi] == 1:
-                        style_list.append(("BACKGROUND", (j, 1), (j, 1), green))
-                    elif gi < len(vals) and vals[gi] == 0:
-                        style_list.append(("BACKGROUND", (j, 1), (j, 1), red))
-                t.setStyle(TableStyle(style_list))
-                story.append(t)
-                story.append(Spacer(1, 0.02 * inch))
-            story.append(summary_line)
-            story.append(Spacer(1, 0.04 * inch))
-        else:
-            story.append(summary_line)
-            story.append(Spacer(1, 0.04 * inch))
-
-        # ── Percentile (compact plot) + Forensic Timeline side-by-side in one row ──
-        png_pct = _plot_percentile_for_pdf(
-            percentile, student_id, all_scores, correct, total_items, compact=True
-        )
-        png_rt = None
-        if rt_row and rt_medians:
-            png_rt = _plot_rt_for_pdf(rt_row, rt_medians, student_id, compact=True)
-
-        plot_h = 0.92 * inch
-        half_w = (content_w - 0.08 * inch) / 2
-        row_cells = []
-        if png_pct:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp:
-                fp.write(png_pct)
-                fp.flush()
-                temp_files.append(fp.name)
-            row_cells.append(RLImage(temp_files[-1], width=half_w, height=plot_h))
-        else:
-            row_cells.append(Paragraph("—", styles["TtrNormal"]))
-        if png_rt:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fp_rt:
-                fp_rt.write(png_rt)
-                fp_rt.flush()
-                temp_files.append(fp_rt.name)
-            row_cells.append(RLImage(temp_files[-1], width=half_w, height=plot_h))
-        elif rt_row and rt_medians and len(rt_row) <= 20:
-            rt_vals = [float(x) for x in rt_row[:20]]
-            meds = rt_medians[:20]
-            rows = [["#", "RT", "Δ"]]
-            for i, (rv, m) in enumerate(zip(rt_vals, meds)):
-                rows.append([str(i + 1), f"{rv:.1f}", ">" if rv >= m else "<"])
-            t2 = Table(rows, colWidths=[0.32 * inch, 0.5 * inch, 0.28 * inch])
-            t2.setStyle(TableStyle([
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("BACKGROUND", (0, 0), (-1, 0), lightgrey),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-            ]))
-            row_cells.append(t2)
-        else:
-            row_cells.append(Paragraph("—", styles["TtrNormal"]))
-
-        story.append(Paragraph("Score distribution · Response time", styles["TtrHeading2"]))
-        plot_table = Table([row_cells], colWidths=[half_w, half_w])
-        plot_table.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-            ("TOPPADDING", (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-        ]))
-        story.append(plot_table)
-
-        # ── Report (LLM): length cap (large type uses more vertical space) ──
-        story.append(Paragraph("Narrative summary (LLM)", styles["TtrHeading2"]))
-        llm_style = ParagraphStyle(
-            name="TtrReport",
-            parent=styles["TtrNormal"],
-            fontSize=12,
-            leading=15,
-            spaceAfter=4,
-        )
-        max_report_chars = 1600
-        if report_text and report_text.strip():
-            full_rt = report_text.strip()
-            remaining = max_report_chars
-            consumed = 0
-            for para in full_rt.split("\n\n")[:8]:
-                if remaining <= 0:
-                    break
-                raw = para.strip()
-                chunk = raw[:remaining]
-                consumed += len(chunk)
-                remaining -= len(chunk)
-                safe = _markdown_to_reportlab(chunk)
-                if safe.strip():
-                    try:
-                        story.append(Paragraph(safe, llm_style))
-                    except Exception:
-                        story.append(Paragraph(_escape_reportlab_text(chunk), llm_style))
-            if consumed < len(full_rt):
-                story.append(Paragraph("<i>[Summary truncated for one-page PDF.]</i>", llm_style))
-        else:
-            story.append(Paragraph("No LLM summary (generate the report in the app).", styles["TtrNormal"]))
-
-        story.append(Spacer(1, 0.14 * inch))
-        footer_para = Paragraph(
-            f"<b>PsyMAS</b> · Psychometric Modeling Assistant System · Ver. {APP_VERSION}<br/>"
-            f"Confidential forensic analysis artifact · Generated {gen_date} · Not for high-stakes decisions without review",
-            styles["TtrFooter"],
-        )
-        foot_table = Table([[footer_para]], colWidths=[content_w])
-        foot_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), footer_bg),
-            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-            ("LINEABOVE", (0, 0), (-1, 0), 2, accent),
-            ("TOPPADDING", (0, 0), (-1, -1), 10),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-            ("LEFTPADDING", (0, 0), (-1, -1), 10),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ]))
-        story.append(foot_table)
-
-        doc.build(story)
-        return buffer.getvalue(), None
-    except Exception as e:
-        return b"", str(e)
-    finally:
-        for p in temp_files:
-            try:
-                os.unlink(p)
-            except Exception:
-                pass
 
 
 def _build_apa_report_pdf(final: dict) -> tuple[bytes, str | None]:
@@ -5707,253 +4910,6 @@ def _build_apa_report_pdf(final: dict) -> tuple[bytes, str | None]:
         return b"", f"{type(e).__name__}: {e}"
 
 
-def _render_prompt_and_confirm() -> None:
-    """Render Psych-MAS Assistant (Prompt, Model engine, Langgraph) and Confirm settings in two columns. Used by the Tools→IRT module."""
-    col_input, col_confirm = st.columns(2)
-    with col_input:
-        st.subheader("Psych-MAS Assistant")
-        tab_prompt, tab_model_engine, tab_langgraph = st.tabs(["Prompt", "Model engine", "Langgraph"])
-        with tab_prompt:
-            with st.form("prompt_form"):
-                prompt = st.text_input(
-                    "Describe the analysis you want (e.g., guessing or 3PL).",
-                    placeholder='e.g. I think there is guessing on this test, use a better model.',
-                    label_visibility="visible",
-                )
-                st.caption("Press **Enter** to analyze.")
-                analyze = st.form_submit_button("Analyze prompt")
-                if analyze:
-                    st.session_state.model_settings = _interpret_prompt(prompt)
-                    st.session_state.is_verified = False
-                    st.session_state.prompt_analyzed = True
-                    st.session_state.last_prompt = prompt
-                    st.session_state["confirm_itemtype"] = st.session_state.model_settings.get("itemtype", "2PL")
-        with tab_model_engine:
-            st.caption("Configure LLM provider and model in **Settings → Model engine**. These settings apply to all analyses.")
-            st.caption(f"Current provider: `{_llm_provider()}`, model: `{_effective_llm_model()}`.")
-        with tab_langgraph:
-            st.caption("How LangGraph is used in this app")
-            st.markdown(
-                "The **psychometric workflow** is implemented as a LangGraph in `graph.py`. "
-                "When you upload response/RT data and run the analysis, the app invokes **`psych_workflow.invoke(initial_state)`** directly. "
-                "The graph runs: **Orchestrator** → **IRT** and **RT** (in parallel) → **Analyze** → end."
-            )
-            st.markdown(
-                "**Optional:** From the project root, run `langgraph dev` to start the LangGraph server locally. "
-                "On **Railway**, add a second service with start command `sh -c 'langgraph dev --port ${PORT:-2024}'` and generate a domain for the public LangGraph API URL (see README §6). "
-                "The Streamlit UI works without the server (it uses the graph in-process)."
-            )
-            LANGGRAPH_API_URL = "https://langchain-ai.github.io/langgraph/concepts/langgraph_api/"
-            st.link_button("Open LangGraph API", url=LANGGRAPH_API_URL, type="primary")
-            st.markdown(
-                f'<a href="{LANGGRAPH_API_URL}" target="_blank" rel="noopener noreferrer">Open LangGraph API in new tab</a>',
-                unsafe_allow_html=True,
-            )
-        with tab_model_engine:
-            st.markdown(
-                "<style>div[data-testid='stTabs'] div[data-testid='stVerticalBlock'] { font-size: 0.9rem !important; }</style>",
-                unsafe_allow_html=True,
-            )
-            load_dotenv()
-            _api_key = os.getenv("GOOGLE_API_KEY")
-            _openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-            st.radio(
-                "LLM provider",
-                options=["openrouter", "local_ollama"],
-                format_func=lambda x: "OpenRouter" if x == "openrouter" else "Local Ollama",
-                key="llm_provider",
-                horizontal=True,
-                help="OpenRouter uses the curated 5-model list. Local Ollama is reserved for Llama 8B/70B and does not use OpenRouter.",
-            )
-            if st.session_state.llm_provider == "google":
-                if "api_key_test_result" not in st.session_state:
-                    st.session_state.api_key_test_result = None
-                if _api_key:
-                    if st.button("Test API key", key="test_api_key"):
-                        ok, msg = _test_api_key(_api_key)
-                        st.session_state.api_key_test_result = (ok, msg)
-                        st.rerun()
-                    if st.session_state.api_key_test_result is not None:
-                        ok, msg = st.session_state.api_key_test_result
-                        if ok:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
-                else:
-                    st.warning("GOOGLE_API_KEY not set in .env. Add it to use Psych-MAS Summary with Google.")
-            elif st.session_state.llm_provider == "openrouter":
-                if "openrouter_api_key_test_result" not in st.session_state:
-                    st.session_state.openrouter_api_key_test_result = None
-                model_options_loaded, model_list_err, model_list_live = _load_openrouter_model_options()
-                _ml_col1, _ml_col2 = st.columns([1, 2])
-                with _ml_col1:
-                    if st.button("Reload curated model list", key="refresh_openrouter_model_list_prompt"):
-                        model_options_loaded, model_list_err, model_list_live = _load_openrouter_model_options(force=True)
-                        st.toast(f"Loaded {len(model_options_loaded):,} curated US models.")
-                        st.rerun()
-                with _ml_col2:
-                    st.caption(f"Curated list: {len(model_options_loaded):,} US models with price and recommended use.")
-                if st.button("Test API key", key="test_openrouter_api_key"):
-                    load_dotenv()
-                    key = os.getenv("OPENROUTER_API_KEY", "")
-                    ok, msg = _test_openrouter_api_key(key)
-                    st.session_state.openrouter_api_key_test_result = (ok, msg)
-                    st.rerun()
-                if st.session_state.openrouter_api_key_test_result is not None:
-                    ok, msg = st.session_state.openrouter_api_key_test_result
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-                st.caption("OpenRouter models. Set OPENROUTER_API_KEY in .env for higher limits and private account access.")
-            else:
-                st.caption(f"Local Ollama endpoint: `{OLLAMA_CHAT_URL}`")
-                st.caption("Install locally with `ollama pull llama3.1:8b` or `ollama pull llama3.3:70b`, then run `ollama serve`.")
-            _model_options = _current_model_options()
-            _model_ids = _current_model_ids()
-            if "pinned_llm_model" not in st.session_state:
-                st.session_state.pinned_llm_model = None
-            if "pinned_llm_provider" not in st.session_state:
-                st.session_state.pinned_llm_provider = None
-            _pinned = st.session_state.pinned_llm_model if st.session_state.pinned_llm_provider == st.session_state.llm_provider else None
-            if "selected_gemini_model" not in st.session_state:
-                st.session_state.selected_gemini_model = (_pinned if _pinned and _pinned in _model_ids else None) or (_model_ids[0] if _model_ids else (LOCAL_OLLAMA_MODEL_IDS[0] if st.session_state.llm_provider == "local_ollama" else OPENROUTER_FREE_MODEL_IDS[0]))
-            if st.session_state.selected_gemini_model not in _model_ids:
-                st.session_state.selected_gemini_model = (_pinned if _pinned and _pinned in _model_ids else None) or (_model_ids[0] if _model_ids else (LOCAL_OLLAMA_MODEL_IDS[0] if st.session_state.llm_provider == "local_ollama" else OPENROUTER_FREE_MODEL_IDS[0]))
-            st.selectbox(
-                "LLM model for Psych-MAS Summary",
-                options=_model_ids,
-                format_func=lambda x: next((label for label, api_id in _model_options if api_id == x), _model_id_to_display_name(x) if "/" not in str(x) else str(x).split("/")[-1].replace("-", " ").title()),
-                key="selected_gemini_model",
-                help="OpenRouter and Local Ollama model lists are separated.",
-            )
-            _pinned_now = st.session_state.pinned_llm_model if st.session_state.pinned_llm_provider == st.session_state.llm_provider else None
-            _lock_col, _unlock_col = st.columns(2)
-            with _lock_col:
-                if st.button("Lock current model for all analyses", key="lock_llm_model", help="Use this model for every LLM call (prompt + Psych-MAS Summary) until you unlock."):
-                    st.session_state.pinned_llm_model = st.session_state.selected_gemini_model
-                    st.session_state.pinned_llm_provider = st.session_state.llm_provider
-                    st.rerun()
-            with _unlock_col:
-                if _pinned_now and st.button("Unlock model", key="unlock_llm_model", help="Stop using the locked model; selection will follow the dropdown again."):
-                    st.session_state.pinned_llm_model = None
-                    st.session_state.pinned_llm_provider = None
-                    st.rerun()
-            if _pinned_now:
-                _locked_label = next((label for label, api_id in _model_options if api_id == _pinned_now), _pinned_now.split("/")[-1].replace("-", " ").title() if "/" in _pinned_now else _pinned_now)
-                st.caption(f"🔒 **Locked:** {_locked_label} — all LLM analyses use this model until you unlock.")
-            else:
-                st.caption("✓ The selected model is active. Use **Analyze prompt** or any **Psych-MAS Summary** button to run with this model — no extra step needed.")
-            if "model_availability" not in st.session_state:
-                st.session_state.model_availability = None
-            if "model_availability_errors" not in st.session_state:
-                st.session_state.model_availability_errors = {}
-            if "model_availability_times" not in st.session_state:
-                st.session_state.model_availability_times = {}
-            if st.session_state.llm_provider == "openrouter":
-                if st.button("Check model availability", key="check_model_availability"):
-                    with st.spinner("Testing selected OpenRouter model…"):
-                        avail = {}
-                        errs = {}
-                        times = {}
-                        model_id = st.session_state.get("selected_gemini_model") or (_current_model_ids()[0] if _current_model_ids() else "")
-                        if model_id:
-                            ok, err, elapsed = _test_openrouter_model(_openrouter_key, model_id)
-                            avail[model_id] = ok
-                            if err:
-                                errs[model_id] = err
-                            times[model_id] = elapsed
-                        st.session_state.model_availability = avail
-                        st.session_state.model_availability_errors = errs
-                        st.session_state.model_availability_times = times
-                    st.rerun()
-                if st.session_state.model_availability is not None:
-                    selected_id = st.session_state.get("selected_gemini_model", (_current_model_ids()[0] if _current_model_ids() else ""))
-                    st.caption("Selected model status (available/unavailable; response time in seconds)")
-                    errs = st.session_state.get("model_availability_errors", {})
-                    times = st.session_state.get("model_availability_times", {})
-                    for label, api_id in _current_model_options():
-                        if api_id != selected_id:
-                            continue
-                        status = "available" if st.session_state.model_availability.get(api_id, False) else "unavailable"
-                        current = " **Selected**" if api_id == selected_id else ""
-                        err_msg = errs.get(api_id)
-                        err_suffix = f" — *{err_msg}*" if err_msg else ""
-                        t = times.get(api_id)
-                        time_s = f" *({t:.1f}s)*" if t is not None else ""
-                        st.markdown(f"{status} {label}{time_s}{current}{err_suffix}")
-            elif st.session_state.llm_provider == "local_ollama":
-                if st.button("Check local model availability", key="check_local_ollama_availability"):
-                    with st.spinner("Testing selected local Ollama model…"):
-                        avail = {}
-                        errs = {}
-                        times = {}
-                        model_id = st.session_state.get("selected_gemini_model") or (LOCAL_OLLAMA_MODEL_IDS[0] if LOCAL_OLLAMA_MODEL_IDS else "")
-                        if model_id:
-                            ok, err, elapsed = _test_ollama_model(model_id)
-                            avail[model_id] = ok
-                            if err:
-                                errs[model_id] = err
-                            times[model_id] = elapsed
-                        st.session_state.model_availability = avail
-                        st.session_state.model_availability_errors = errs
-                        st.session_state.model_availability_times = times
-                    st.rerun()
-                if st.session_state.model_availability is not None:
-                    selected_id = st.session_state.get("selected_gemini_model", LOCAL_OLLAMA_MODEL_IDS[0] if LOCAL_OLLAMA_MODEL_IDS else "")
-                    errs = st.session_state.get("model_availability_errors", {})
-                    times = st.session_state.get("model_availability_times", {})
-                    for label, api_id in LOCAL_OLLAMA_MODELS:
-                        if api_id != selected_id:
-                            continue
-                        status = "available" if st.session_state.model_availability.get(api_id, False) else "unavailable"
-                        err_msg = errs.get(api_id)
-                        err_suffix = f" — *{err_msg}*" if err_msg else ""
-                        t = times.get(api_id)
-                        time_s = f" *({t:.1f}s)*" if t is not None else ""
-                        st.markdown(f"{status} {label}{time_s}{err_suffix}")
-            else:
-                st.caption("Select OpenRouter or Local Ollama to check model availability.")
-
-    with col_confirm:
-        st.subheader("Confirm settings")
-        feedback = st.session_state.model_settings.get("feedback", "")
-        if feedback:
-            st.success(f"Feedback: {feedback}")
-        if "confirm_itemtype" not in st.session_state:
-            st.session_state["confirm_itemtype"] = st.session_state.model_settings.get("itemtype", "2PL")
-        itemtype = st.selectbox(
-            "Item model",
-            options=["1PL", "2PL", "3PL", "4PL"],
-            key="confirm_itemtype",
-        )
-        r_code_preview = f"model <- mirt(df, 1, itemtype='{itemtype}')"
-        with st.form("confirm_settings"):
-            st.markdown("**Interpretation phase: proposed settings**")
-            suggestion = st.session_state.model_settings.get("suggestion", "")
-            reason = st.session_state.model_settings.get("reason", "")
-            note = st.session_state.model_settings.get("note", "")
-            if suggestion or reason:
-                if reason:
-                    st.info(f"Suggestion: {suggestion}  Reason: {reason}")
-                elif suggestion:
-                    st.info(f"Suggestion: {suggestion}")
-            if note:
-                st.warning(note)
-            r_code = st.text_area(
-                "R code preview",
-                value=r_code_preview,
-                height=100,
-            )
-            confirmed = st.form_submit_button("Confirm settings")
-            if confirmed:
-                st.session_state.model_settings = {"itemtype": itemtype, "r_code": r_code}
-                st.session_state.is_verified = True
-        if not st.session_state.prompt_analyzed:
-            st.caption("Analyze a prompt (left) to see suggested settings here.")
-
-    if not st.session_state.is_verified:
-        st.info("Select settings and confirm to unlock IRT execution.")
 
 
 def _render_response_results(final: dict) -> None:
@@ -6209,328 +5165,6 @@ def _render_response_results(final: dict) -> None:
         st.success("Report ready. Click the button above to download.")
 
 
-def _render_results(final: dict, response_only: bool = False) -> None:
-    if response_only:
-        _render_response_results(final)
-        return
-    tab1, tab2, tab3 = st.tabs(["📋 Aberrance Results", "📊 Response Results", "⏱️ RT Analysis"])
-    with tab2:
-        _render_response_results(final)
-    with tab1:
-        st.header("Aberrance Results")
-        st.markdown("Results from the R package **aberrance**: person-fit indices and detected aberrant test-takers. To **report** aberrance in a PDF, run **Generate results** (or the full workflow), then generate the **APA Report (PDF)** in the Response Results tab — section *5. Person-fit (Aberrance)* will include methods, sample size, flagged count, and a summary table.")
-
-        # Scenario presets and selection (ABERRANCE_FUNCTIONS is module-level)
-        SCENARIO_PRESETS = {
-            "A": {
-                "title": "Scenario A: Low-Stakes",
-                "icon": "🧹",
-                "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\n \n\nExamples: Course evaluations; Pilot surveys; Classroom quizzes",
-                "selects": ["detect_rg", "detect_pm"],
-            },
-            "B": {
-                "title": "Scenario B: High-Stakes",
-                "icon": "🛡️",
-                "description": "Protects high-stakes credentials: response-based, similarity, temporal, and tampering detection.\n\nExamples: Medical licensing; Answer copying; Brain-dump exposure",
-                "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"],
-            },
-        }
-        for fn in ABERRANCE_FUNCTIONS:
-            if f"aberrance_cb_{fn}" not in st.session_state:
-                st.session_state[f"aberrance_cb_{fn}"] = False
-        if "aberrance_scenario_select_previous" not in st.session_state:
-            st.session_state["aberrance_scenario_select_previous"] = None
-
-        def _apply_aberrance_scenario(letter: str, *, update_select: bool = True) -> None:
-            """Set scenario dropdown (if update_select) and function-list checkboxes to match the given scenario (A or B). Do not set the select key after the selectbox is instantiated (Streamlit disallows it)."""
-            if letter not in SCENARIO_PRESETS:
-                return
-            if update_select:
-                st.session_state["aberrance_scenario_select"] = letter
-            st.session_state["aberrance_scenario_select_previous"] = letter
-            for fn in ABERRANCE_FUNCTIONS:
-                st.session_state[f"aberrance_cb_{fn}"] = fn in SCENARIO_PRESETS[letter]["selects"]
-
-        # LLM dialogue: understand user's requirement and suggest scenario (same provider/model as Psych-MAS Assistant)
-        st.subheader("Describe your testing situation")
-        st.caption("Describe your context (e.g. classroom quiz, certification exam, at-home test). The assistant will suggest a scenario and select it below with the matching function list. Uses the same LLM as **Model engine** (Prompt / Psych-MAS Assistant).")
-        llm_req = st.text_area(
-            "Describe your testing situation",
-            value=st.session_state.get("aberrance_llm_requirement", ""),
-            placeholder="e.g. We run low-stakes quizzes in class and want to drop random responders. / High-stakes licensure exam in a test center. / Online unproctored assessment from home.",
-            height=100,
-            key="aberrance_llm_requirement",
-            label_visibility="collapsed",
-        )
-        suggest_col1, suggest_col2 = st.columns([1, 3])
-        with suggest_col1:
-            suggest_btn = st.button("Suggest scenario from description", key="aberrance_suggest_scenario")
-        if suggest_btn and (llm_req or st.session_state.get("aberrance_llm_requirement", "")):
-            with st.spinner("Asking LLM..."):
-                letter, explanation = _suggest_aberrance_scenario(
-                    llm_req.strip() or st.session_state.get("aberrance_llm_requirement", "")
-                )
-            suggested_agents = st.session_state.get("_llm_suggested_agents") or []
-            if letter and letter in SCENARIO_PRESETS:
-                _apply_aberrance_scenario(letter)
-                # If the model also proposed explicit agents, sync the checkboxes to that list.
-                if suggested_agents:
-                    for fn in ABERRANCE_FUNCTIONS:
-                        st.session_state[f"aberrance_cb_{fn}"] = fn in suggested_agents
-                st.session_state["aberrance_llm_suggestion"] = explanation
-                st.rerun()
-            elif explanation:
-                st.session_state["aberrance_llm_suggestion"] = explanation
-                st.rerun()
-        if st.session_state.get("aberrance_llm_suggestion"):
-            st.info(st.session_state["aberrance_llm_suggestion"])
-            if st.button("Clear suggestion", key="aberrance_clear_suggestion"):
-                st.session_state["aberrance_llm_suggestion"] = ""
-                st.rerun()
-
-        # Optional scenario selection: when changed, scenario and function list stay in sync
-        st.subheader("Scenario selection")
-        st.caption("Choose a scenario to auto-select detection functions; scenario and function list below update together.")
-        SCENARIO_OPTIONS = [
-            ("", "— Select a scenario (optional) —"),
-            ("A", f"🧹 {SCENARIO_PRESETS['A']['title']}"),
-            ("B", f"🛡️ {SCENARIO_PRESETS['B']['title']}"),
-            ("Custom", "Custom (manual selection only)"),
-        ]
-        option_values = [x[0] for x in SCENARIO_OPTIONS]
-        option_label_map = dict(SCENARIO_OPTIONS)
-        if "aberrance_scenario_select" not in st.session_state:
-            st.session_state["aberrance_scenario_select"] = ""
-        scenario_choice = st.selectbox(
-            "Scenario",
-            options=option_values,
-            format_func=lambda x: option_label_map.get(x, x),
-            key="aberrance_scenario_select",
-            label_visibility="collapsed",
-        )
-        prev = st.session_state.get("aberrance_scenario_select_previous")
-        if scenario_choice in ("A", "B") and scenario_choice != prev:
-            _apply_aberrance_scenario(scenario_choice, update_select=False)
-            st.rerun()
-        if scenario_choice in ("", "Custom"):
-            st.session_state["aberrance_scenario_select_previous"] = scenario_choice
-        if scenario_choice == "A":
-            st.caption(SCENARIO_PRESETS["A"]["description"])
-        elif scenario_choice == "B":
-            st.caption(SCENARIO_PRESETS["B"]["description"])
-
-        st.markdown("---")
-        st.subheader("Function List")
-        st.caption("Select which aberrance detection functions to run. Choices are used when you run the workflow.")
-        cb_rg = st.checkbox(
-            "Rapid Guessing (detect_rg)",
-            value=st.session_state.get("aberrance_cb_detect_rg", False),
-            key="aberrance_cb_detect_rg",
-            help="Detects participants answering too quickly to have read the question.",
-        )
-        cb_pm = st.checkbox(
-            "Model Misfit (detect_pm)",
-            value=st.session_state.get("aberrance_cb_detect_pm", False),
-            key="aberrance_cb_detect_pm",
-            help="Detects general \"odd\" behavior that doesn't fit standard statistical models.",
-        )
-        cb_ac = st.checkbox(
-            "Answer Copying (detect_ac)",
-            value=st.session_state.get("aberrance_cb_detect_ac", False),
-            key="aberrance_cb_detect_ac",
-            help="Detects if a specific student copied answers from another specific student.",
-        )
-        cb_as = st.checkbox(
-            "Answer Similarity (detect_as)",
-            value=st.session_state.get("aberrance_cb_detect_as", False),
-            key="aberrance_cb_detect_as",
-            help="Detects suspicious groups of students with nearly identical answers (collusion).",
-        )
-        cb_pk = st.checkbox(
-            "Preknowledge (detect_pk)",
-            value=st.session_state.get("aberrance_cb_detect_pk", False),
-            key="aberrance_cb_detect_pk",
-            help="Detects students who perform suspiciously well on a specific set of \"leaked\" items.",
-        )
-        cb_nm = st.checkbox(
-            "Guttman Errors (detect_nm)",
-            value=st.session_state.get("aberrance_cb_detect_nm", False),
-            key="aberrance_cb_detect_nm",
-            help="Detects students who get hard questions right but miss easy ones.",
-        )
-        cb_tt = st.checkbox(
-            "Test Tampering (detect_tt)",
-            value=st.session_state.get("aberrance_cb_detect_tt", False),
-            key="aberrance_cb_detect_tt",
-            help="Analyzes erasure marks to find wrong-to-right answer changes. (Requires erasure data.)",
-        )
-        if "aberrance_compromised_items" not in st.session_state:
-            st.session_state["aberrance_compromised_items"] = []
-        if st.session_state.get("aberrance_cb_detect_pk", False) or (st.session_state.get("aberrance_scenario_select") == "B"):
-            comp_full = st.text_input(
-                "Compromised item numbers (for Preknowledge, Scenario B)",
-                value=", ".join(map(str, st.session_state.get("aberrance_compromised_items") or [])),
-                key="aberrance_compromised_input",
-                placeholder="e.g. 1, 5, 10, 15",
-                help="Comma-separated 1-based item indices that are known to be compromised/leaked.",
-            )
-            try:
-                comp_list = [int(x.strip()) for x in comp_full.split(",") if x.strip() and x.strip().isdigit()]
-                if comp_list:
-                    st.session_state["aberrance_compromised_items"] = comp_list
-            except Exception:
-                pass
-        has_rt_data = bool(final.get("rt_data") and len(final.get("rt_data", [])) > 0)
-        if (cb_rg or st.session_state.get("aberrance_cb_detect_rg", False)) and not has_rt_data:
-            st.warning("**Rapid Guessing (detect_rg)** requires Response Time data. Upload RT data and re-run the workflow for rapid-guessing detection.")
-
-        gen_btn = st.button("Generate results", key="aberrance_generate_results", type="primary")
-        if gen_btn:
-            # Use previously uploaded data (from last run) or last_payload
-            if st.session_state.get("last_uploaded_responses") and st.session_state.get("last_uploaded_model_settings") and st.session_state.get("last_uploaded_is_verified"):
-                payload_dict = {
-                    "responses": st.session_state.last_uploaded_responses,
-                    "rt_data": st.session_state.get("last_uploaded_rt_data") or [],
-                    "model_settings": st.session_state.last_uploaded_model_settings,
-                    "is_verified": st.session_state.last_uploaded_is_verified,
-                    "aberrance_functions": [fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"aberrance_cb_{fn}")],
-                    "compromised_items": st.session_state.get("aberrance_compromised_items") or [],
-                }
-                new_payload = json.dumps(payload_dict, sort_keys=True)
-            elif st.session_state.get("last_payload"):
-                payload_dict = json.loads(st.session_state.last_payload)
-                payload_dict["aberrance_functions"] = [fn for fn in ABERRANCE_FUNCTIONS if st.session_state.get(f"aberrance_cb_{fn}")]
-                payload_dict["compromised_items"] = st.session_state.get("aberrance_compromised_items") or []
-                new_payload = json.dumps(payload_dict, sort_keys=True)
-            else:
-                st.error("No data to run. Upload response (and optionally RT) data and confirm model settings above; then use **Generate results** here to compute aberrance indices.")
-                st.stop()
-            with st.spinner("Running workflow with selected functions…"):
-                try:
-                    final = _run_workflow(new_payload)
-                    st.session_state.last_result = final
-                    st.session_state.last_payload = new_payload
-                    st.success("Results updated.")
-                    st.rerun()
-                except Exception as e:
-                    st.exception(e)
-                    st.stop()
-
-        st.markdown("---")
-        with st.expander("**What the aberrance package can do**", expanded=False):
-            st.markdown("""
-**Detection functions (aberrance v0.5.0, CRAN):**
-
-| Function | Purpose | Main inputs |
-|----------|---------|-------------|
-| **detect_ac** | **Answer copying** — detect source–copier pairs | ψ (item params), x or r (scores/responses), α. Methods: OMG_S, GBT_S, OMG_R, GBT_R. |
-| **detect_as** | **Answer similarity** — detect similar pairs (all pairs) | ψ, x/r/y (scores, responses, log RT). Methods: OMG_S, WOMG_S, GBT_S, M4_S; OMG_R, WOMG_R, GBT_R, M4_R; OMG_ST, GBT_ST; OMG_RT, GBT_RT. |
-| **detect_cp** | **Change point** — test speededness / performance shift | ψ, x/y, cpi (change-point interval). Methods: L_S_*, S_S_*, W_S_* (scores); L_T_*, W_T_* (RT). Returns stat + estimated change point. |
-| **detect_nm** | **Nonparametric misfit** — person-fit without IRT | x (scores) or y (log RT). Methods: G_S, NC_S, U1_S, U3_S, ZU3_S, A_S, D_S, E_S, C_S, MC_S, PC_S, HT_S (scores); KL_T (RT). |
-| **detect_pk** | **Preknowledge** — compromised items known | ci (compromised item indices), ψ, x/y. Methods: L_S, ML_S, LR_S, S_S, W_S (scores); L_T, W_T (RT); L_ST (scores+RT). Returns stat, pval, flag. |
-| **detect_pm** | **Parametric misfit** — person-fit under IRT | ψ, xi (optional), x/r/y. Methods: ECI2_S_*, ECI4_S_*, L_S_*, L_R_*, L_T, Q_ST_*, L_ST_*, Q_RT_*, L_RT_* (various corrections). Returns stat, pval, flag. |
-| **detect_rg** | **Rapid guessing** — threshold or cumulative proportion | ψ (IRT + RT params), x, y (log RT). Methods for threshold/cumulative; can use item-level or person-level. |
-| **detect_tt** | **Test tampering** — erasure detection | Response/erasure data; indices for tampering. |
-
-**Utility:** **sim** — simulate item scores and/or (log) response times given ψ, ξ (e.g. 3PL, nominal, lognormal).
-
-*Psych-MAS currently runs* detect_nm *(ZU3_S, HT_S) and, when IRT params exist,* detect_pm *(L_S_2PL) to flag aberrant test-takers. Other functions can be added in the workflow.*
-            """)
-        st.markdown("---")
-        aberrance = final.get("aberrance_results") or {}
-        if aberrance.get("error"):
-            st.warning(aberrance["error"])
-            st.caption("Install R package **aberrance** (e.g. `Rscript install_r_packages.R` or `install.packages('aberrance', repos='https://cloud.r-project.org')`) and re-run the workflow.")
-        elif aberrance.get("info"):
-            st.info(aberrance["info"])
-        elif (aberrance.get("nonparametric_misfit") or aberrance.get("parametric_misfit") or
-              aberrance.get("preknowledge") or aberrance.get("answer_copying_pairs") or aberrance.get("rapid_guessing")):
-            flagged_persons = set(aberrance.get("flagged_persons") or [])
-            flagged_copiers = set(aberrance.get("flagged_copiers") or [])
-            flagged_rg = set(aberrance.get("flagged_persons_rg") or [])
-            n_flagged = aberrance.get("n_flagged", 0)
-            methods = aberrance.get("methods", ["ZU3_S", "HT_S"])
-            # One table: all results from selected functions (nm, pm, preknowledge)
-            df_aberrance = None
-            for key in ("nonparametric_misfit", "parametric_misfit", "preknowledge"):
-                recs = aberrance.get(key) or []
-                if not recs or (df_aberrance is not None and len(recs) != len(df_aberrance)):
-                    continue
-                part = pd.DataFrame(recs)
-                prefix = "PK_" if key == "preknowledge" else ""
-                if prefix and len(part.columns) > 0:
-                    part = part.add_prefix(prefix)
-                if df_aberrance is None:
-                    df_aberrance = part.copy()
-                else:
-                    for c in part.columns:
-                        if c not in df_aberrance.columns:
-                            df_aberrance[c] = part[c]
-            if df_aberrance is not None and len(df_aberrance) > 0:
-                df_aberrance = df_aberrance.copy()
-                df_aberrance.insert(0, "Person", range(1, len(df_aberrance) + 1))
-                if aberrance.get("answer_copying_pairs"):
-                    df_aberrance["Flagged_copying"] = df_aberrance.index.isin(flagged_copiers).astype(int)
-                if aberrance.get("rapid_guessing"):
-                    df_aberrance["Flagged_rg"] = df_aberrance.index.isin(flagged_rg).astype(int)
-                df_aberrance["Flagged"] = df_aberrance.index.isin(flagged_persons).astype(int)
-                n_persons = aberrance.get("n_persons", len(df_aberrance))
-                st.subheader("Person-fit statistics (all selected functions)")
-                cap_parts = ["Model misfit, answer copying, preknowledge."]
-                if aberrance.get("rapid_guessing"):
-                    cap_parts.append("Rapid guessing (RG_NT).")
-                cap_parts.append(f"Nonparametric: {', '.join(methods)}; parametric L_S_2PL; preknowledge L_S/S_S/W_S. Rows = persons (n={n_persons}).")
-                st.caption(" ".join(cap_parts))
-                st.dataframe(df_aberrance, height=min(400, 150 + 35 * len(df_aberrance)), use_container_width=True)
-                flag_desc = "Flagged_copying = 1 if copier; Flagged_rg = 1 if rapid guessing; Flagged = any aberrant."
-                st.caption(f"**{n_flagged}** of **{n_persons}** persons flagged. {flag_desc}")
-            else:
-                n_persons = aberrance.get("n_persons", 0)
-                st.markdown(f"No person-level records (n = {n_persons}).")
-                st.caption("Flagging rule: ZU3_S &lt; -2 or HT_S in bottom 5%; parametric L_S_2PL at α = .05; answer copying and preknowledge when item params and (for PK) compromised items are set.")
-            ac_pairs = aberrance.get("answer_copying_pairs") or []
-            if ac_pairs:
-                with st.expander("Answer copying: source–copier pairs", expanded=False):
-                    st.dataframe(pd.DataFrame(ac_pairs), height=min(300, 100 + 35 * len(ac_pairs)), use_container_width=True)
-                    st.caption("Source = suspected source; Copier = suspected copier. Columns: OMG_S, GBT_S, etc.")
-        else:
-            st.info(
-                "No aberrance results yet. Select functions above and click **Generate results** to compute aberrance indices using your uploaded response (and RT) data (or run the full workflow above). Then generate the **APA Report (PDF)** in the Response Results tab to include person-fit in the report (section 5. Person-fit)."
-            )
-
-    with tab3:
-        st.header("RT Analysis")
-        st.markdown("---")
-        with st.expander("**Latency flags**", expanded=True):
-            st.subheader("Latency flags")
-            if final.get("latency_flags"):
-                st.write(", ".join(final["latency_flags"]))
-                if st.button("Psych-MAS Summary", key="llm_analysis_latency"):
-                    with st.spinner("Analyzing latency flags..."):
-                        st.session_state["llm_analysis_latency_result"] = _llm_analyze_section_text(
-                            "Latency flags", "Flags: " + ", ".join(final["latency_flags"])
-                        )
-                    st.rerun()
-                if st.session_state.get("llm_analysis_latency_result"):
-                    st.markdown("###### Psych-MAS Summary")
-                    st.markdown(st.session_state["llm_analysis_latency_result"])
-            else:
-                st.info("No latency flags.")
-        with st.expander("**RT histograms**", expanded=True):
-            st.subheader("RT histograms")
-            if final.get("rt_plot_path") and Path(final["rt_plot_path"]).exists():
-                st.image(final["rt_plot_path"])
-                if st.button("Psych-MAS Summary", key="llm_analysis_rt"):
-                    with st.spinner("Analyzing RT histograms..."):
-                        st.session_state["llm_analysis_rt_result"] = _llm_analyze_image_section(
-                            final["rt_plot_path"], "RT histograms", "Response time distributions per item"
-                        )
-                    st.rerun()
-                if st.session_state.get("llm_analysis_rt_result"):
-                    st.markdown("###### Psych-MAS Summary")
-                    st.markdown(st.session_state["llm_analysis_rt_result"])
-            else:
-                st.info("No RT plot available.")
 
 st.set_page_config(
     page_title="PsyMAS",
@@ -9011,39 +7645,6 @@ def _data_availability_table_df(selected_agents: list[str] | None = None) -> pd.
     )
 
 
-def _render_output_table(title: str, records, *, filename: str, caption: str = "", preview_rows: int = 200) -> None:
-    df = _table_df(records)
-    with st.container(border=True):
-        head_col, action_col = st.columns([4, 1])
-        with head_col:
-            st.markdown(f"**{title}**")
-            if caption:
-                st.caption(caption)
-        if df.empty:
-            st.info("No table output is available for this stage yet.")
-            return
-        csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-        with action_col:
-            st.download_button(
-                "Download CSV",
-                data=csv_bytes,
-                file_name=filename,
-                mime="text/csv",
-                use_container_width=True,
-                key=f"download_{filename}",
-            )
-        display_df = df.head(preview_rows)
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            height=min(420, 120 + 34 * max(1, len(display_df))),
-            on_select="rerun",
-            selection_mode="multi-row",
-            key=f"table_{filename}",
-        )
-        if len(df) > len(display_df):
-            st.caption(f"Showing first {len(display_df):,} rows. Download includes all {len(df):,} rows.")
 
 
 def _selected_agent_functions() -> list[str]:
@@ -10050,175 +8651,6 @@ def _render_case_examinee_pills(
     return str(st.session_state.get("case_review_examinee_id") or current)
 
 
-def _render_case_examinee_dot_matrix(review_queue_df: pd.DataFrame) -> str:
-    """Priority-filtered dot grid for examinee selection; default filter is High."""
-    if review_queue_df.empty or "Examinee_ID" not in review_queue_df.columns:
-        return ""
-
-    if "case_review_priority_filter" not in st.session_state:
-        st.session_state["case_review_priority_filter"] = ["High"]
-
-    if _streamlined_ui_enabled():
-        compact_df = _case_review_queue_sorted(review_queue_df.copy())
-        ids = compact_df["Examinee_ID"].astype(str).tolist()
-        if not ids:
-            return ""
-        current = str(st.session_state.get("case_review_examinee_id") or ids[0])
-        if current not in ids:
-            current = ids[0]
-        default_index = ids.index(current)
-        current_row = compact_df[compact_df["Examinee_ID"].astype(str).eq(str(current))]
-        current_payload = current_row.iloc[0].to_dict() if not current_row.empty else {}
-        status = str(current_payload.get("Evidence_Status", current_payload.get("Review_Queue_Status", "")) or "Review")
-        priority = str(current_payload.get("Review_Priority", "") or "Not set")
-        domains = str(current_payload.get("Domains_For_Review", current_payload.get("Primary_Concern", "")) or "No domain")
-
-        def _case_label(eid: str) -> str:
-            row = compact_df[compact_df["Examinee_ID"].astype(str).eq(str(eid))]
-            if row.empty:
-                return f"Examinee {eid}"
-            r = row.iloc[0]
-            status = r.get("Evidence_Status", r.get("Review_Queue_Status", ""))
-            priority = r.get("Review_Priority", "")
-            domains = r.get("Domains_For_Review", r.get("Primary_Concern", ""))
-            return f"Examinee {eid} | {priority} | {status} | {domains or 'No domain'}"
-
-        st.markdown(
-            """
-            <style>
-            .psymas-case-selector {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) auto;
-                gap: 0.8rem;
-                align-items: stretch;
-                margin: 0.4rem 0 0.65rem 0;
-            }
-            .psymas-case-selector-card {
-                border: 1px solid #C9D6E3;
-                border-left: 4px solid #0F7890;
-                background: linear-gradient(180deg, #FFFFFF, #F8FBFC);
-                border-radius: 10px;
-                padding: 0.72rem 0.85rem;
-                box-shadow: 0 8px 22px rgba(16,32,51,0.05);
-            }
-            .psymas-case-selector-card .label {
-                color: #0B6D80;
-                font-size: 0.72rem;
-                font-weight: 800;
-                letter-spacing: 0.08em;
-                text-transform: uppercase;
-            }
-            .psymas-case-selector-card .title {
-                color: #102033;
-                font-size: 1.15rem;
-                font-weight: 820;
-                margin-top: 0.1rem;
-            }
-            .psymas-case-selector-card .meta {
-                color: #405064;
-                font-size: 0.84rem;
-                margin-top: 0.26rem;
-                font-weight: 560;
-            }
-            .psymas-case-selector-card .position {
-                color: #697789;
-                font-size: 0.76rem;
-                margin-top: 0.26rem;
-            }
-            .psymas-case-jump label,
-            .psymas-case-jump [data-testid="stWidgetLabel"] {
-                color: #405064 !important;
-                font-size: 0.78rem !important;
-                font-weight: 700 !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        left_col, prev_col, next_col = st.columns([0.72, 0.14, 0.14], gap="small")
-        with left_col:
-            st.markdown(
-                f"""
-                <div class="psymas-case-selector-card">
-                  <div class="label">Selected case</div>
-                  <div class="title">Examinee {html.escape(current)}</div>
-                  <div class="meta">{html.escape(priority)} · {html.escape(status)} · {html.escape(domains)}</div>
-                  <div class="position">Case {default_index + 1} of {len(ids)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with prev_col:
-            prev_disabled = default_index <= 0
-            if st.button("Previous", key="case_review_prev", disabled=prev_disabled, use_container_width=True):
-                st.session_state["case_review_examinee_id"] = ids[max(0, default_index - 1)]
-                st.rerun()
-        with next_col:
-            next_disabled = default_index >= len(ids) - 1
-            if st.button("Next", key="case_review_next", disabled=next_disabled, type="primary", use_container_width=True):
-                st.session_state["case_review_examinee_id"] = ids[min(len(ids) - 1, default_index + 1)]
-                st.rerun()
-
-        with st.expander("Jump to another examinee", expanded=False):
-            selected = st.selectbox(
-                "Find examinee",
-                ids,
-                index=default_index,
-                format_func=_case_label,
-                key="case_review_examinee_id_compact",
-            )
-            if str(selected) != current:
-                st.session_state["case_review_examinee_id"] = str(selected)
-                st.rerun()
-        return str(st.session_state.get("case_review_examinee_id") or current)
-
-    st.markdown("##### Select examinee")
-    selected_priorities = _render_case_priority_filter()
-
-    if not selected_priorities:
-        st.info("Select at least one review priority to show examinees in the matrix.")
-        return str(st.session_state.get("case_review_examinee_id") or "")
-
-    filtered = review_queue_df[review_queue_df["Review_Priority"].astype(str).isin(selected_priorities)].copy()
-    filtered = _case_review_queue_sorted(filtered)
-    if filtered.empty:
-        st.warning("No examinees match the current priority filter.")
-        return str(st.session_state.get("case_review_examinee_id") or "")
-
-    examinee_rows = [
-        (str(row["Examinee_ID"]), str(row.get("Review_Priority", "") or ""))
-        for _, row in filtered.iterrows()
-    ]
-    filtered_ids = [eid for eid, _ in examinee_rows]
-
-    current = str(st.session_state.get("case_review_examinee_id") or "")
-    if current not in filtered_ids:
-        current = filtered_ids[0]
-        st.session_state["case_review_examinee_id"] = current
-
-    current = _render_case_examinee_pills(examinee_rows, filtered_ids, current, selected_priorities)
-
-    current_priority = next((priority for eid, priority in examinee_rows if eid == current), "")
-    idx = filtered_ids.index(current)
-    st.markdown('<div class="psymas-case-examinee-nav">', unsafe_allow_html=True)
-    nav_prev, nav_mid, nav_next = st.columns([0.7, 2.6, 0.7], gap="small")
-    with nav_prev:
-        if st.button("← Previous", disabled=idx <= 0, key="case_examinee_prev"):
-            st.session_state["case_review_examinee_id"] = filtered_ids[idx - 1]
-            st.rerun()
-    with nav_mid:
-        st.markdown(
-            f"**Selected:** Examinee **{html.escape(current)}** · "
-            f"{_review_priority_pill_html(current_priority)}",
-            unsafe_allow_html=True,
-        )
-    with nav_next:
-        if st.button("Next →", disabled=idx >= len(filtered_ids) - 1, key="case_examinee_next"):
-            st.session_state["case_review_examinee_id"] = filtered_ids[idx + 1]
-            st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    return current
 
 
 def _case_review_display_columns(df: pd.DataFrame) -> list[str]:
@@ -10265,64 +8697,6 @@ def _selected_rows_from_dataframe_event(event: object) -> list[int]:
         return []
 
 
-def _render_quick_case_adjudication(selected_id: str) -> None:
-    if not selected_id:
-        return
-    if "case_review_decisions" not in st.session_state or not isinstance(st.session_state.get("case_review_decisions"), dict):
-        st.session_state["case_review_decisions"] = {}
-    current = st.session_state["case_review_decisions"].get(str(selected_id), {})
-    decision_options = ["No Issue", "Rule Violation", "Potential Misconduct", "Definite Misconduct"]
-    current_decision = str(current.get("final_decision", "") or "")
-    current_note = str(current.get("reviewer_note", "") or "")
-    st.markdown(
-        f"""
-<div class="psymas-inline-review">
-  <div>
-    <div class="kicker">Quick human decision</div>
-    <div class="title">Examinee {html.escape(str(selected_id))}</div>
-  </div>
-  <div class="hint">Use the buttons for fast queue work, or open the report for full evidence context.</div>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-    cols = st.columns(4)
-    for idx, option in enumerate(decision_options):
-        with cols[idx]:
-            if st.button(
-                option,
-                key=f"quick_case_decision_{option}_{selected_id}",
-                type="primary" if option == current_decision else "secondary",
-                use_container_width=True,
-            ):
-                st.session_state["case_review_decisions"][str(selected_id)] = {
-                    "final_decision": option,
-                    "reviewer_note": current_note,
-                }
-                _persist_case_review_to_store(str(selected_id), final_decision=option, reviewer_note=current_note)
-                st.toast(f"Recorded {option} for Examinee {selected_id}.")
-                st.rerun()
-    note_key = f"quick_case_note_{selected_id}"
-    if note_key not in st.session_state:
-        st.session_state[note_key] = current_note
-    note_cols = st.columns([0.78, 0.22], gap="small")
-    with note_cols[0]:
-        st.text_input(
-            "Reviewer note",
-            key=note_key,
-            placeholder="Optional note for the review record",
-            label_visibility="collapsed",
-        )
-    with note_cols[1]:
-        if st.button("Save note", key=f"quick_case_note_save_{selected_id}", use_container_width=True):
-            note = str(st.session_state.get(note_key, "") or "")
-            st.session_state["case_review_decisions"][str(selected_id)] = {
-                "final_decision": current_decision,
-                "reviewer_note": note,
-            }
-            _persist_case_review_to_store(str(selected_id), final_decision=current_decision, reviewer_note=note)
-            st.toast(f"Saved note for Examinee {selected_id}.")
-            st.rerun()
 
 
 def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
@@ -10665,9 +9039,16 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
                 "theme": "alpine",
                 "custom_css": aggrid_css,
                 "key": "case_review_editable_aggrid",
+                # Do not inherit AgGrid's default cell/selection events. The
+                # grid is synchronized only through its explicit manual update
+                # control, so dropdown edits stay local to the browser.
+                "update_on": [],
             }
             if GridUpdateMode is not None:
-                grid_kwargs["update_mode"] = GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED
+                # Keep edits and row selection in the browser until the reviewer
+                # explicitly syncs the grid. This prevents a full Streamlit rerun
+                # every time a human-decision dropdown is changed.
+                grid_kwargs["update_mode"] = GridUpdateMode.MANUAL
             if DataReturnMode is not None:
                 grid_kwargs["data_return_mode"] = DataReturnMode.AS_INPUT
             ag_response = AgGrid(edited_table_df, **grid_kwargs)
@@ -11400,11 +9781,15 @@ def _run_store_ready() -> bool:
     return get_run_store().has_run(run_id)
 
 
-def _sync_review_decisions_from_store() -> None:
+def _sync_review_decisions_from_store(*, force: bool = False) -> None:
     if not _run_store_ready():
         return
-    stored = get_run_store().load_review_decisions(_active_run_id())
+    run_id = _active_run_id()
+    if not force and st.session_state.get("_review_decisions_synced_run_id") == run_id:
+        return
+    stored = get_run_store().load_review_decisions(run_id)
     if not stored:
+        st.session_state["_review_decisions_synced_run_id"] = run_id
         return
     merged = dict(st.session_state.get("case_review_decisions") or {})
     for examinee_id, payload in stored.items():
@@ -11415,6 +9800,7 @@ def _sync_review_decisions_from_store() -> None:
             if isinstance(current, dict):
                 current.setdefault("reviewer_note", payload.get("reviewer_note", ""))
     st.session_state["case_review_decisions"] = merged
+    st.session_state["_review_decisions_synced_run_id"] = run_id
 
 
 def _persist_case_review_to_store(
@@ -11433,6 +9819,9 @@ def _persist_case_review_to_store(
         llm_explanation=llm_explanation,
         run_id=_active_run_id(),
     )
+    # The current session already has the edited decision. Mark it as synced
+    # so a widget rerun does not perform another full SQLite query.
+    st.session_state["_review_decisions_synced_run_id"] = _active_run_id()
 
 
 def _materialize_psymas_run_store(run_id: str) -> bool:
@@ -11683,6 +10072,8 @@ def _restore_evaluated_snapshot(data: bytes, *, preserve_review_decisions: bool 
         manifest, session_inputs = unpack_snapshot(data, store_path=store.db_path)
     except Exception as exc:
         return False, f"Could not read snapshot: {exc}"
+    # Snapshot restoration replaces the SQLite contents in place.
+    store.clear_cache()
 
     run_id = str(manifest.get("run_id") or "")
     if not run_id or not store.has_run(run_id):
@@ -12071,20 +10462,6 @@ def _governed_review_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
     return governed_df, domain_df
 
 
-def _case_review_packet_bytes(
-    case_row: pd.Series,
-    case_domains: pd.DataFrame,
-    case_trace: pd.DataFrame,
-    case_auxiliary: pd.DataFrame | None = None,
-) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("case_summary.csv", pd.DataFrame([case_row.to_dict()]).to_csv(index=False))
-        zf.writestr("case_domain_evidence.csv", case_domains.to_csv(index=False))
-        zf.writestr("case_evidence_trace.csv", case_trace.to_csv(index=False))
-        if isinstance(case_auxiliary, pd.DataFrame):
-            zf.writestr("case_display_only_auxiliary_indices.csv", case_auxiliary.to_csv(index=False))
-    return buf.getvalue()
 
 
 def _compact_case_table_text(df: pd.DataFrame, columns: list[str], max_rows: int = 24) -> str:
@@ -12547,11 +10924,12 @@ def _generate_case_reviewer_explanation(
     case_domains: pd.DataFrame,
     case_trace: pd.DataFrame,
     case_auxiliary: pd.DataFrame,
+    model_id: str | None = None,
 ) -> str:
     context = _build_case_reviewer_context(selected_id, case_row, case_domains, case_trace, case_auxiliary)
     prompt = _case_reviewer_prompt(context)
     load_dotenv()
-    text, err = _call_selected_llm_text(prompt, timeout=90)
+    text, err = _call_selected_llm_text(prompt, model_id=model_id, timeout=90)
     if text and not err:
         return text
     return _format_llm_error(err or "No selected LLM model returned a response.")
@@ -12847,6 +11225,7 @@ def _ask_case_review_llm(
     reviewer_decision: str,
     reviewer_note: str,
     reviewer_question: str,
+    model_id: str | None = None,
 ) -> str:
     context = _build_case_reviewer_context(selected_id, case_row, case_domains, case_trace, case_auxiliary)
     prompt = (
@@ -12860,7 +11239,7 @@ def _ask_case_review_llm(
         f"Case evidence:\n{context[:9000]}"
     )
     load_dotenv()
-    text, err = _call_selected_llm_text(prompt, timeout=90)
+    text, err = _call_selected_llm_text(prompt, model_id=model_id, timeout=90)
     if text and not err:
         return text
     return _format_llm_error(err or "No selected LLM model returned a response.")
@@ -14825,71 +13204,10 @@ def _render_case_cp_visual(flags: dict, examinee_id: str, *, key_suffix: str = "
 
 
 
-def _render_case_auxiliary_visuals(examinee_id: str) -> None:
-    flags = _forensic_result_flags_from_session()
-    pair_df = _case_pair_visual_rows(flags, examinee_id)
-    st.markdown("#### Graphical evidence review")
-    st.caption("Auxiliary figures are displayed together so the reviewer can scan the case without opening tabs.")
-    _render_case_pair_network(pair_df, examinee_id)
-    _render_case_rg_visual(flags, examinee_id)
-    _render_case_cp_visual(flags, examinee_id, key_suffix="_aux")
 
 
 
 
-def _render_case_domain_review_detail(
-    selected_id: str,
-    domain_issue_rows: list[dict],
-    flags: dict,
-) -> None:
-    """Original Step 2 domain cards, figures, and domain-level drill-down."""
-    row_by_domain = {str(row.get("domain")): row for row in domain_issue_rows}
-    st.caption(
-        "Review order: scenario domains first (RT · SIM · PK · TP), then supporting domains (MF · CP). "
-        "The first row highlights the three primary review modules."
-    )
-    domain_html = ['<div class="psymas-domain-grid">']
-    for row in [row_by_domain.get("MF"), row_by_domain.get("RT"), row_by_domain.get("PK")]:
-        if not row:
-            continue
-        issue_class = str(row.get("card_class") or ("issue" if row["has_issue"] else "clear"))
-        issue_label = str(row.get("status_label") or ("Governed evidence" if row["has_issue"] else "No governed signal"))
-        domain_html.append(
-            f"""
-<div class="psymas-domain-card {issue_class}">
-  <div class="domain-step">Domain {html.escape(str(row["step"]))}: {html.escape(str(row["display_code"]))}</div>
-  <div class="domain-top"><span>{html.escape(row["domain_name"])}</span><b>{html.escape(str(row["strength"]))}</b></div>
-  <div class="domain-status">{html.escape(issue_label)}</div>
-  <div class="domain-index"><b>Main index:</b> {html.escape(_shorten_report_text(row["main_index"], 92))}</div>
-  <div class="domain-pattern">{html.escape(str(row["pattern"]))}</div>
-  <div class="domain-figure"><b>Related figure:</b> {html.escape(str(row["figure"]))}</div>
-</div>
-            """
-        )
-    domain_html.append("</div>")
-    st.markdown("".join(domain_html), unsafe_allow_html=True)
-    sim_row = row_by_domain.get("SIM")
-    if sim_row:
-        with st.container(border=True, key=f"domain_sim_frame_{selected_id}"):
-            _domain_frame_header(sim_row)
-            st.markdown('<div class="psymas-domain-figure-slot">', unsafe_allow_html=True)
-            pair_df = _case_pair_visual_rows(flags, selected_id)
-            _render_case_pair_network(pair_df, selected_id)
-            st.markdown("</div>", unsafe_allow_html=True)
-    tp_row = row_by_domain.get("TP")
-    if tp_row:
-        with st.container(border=True, key=f"domain_tp_frame_{selected_id}"):
-            _domain_frame_header(tp_row)
-            st.markdown('<div class="psymas-domain-figure-slot">', unsafe_allow_html=True)
-            st.info("No dedicated tampering figure is available unless revision/tampering response data are loaded.")
-            st.markdown("</div>", unsafe_allow_html=True)
-    cp_row = row_by_domain.get("CP")
-    if cp_row:
-        with st.container(border=True, key=f"domain_cp_frame_{selected_id}"):
-            _domain_frame_header(cp_row)
-            st.markdown('<div class="psymas-domain-figure-slot">', unsafe_allow_html=True)
-            _render_case_cp_visual(flags, selected_id, key_suffix="_detail")
-            st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_single_case_review_page(selected_override: str | None = None) -> None:
@@ -15013,12 +13331,11 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 "Open Human Review → Downloads to generate the master export."
             )
         else:
-            lineage_fig = build_individual_lineage_sankey(
-                master_row,
-                examinee_id=str(selected_id),
-                title="Priority lineage",
-                included_domains=("MF", "RT", "PK", "TP"),
-                height=620,
+            lineage_fig = _cached_individual_lineage(
+                master_row.to_json(date_format="iso"),
+                str(selected_id),
+                ("MF", "RT", "PK", "TP"),
+                620,
             )
             if lineage_fig is None:
                 st.info("No governed index lineage is available for this examinee.")
@@ -15084,6 +13401,32 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 st.session_state["show_case_reviewer_prompt"] = not bool(st.session_state.get("show_case_reviewer_prompt", False))
         with refresh_col:
             refresh_suggestion = st.button("Generate", key=f"generate_case_explanation_{selected_id}", use_container_width=True)
+
+        # This selector is deliberately scoped to the open case. It lets a reviewer
+        # compare already configured models without changing the application-wide
+        # provider/model setting in Configuration.
+        case_model_ids = list(dict.fromkeys(str(model_id) for model_id in (_current_model_ids() or []) if str(model_id).strip()))
+        if not case_model_ids:
+            case_model_ids = [str(_effective_llm_model())] if str(_effective_llm_model()).strip() else []
+        case_model_labels = {
+            str(model_id): str(label)
+            for label, model_id in (_current_model_options() or [])
+            if str(model_id).strip()
+        }
+        case_model_key = f"case_llm_model_{selected_id}"
+        if case_model_key not in st.session_state or st.session_state.get(case_model_key) not in case_model_ids:
+            st.session_state[case_model_key] = case_model_ids[0] if case_model_ids else ""
+        selected_case_model = st.selectbox(
+            "Model for this case",
+            options=case_model_ids,
+            format_func=lambda model_id: case_model_labels.get(
+                str(model_id),
+                f"{_llm_provider()} · {str(model_id).split('/')[-1]}",
+            ),
+            key=case_model_key,
+            help="Switch among models already configured for the active provider. This choice applies only to this case review.",
+        ) if case_model_ids else ""
+        st.caption(f"Provider: {_llm_provider()} · case-only model override")
         if st.session_state.get("show_case_reviewer_prompt", False):
             if "case_reviewer_prompt_template" not in st.session_state:
                 st.session_state["case_reviewer_prompt_template"] = DEFAULT_CASE_REVIEWER_PROMPT
@@ -15104,6 +13447,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     case_domains,
                     case_trace,
                     case_auxiliary,
+                    model_id=selected_case_model,
                 )
                 st.session_state[explanation_key] = explanation
                 _persist_case_review_to_store(
@@ -15150,6 +13494,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     final_decision,
                     str(st.session_state.get(reviewer_note_key, "")),
                     reviewer_question,
+                    model_id=selected_case_model,
                 )
             st.rerun()
 
@@ -15797,15 +14142,39 @@ def _master_row_for_examinee(master_df: pd.DataFrame, examinee_id: str) -> pd.Se
     return matches.iloc[0]
 
 
+@st.cache_data(show_spinner=False)
+def _cached_individual_lineage(
+    master_row_json: str,
+    examinee_id: str,
+    included_domains: tuple[str, ...],
+    height: int,
+):
+    """Cache the pure lineage figure used by the individual review dialog."""
+    try:
+        row_data = json.loads(master_row_json)
+        master_row = pd.Series(row_data if isinstance(row_data, dict) else {})
+    except Exception:
+        return None
+    return build_individual_lineage_sankey(
+        master_row,
+        examinee_id=examinee_id,
+        title="Priority lineage",
+        included_domains=included_domains,
+        height=height,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_cohort_lineage(master_df: pd.DataFrame, title: str, height: int):
+    """Cache the cohort lineage figure until the underlying table changes."""
+    return build_lineage_sankey(master_df, title=title, height=height)
+
+
 def _render_cohort_evidence_lineage(master_df: pd.DataFrame, *, chart_key: str = "evidence_lineage") -> None:
     if master_df.empty:
         st.info("Master results are not available yet. Open Downloads to generate psymas_master_results.csv.")
         return
-    fig = build_lineage_sankey(
-        master_df,
-        title="Evidence lineage tree",
-        height=620,
-    )
+    fig = _cached_cohort_lineage(master_df, "Evidence lineage tree", 620)
     if fig is None:
         st.info("No domain-index lineage is available in the current master export.")
         return
@@ -16244,508 +14613,8 @@ def _canonical_examinee_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
-def _simulation_validation_tables(
-    *,
-    include_detail: bool = False,
-    include_pair: bool = False,
-) -> dict[str, pd.DataFrame]:
-    """Build compact validation summaries; materialize truth-unit rows only on demand."""
-    flags = _forensic_result_flags_from_session()
-    scenario_df = _demo_table_df("scenario_key", "scenario_key.csv")
-    copy_truth_df = _demo_table_df("copying_pairs_truth", "copying_pairs_truth.csv")
-    cache_signature = json.dumps(
-        {
-            "run_id": st.session_state.get("detect_run_id", ""),
-            "result_id": id(st.session_state.get("forensic_result")),
-            "agents": sorted(str(key) for key in flags),
-            "scenario_rows": len(scenario_df),
-            "pair_rows": len(copy_truth_df),
-            "include_detail": include_detail,
-            "include_pair": include_pair,
-            "version": "validation_v3",
-        },
-        sort_keys=True,
-    )
-    validation_cache = st.session_state.get("_simulation_validation_tables_cache")
-    if isinstance(validation_cache, dict) and validation_cache.get("sig") == cache_signature:
-        cached_tables = validation_cache.get("tables")
-        if isinstance(cached_tables, dict):
-            return {
-                key: value.copy() if isinstance(value, pd.DataFrame) else pd.DataFrame()
-                for key, value in cached_tables.items()
-            }
-    empty = {
-        "by_examinee": pd.DataFrame(),
-        "summary": pd.DataFrame(),
-        "pair": pd.DataFrame(),
-        "item": pd.DataFrame(),
-    }
-    if scenario_df.empty or "examinee_id" not in scenario_df.columns:
-        return empty
-
-    def _agent_operational(agent_key: str) -> bool:
-        payload = flags.get(agent_key, {})
-        if not isinstance(payload, dict) or payload.get("error"):
-            return False
-        if payload.get("package_method_required"):
-            return False
-        return bool(
-            payload.get("methods")
-            or payload.get("stat")
-            or payload.get("pairs")
-            or payload.get("rte")
-            or payload.get("flagged_by_method")
-        )
-
-    def _agent_flag_ids(agent_key: str, method: str | None = None) -> set[str]:
-        payload = flags.get(agent_key, {})
-        if method and isinstance(payload, dict):
-            method_ids = (payload.get("flagged_by_method") or {}).get(method) or []
-            return {str(int(index) + 1) for index in method_ids}
-        return {str(index + 1) for index in _agent_flagged_indices(payload, agent_key)}
-
-    scenario = scenario_df.copy()
-    scenario["examinee_id"] = scenario["examinee_id"].astype(str)
-    scenario["_truth_key"] = scenario["examinee_id"].map(_canonical_examinee_key)
-    scenario["true_group"] = scenario.get("true_group", "").astype(str)
-    scenario["scenario_type"] = scenario.get("scenario_type", "").astype(str)
-
-    source_map = {
-        "rapid_guessing": ("rg_agent", "detect_rg NT package flags", "examinee", "NT"),
-        "preknowledge": ("pk_agent", "detect_pk package flags", "examinee", None),
-        "answer_change": ("tt_agent", "detect_tt package flags", "examinee", None),
-    }
-    detail_rows: list[dict] = []
-    summary_rows: list[dict] = []
-    for truth_group, (agent_key, flag_source, unit, package_method) in source_map.items():
-        truth_rows = scenario[scenario["true_group"].eq(truth_group)].copy()
-        available = _agent_operational(agent_key)
-        flagged_ids = _agent_flag_ids(agent_key, package_method) if available else set()
-        if include_detail:
-            for _, truth_row in truth_rows.iterrows():
-                matched = truth_row["_truth_key"] in flagged_ids if available else False
-                detail_rows.append(
-                    {
-                        "Truth_Unit_ID": truth_row["examinee_id"],
-                        "Statistical_Unit": unit,
-                        "true_group": truth_group,
-                        "scenario_type": truth_row.get("scenario_type", ""),
-                        "Detection_Source": flag_source,
-                        "Evaluation_Status": "Evaluated" if available else "Not evaluated",
-                        "Matching_Flag": int(matched) if available else pd.NA,
-                        "Validation_Outcome": (
-                            "matching_flag"
-                            if matched
-                            else ("true_case_not_flagged" if available else "not_evaluated")
-                        ),
-                    }
-                )
-        true_n = len(truth_rows)
-        matched_n = int(truth_rows["_truth_key"].isin(flagged_ids).sum()) if available else 0
-        summary_rows.append(
-            {
-                "true_group": truth_group,
-                "Statistical_Unit": unit,
-                "Detection_Source": flag_source,
-                "Evaluation_Status": "Evaluated" if available else "Not evaluated",
-                "true_value_n": true_n,
-                "matching_flag_n": matched_n if available else pd.NA,
-                "flag_truth_match_rate": round(matched_n / true_n, 4) if available and true_n else pd.NA,
-            }
-        )
-
-    truth_pair_keys: set[tuple[str, str]] = set()
-    if not copy_truth_df.empty and {"source_id", "copier_id"}.issubset(copy_truth_df.columns):
-        truth_pair_keys = {
-            tuple(
-                sorted(
-                    (
-                        _canonical_examinee_key(row.get("source_id", "")),
-                        _canonical_examinee_key(row.get("copier_id", "")),
-                    )
-                )
-            )
-            for _, row in copy_truth_df.iterrows()
-        }
-    detected_pairs: set[tuple[str, str]] = set()
-    forensic_result = st.session_state.get("forensic_result") or {}
-    run_thresholds = forensic_result.get("threshold_config") if isinstance(forensic_result, dict) else {}
-    run_thresholds = run_thresholds if isinstance(run_thresholds, dict) else {}
-
-    def _package_alpha(agent_key: str) -> float:
-        fn_name = {"ac_agent": "detect_ac", "as_agent": "detect_as"}.get(agent_key, "")
-        rules = run_thresholds.get("rules") or {}
-        block = rules.get(fn_name) if isinstance(rules, dict) else {}
-        defaults = run_thresholds.get("defaults") or {}
-        try:
-            return float((block or {}).get("alpha", (defaults or {}).get("alpha", 0.05)))
-        except (TypeError, ValueError):
-            return 0.05
-
-    copying_operational = _agent_operational("ac_agent") or _agent_operational("as_agent")
-    copying_contract_available = any(
-        isinstance(flags.get(agent_key), dict)
-        and "flagged_pairs" in flags.get(agent_key, {})
-        for agent_key in ("ac_agent", "as_agent")
-    )
-    copying_available = copying_operational and copying_contract_available
-    copying_status = (
-        "Evaluated"
-        if copying_available
-        else ("Rerun required" if copying_operational else "Not evaluated")
-    )
-    for agent_key, block_names in (("ac_agent", ("pairs",)), ("as_agent", ("stat",))):
-        payload = flags.get(agent_key, {})
-        if not isinstance(payload, dict):
-            continue
-        for flagged_pair in payload.get("flagged_pairs") or []:
-            if not isinstance(flagged_pair, (list, tuple)) or len(flagged_pair) < 2:
-                continue
-            try:
-                pair_key = tuple(
-                    sorted((str(int(flagged_pair[0]) + 1), str(int(flagged_pair[1]) + 1)))
-                )
-            except (TypeError, ValueError):
-                continue
-            if pair_key in truth_pair_keys:
-                detected_pairs.add(pair_key)
-        for block_name in block_names:
-            for record in payload.get(block_name) or []:
-                if not isinstance(record, dict):
-                    continue
-                method_flag_values = [
-                    value
-                    for key, value in record.items()
-                    if str(key).lower().endswith("_flag")
-                ]
-                pair_flag = any(_gov_truthy_flag(value) for value in method_flag_values)
-                if not method_flag_values:
-                    # aberrance defines detect_ac/detect_as flag as p-value <= alpha.
-                    # This recovers package flags from runs created before pair flags
-                    # were serialized from the R three-dimensional flag array.
-                    alpha = _package_alpha(agent_key)
-                    pair_flag = any(
-                        str(key).lower().endswith("_pval")
-                        and pd.notna(value)
-                        and float(value) <= alpha
-                        for key, value in record.items()
-                        if isinstance(value, (int, float, np.integer, np.floating))
-                    )
-                if not pair_flag:
-                    continue
-                p1, p2 = _pair_record_participants(record)
-                if p1 is None or p2 is None:
-                    continue
-                pair_key = tuple(sorted((str(p1 + 1), str(p2 + 1))))
-                if pair_key in truth_pair_keys:
-                    detected_pairs.add(pair_key)
-                    if detected_pairs == truth_pair_keys:
-                        break
-            if detected_pairs == truth_pair_keys:
-                break
-        if detected_pairs == truth_pair_keys:
-            break
-
-    pair_rows: list[dict] = []
-    if not copy_truth_df.empty and {"source_id", "copier_id"}.issubset(copy_truth_df.columns):
-        for pair_index, truth_row in copy_truth_df.reset_index(drop=True).iterrows():
-            source_id = str(truth_row.get("source_id", ""))
-            copier_id = str(truth_row.get("copier_id", ""))
-            pair_key = tuple(
-                sorted((_canonical_examinee_key(source_id), _canonical_examinee_key(copier_id)))
-            )
-            matched = pair_key in detected_pairs if copying_available else False
-            if include_pair:
-                pair_rows.append(
-                    {
-                        "Truth_Unit_ID": f"{source_id} -> {copier_id}",
-                        "Statistical_Unit": "pair",
-                        "true_group": "copying_pair",
-                        "scenario_type": truth_row.get("scenario_label", "score_based_copying"),
-                        "Detection_Source": "detect_ac/detect_as package pair flags",
-                        "Evaluation_Status": copying_status,
-                        "Matching_Flag": int(matched) if copying_available else pd.NA,
-                        "Validation_Outcome": (
-                            "matching_flag"
-                            if matched
-                            else ("true_pair_not_flagged" if copying_available else "not_evaluated")
-                        ),
-                        "Source_ID": source_id,
-                        "Copier_ID": copier_id,
-                    }
-                )
-        pair_true_n = len(copy_truth_df)
-        pair_matched_n = len(detected_pairs) if copying_available else 0
-        summary_rows.append(
-            {
-                "true_group": "copying_pair",
-                "Statistical_Unit": "pair",
-                "Detection_Source": "detect_ac/detect_as package pair flags",
-                "Evaluation_Status": copying_status,
-                "true_value_n": pair_true_n,
-                "matching_flag_n": pair_matched_n if copying_available else pd.NA,
-                "flag_truth_match_rate": (
-                    round(pair_matched_n / pair_true_n, 4)
-                    if copying_available and pair_true_n
-                    else pd.NA
-                ),
-            }
-        )
-
-    validation_exam_df = pd.DataFrame(detail_rows)
-    pair_df = pd.DataFrame(pair_rows)
-    summary_df = pd.DataFrame(summary_rows)
-    preferred_order = {
-        "answer_change": 0,
-        "copying_pair": 1,
-        "preknowledge": 2,
-        "rapid_guessing": 3,
-    }
-    if not summary_df.empty:
-        summary_df["_order"] = summary_df["true_group"].map(preferred_order).fillna(99)
-        summary_df = summary_df.sort_values("_order").drop(columns="_order").reset_index(drop=True)
-    result = {
-        "by_examinee": validation_exam_df,
-        "summary": summary_df,
-        "pair": pair_df,
-        "item": pd.DataFrame(),
-    }
-    st.session_state["_simulation_validation_tables_cache"] = {
-        "sig": cache_signature,
-        "tables": {
-            key: value.copy() if isinstance(value, pd.DataFrame) else pd.DataFrame()
-            for key, value in result.items()
-        },
-    }
-    return result
 
 
-def _validation_publication_figure(
-    by_exam: pd.DataFrame,
-) -> tuple[plt.Figure | None, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Build a publication-facing descriptive validation figure."""
-    if by_exam.empty or "true_group" not in by_exam.columns:
-        return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    plot_df = by_exam[by_exam["true_group"].notna()].copy()
-    if plot_df.empty:
-        return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    plot_df["true_group"] = plot_df["true_group"].astype(str)
-    plot_df["scenario_detected"] = plot_df.get("scenario_detected", False).fillna(False).astype(bool)
-    preferred_order = [
-        "normal",
-        "rapid_guessing",
-        "mixed_fast_high_ability",
-        "preknowledge",
-        "copying_copier",
-        "copying_source",
-        "answer_change",
-        "missing_rt_limited_evidence",
-    ]
-    observed = list(dict.fromkeys(plot_df["true_group"].tolist()))
-    group_order = [g for g in preferred_order if g in observed] + [g for g in observed if g not in preferred_order]
-    group_labels = {
-        "normal": "Normal",
-        "rapid_guessing": "Rapid guessing",
-        "mixed_fast_high_ability": "Fast / high ability",
-        "preknowledge": "Preknowledge",
-        "copying_copier": "Copying: copier",
-        "copying_source": "Copying: source",
-        "answer_change": "Answer change",
-        "missing_rt_limited_evidence": "Missing RT",
-    }
-
-    rate_rows: list[dict] = []
-    for group in group_order:
-        group_df = plot_df[plot_df["true_group"] == group]
-        n_group = len(group_df)
-        positive_n = int(group_df["scenario_detected"].sum())
-        rate = positive_n / n_group if n_group else 0.0
-        z = 1.959963984540054
-        denom = 1 + (z**2 / n_group) if n_group else 1
-        center = (rate + z**2 / (2 * n_group)) / denom if n_group else 0.0
-        half = (
-            z
-            * math.sqrt((rate * (1 - rate) / n_group) + (z**2 / (4 * n_group**2)))
-            / denom
-            if n_group
-            else 0.0
-        )
-        rate_rows.append(
-            {
-                "true_group": group,
-                "group_label": group_labels.get(group, group.replace("_", " ").title()),
-                "n_examinees": n_group,
-                "scenario_detected_n": positive_n,
-                "scenario_detection_rate": rate,
-                "ci_low": max(0.0, center - half),
-                "ci_high": min(1.0, center + half),
-            }
-        )
-    rate_df = pd.DataFrame(rate_rows)
-
-    domain_rows: list[dict] = []
-    for group in group_order:
-        group_df = plot_df[plot_df["true_group"] == group]
-        for domain in ["MF", "RT", "SIM", "PK", "TP", "CP"]:
-            strength_col = f"{domain}_Strength"
-            value = (
-                float(group_df[strength_col].astype(str).str.lower().isin(["moderate", "strong"]).mean())
-                if strength_col in group_df.columns and not group_df.empty
-                else 0.0
-            )
-            domain_rows.append(
-                {
-                    "true_group": group,
-                    "group_label": group_labels.get(group, group.replace("_", " ").title()),
-                    "domain": domain,
-                    "moderate_or_strong_rate": value,
-                }
-            )
-    domain_df = pd.DataFrame(domain_rows)
-
-    status_df = (
-        plot_df.groupby(["true_group", "validation_outcome"], dropna=False)
-        .size()
-        .reset_index(name="n_cases")
-        if "validation_outcome" in plot_df.columns
-        else pd.DataFrame()
-    )
-    if not status_df.empty:
-        totals = status_df.groupby("true_group")["n_cases"].transform("sum")
-        status_df["proportion"] = status_df["n_cases"] / totals
-        status_df["group_label"] = status_df["true_group"].map(
-            lambda x: group_labels.get(x, str(x).replace("_", " ").title())
-        )
-
-    fig = plt.figure(figsize=(12.0, 9.0), facecolor="white")
-    grid = fig.add_gridspec(2, 2, height_ratios=[1.05, 1.0], hspace=0.42, wspace=0.42)
-    ax_rate = fig.add_subplot(grid[0, :])
-    ax_domain = fig.add_subplot(grid[1, 0])
-    ax_status = fig.add_subplot(grid[1, 1])
-    for ax in (ax_rate, ax_domain, ax_status):
-        ax.set_facecolor("white")
-        ax.tick_params(colors="#111827", labelsize=9)
-        for spine in ax.spines.values():
-            spine.set_color("#CBD5E1")
-
-    y_positions = np.arange(len(rate_df))
-    rates = rate_df["scenario_detection_rate"].to_numpy(dtype=float)
-    error_low = rates - rate_df["ci_low"].to_numpy(dtype=float)
-    error_high = rate_df["ci_high"].to_numpy(dtype=float) - rates
-    bar_colors = ["#64748B" if group == "normal" else "#147D92" for group in rate_df["true_group"]]
-    ax_rate.barh(y_positions, rates, color=bar_colors, height=0.64, edgecolor="white")
-    ax_rate.errorbar(
-        rates,
-        y_positions,
-        xerr=np.vstack([error_low, error_high]),
-        fmt="none",
-        ecolor="#111827",
-        elinewidth=1.0,
-        capsize=3,
-    )
-    ax_rate.set_yticks(y_positions, rate_df["group_label"])
-    ax_rate.invert_yaxis()
-    ax_rate.set_xlim(0, 1.02)
-    ax_rate.xaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.0%}"))
-    ax_rate.set_xlabel("Cases detected in the scenario-matched domain", color="#111827")
-    ax_rate.set_title("A  Scenario-matched detection rate by simulated truth group", loc="left", weight="bold", color="#111827")
-    ax_rate.grid(axis="x", color="#E2E8F0", linewidth=0.8)
-    ax_rate.set_axisbelow(True)
-    for y_pos, row in rate_df.reset_index(drop=True).iterrows():
-        label_x = min(float(row["ci_high"]) + 0.018, 0.985)
-        label_align = "right" if float(row["ci_high"]) > 0.88 else "left"
-        ax_rate.text(
-            label_x,
-            y_pos,
-            f'{row["scenario_detection_rate"]:.1%}  (n={int(row["n_examinees"])})',
-            ha=label_align,
-            va="center",
-            fontsize=8,
-            color="#111827",
-            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82, "pad": 1.0},
-        )
-
-    heatmap = (
-        domain_df.pivot(index="group_label", columns="domain", values="moderate_or_strong_rate")
-        .reindex(index=rate_df["group_label"].tolist(), columns=["MF", "RT", "SIM", "PK", "TP", "CP"])
-        .fillna(0)
-    )
-    image = ax_domain.imshow(heatmap.to_numpy(), cmap="YlGnBu", vmin=0, vmax=1, aspect="auto")
-    ax_domain.set_xticks(np.arange(len(heatmap.columns)), heatmap.columns)
-    ax_domain.set_yticks(np.arange(len(heatmap.index)), heatmap.index)
-    ax_domain.set_title("B  Moderate-or-strong domain evidence", loc="left", weight="bold", color="#111827")
-    for row_i in range(heatmap.shape[0]):
-        for col_i in range(heatmap.shape[1]):
-            value = float(heatmap.iloc[row_i, col_i])
-            ax_domain.text(
-                col_i,
-                row_i,
-                f"{value:.0%}",
-                ha="center",
-                va="center",
-                fontsize=7.5,
-                color="white" if value >= 0.55 else "#111827",
-            )
-    if not status_df.empty:
-        status_pivot = (
-            status_df.pivot(index="group_label", columns="validation_outcome", values="proportion")
-            .reindex(rate_df["group_label"].tolist())
-            .fillna(0)
-        )
-        status_colors = ["#DCEAF0", "#93C5C8", "#F3C677", "#E88B6A", "#A84448", "#64748B"]
-        left = np.zeros(len(status_pivot))
-        for idx, status_name in enumerate(status_pivot.columns):
-            values = status_pivot[status_name].to_numpy(dtype=float)
-            ax_status.barh(
-                np.arange(len(status_pivot)),
-                values,
-                left=left,
-                height=0.64,
-                label=str(status_name),
-                color=status_colors[idx % len(status_colors)],
-                edgecolor="white",
-            )
-            left += values
-        ax_status.set_yticks(np.arange(len(status_pivot)), status_pivot.index)
-        ax_status.invert_yaxis()
-        ax_status.set_xlim(0, 1)
-        ax_status.xaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.0%}"))
-        ax_status.set_xlabel("Proportion of truth group", color="#111827")
-        ax_status.legend(
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.18),
-            ncol=2,
-            frameon=False,
-            fontsize=7,
-        )
-    else:
-        ax_status.text(0.5, 0.5, "Validation outcome unavailable", ha="center", va="center")
-        ax_status.set_xticks([])
-        ax_status.set_yticks([])
-    ax_status.set_title("C  Scenario-matched validation outcomes", loc="left", weight="bold", color="#111827")
-    ax_status.grid(axis="x", color="#E2E8F0", linewidth=0.8)
-    ax_status.set_axisbelow(True)
-
-    fig.suptitle(
-        "PsyMAS validation against simulated truth conditions",
-        x=0.07,
-        y=0.99,
-        ha="left",
-        fontsize=15,
-        weight="bold",
-        color="#111827",
-    )
-    fig.text(
-        0.07,
-        0.955,
-        "Rates are descriptive; error bars in panel A are Wilson 95% confidence intervals.",
-        ha="left",
-        fontsize=9,
-        color="#475569",
-    )
-    fig.subplots_adjust(top=0.91, bottom=0.15, left=0.18, right=0.97)
-    return fig, rate_df, domain_df, status_df
 
 
 def _figure_download_bytes(fig: plt.Figure | None, file_format: str) -> bytes:
@@ -16764,341 +14633,12 @@ def _figure_download_bytes(fig: plt.Figure | None, file_format: str) -> bytes:
     return buffer.getvalue()
 
 
-def _validation_flag_comparison_figure(
-    summary_df: pd.DataFrame,
-) -> tuple[plt.Figure | None, pd.DataFrame]:
-    """Compare package/index flags with the corresponding simulated truth units."""
-    required = {
-        "true_group",
-        "Evaluation_Status",
-        "true_value_n",
-        "matching_flag_n",
-        "flag_truth_match_rate",
-    }
-    if summary_df.empty or not required.issubset(summary_df.columns):
-        return None, pd.DataFrame()
-    group_df = summary_df.copy()
-    labels = {
-        "answer_change": "Answer change",
-        "copying_pair": "Copying pairs",
-        "rapid_guessing": "Rapid guessing",
-        "preknowledge": "Preknowledge",
-    }
-    group_df["group_label"] = group_df["true_group"].map(
-        lambda value: labels.get(str(value), str(value).replace("_", " ").title())
-    )
-    group_df["flagged_pct"] = pd.to_numeric(
-        group_df["flag_truth_match_rate"], errors="coerce"
-    )
-
-    fig, ax = plt.subplots(figsize=(8.4, 3.4), facecolor="white")
-    ax.set_facecolor("white")
-    ax.tick_params(colors="#111827", labelsize=9)
-    for spine in ax.spines.values():
-        spine.set_color("#CBD5E1")
-    y = np.arange(len(group_df))
-    true_counts = pd.to_numeric(group_df["true_value_n"], errors="coerce").fillna(0).to_numpy(dtype=float)
-    matched_counts = pd.to_numeric(group_df["matching_flag_n"], errors="coerce").fillna(0).to_numpy(dtype=float)
-    max_count = max(float(true_counts.max()), 1.0)
-    ax.barh(y, true_counts, height=0.52, color="#DCE6EC", label="Simulated truth")
-    evaluated_mask = group_df["Evaluation_Status"].eq("Evaluated").to_numpy()
-    evaluated_counts = np.where(evaluated_mask, matched_counts, 0)
-    ax.barh(y, evaluated_counts, height=0.28, color="#147D92", label="Matched flags")
-    for row_y, matched_n, true_n, rate, status in zip(
-        y,
-        matched_counts,
-        true_counts,
-        group_df["flagged_pct"],
-        group_df["Evaluation_Status"],
-    ):
-        label = (
-            f"{int(matched_n)}/{int(true_n)}  ({float(rate):.1%})"
-            if status == "Evaluated" and pd.notna(rate)
-            else str(status)
-        )
-        ax.text(
-            float(true_n) + max_count * 0.035,
-            row_y,
-            label,
-            ha="left",
-            va="center",
-            fontsize=8.5,
-            weight="semibold",
-            color="#111827",
-        )
-    ax.set_yticks(y, group_df["group_label"])
-    ax.invert_yaxis()
-    ax.set_xlim(0, max_count * 1.34)
-    ax.set_xlabel("Simulated truth units", color="#111827", fontsize=9)
-    ax.grid(axis="x", color="#E2E8F0", linewidth=0.8)
-    ax.set_axisbelow(True)
-    ax.legend(
-        loc="lower left",
-        bbox_to_anchor=(0.0, 1.01),
-        ncol=2,
-        frameon=False,
-        fontsize=8.5,
-        borderaxespad=0,
-    )
-    ax.set_title(
-        "Index-level flags compared with simulated true values",
-        loc="left",
-        pad=36,
-        fontsize=12,
-        weight="bold",
-        color="#111827",
-    )
-    fig.subplots_adjust(top=0.72, bottom=0.20, left=0.22, right=0.94)
-    return fig, group_df
 
 
-def _validation_zip_bytes(
-    tables: dict[str, pd.DataFrame],
-    *,
-    figure_png: bytes = b"",
-    figure_svg: bytes = b"",
-    flag_comparison_png: bytes = b"",
-    flag_comparison_svg: bytes = b"",
-) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        name_map = {
-            "by_examinee": "truth_flag_match_by_examinee.csv",
-            "summary": "truth_flag_match_summary.csv",
-            "pair": "pair_similarity_validation.csv",
-            "item": "item_level_validation.csv",
-            "figure_rates": "publication_figure_panel_a_rates.csv",
-            "figure_domains": "publication_figure_panel_b_domains.csv",
-            "figure_status": "publication_figure_panel_c_status.csv",
-            "flag_comparison": "truth_flag_match_by_scenario.csv",
-        }
-        for key, filename in name_map.items():
-            df = tables.get(key)
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                zf.writestr(filename, df.to_csv(index=False))
-        if figure_png:
-            zf.writestr("psymas_simulation_validation_figure.png", figure_png)
-        if figure_svg:
-            zf.writestr("psymas_simulation_validation_figure.svg", figure_svg)
-        if flag_comparison_png:
-            zf.writestr("psymas_truth_flag_match.png", flag_comparison_png)
-        if flag_comparison_svg:
-            zf.writestr("psymas_truth_flag_match.svg", flag_comparison_svg)
-    return buf.getvalue()
 
 
-def _render_simulation_validation_page(*, embedded: bool = False) -> None:
-    if not embedded:
-        st.markdown(
-            """
-<div class="psymas-workbench-title">
-  <div>
-    <h1>Simulation Validation</h1>
-    <p>Scenario-matched comparison between simulated true values and package/index flags.</p>
-  </div>
-</div>
-            """,
-            unsafe_allow_html=True,
-        )
-    if not _forensic_result_flags_from_session():
-        st.info("No forensic index output is available yet. Run Detect before validation.")
-        if st.button("Open Assessment Data", key="validation_open_data", use_container_width=False):
-            st.session_state["_nav_request"] = "Assessment Data"
-            st.rerun()
-        return
-
-    if embedded:
-        # Validation is already an on-demand Forensic Indices workspace.
-        # Avoid a second nested tab and build its downloadable artifacts here.
-        view = "Downloads"
-    else:
-        validation_views = ["Overview", "Downloads"]
-        if st.session_state.get("simulation_validation_view") not in validation_views:
-            st.session_state["simulation_validation_view"] = "Overview"
-        view = st.segmented_control(
-            "View",
-            options=validation_views,
-            default="Overview",
-            key="simulation_validation_view",
-            label_visibility="collapsed",
-        )
-    include_download_detail = view == "Downloads"
-    tables = _simulation_validation_tables(
-        include_detail=include_download_detail,
-        include_pair=include_download_detail,
-    )
-    by_exam = tables["by_examinee"]
-    summary_df = tables["summary"]
-    pair_df = tables["pair"]
-    if summary_df.empty:
-        st.info("Validation tables could not be built because simulated truth tables are unavailable.")
-        return
-
-    evaluated_summary = summary_df[summary_df["Evaluation_Status"].eq("Evaluated")].copy()
-    target_n = int(pd.to_numeric(evaluated_summary["true_value_n"], errors="coerce").fillna(0).sum())
-    true_positive_n = int(pd.to_numeric(evaluated_summary["matching_flag_n"], errors="coerce").fillna(0).sum())
-    false_negative_n = max(0, target_n - true_positive_n)
-    target_detection_rate = true_positive_n / target_n if target_n else 0.0
-    not_evaluated_n = int(summary_df["Evaluation_Status"].ne("Evaluated").sum())
-
-    st.markdown(
-        f"""
-<div class="psymas-case-strip">
-  <div class="psymas-case-chip"><div class="label">Evaluated truth units</div><div class="value">{target_n:,}</div></div>
-  <div class="psymas-case-chip"><div class="label">Matching index flags</div><div class="value">{true_positive_n:,}</div></div>
-  <div class="psymas-case-chip"><div class="label">Truth units not flagged</div><div class="value">{false_negative_n:,}</div></div>
-  <div class="psymas-case-chip"><div class="label">Flag-to-truth match rate</div><div class="value">{target_detection_rate:.1%}</div><div class="meta">{true_positive_n:,} / {target_n:,}</div></div>
-  <div class="psymas-case-chip"><div class="label">Scenarios not evaluated</div><div class="value">{not_evaluated_n:,}</div></div>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "Validation uses raw package/index flags. Examinee scenarios use examinees as truth units; copying uses simulated source-copier pairs. Domain Evidence and Review Prioritization are not used."
-    )
-    if not_evaluated_n:
-        st.info(
-            f"{not_evaluated_n} scenario(s) need attention because the required detector was unavailable or the result predates the pair-flag export. Rerun Detect when shown."
-        )
-    download_slot = st.container()
-
-    flag_comparison_png = b""
-    flag_comparison_svg = b""
-    flag_comparison_fig, flag_comparison_df = _validation_flag_comparison_figure(summary_df)
-    tables["flag_comparison"] = flag_comparison_df
-    if view == "Overview" or embedded:
-        if flag_comparison_fig is not None:
-            st.pyplot(flag_comparison_fig, width="content")
-            st.caption(
-                "Matched package/index flags divided by simulated truth units. Copying is evaluated at pair level."
-            )
-        else:
-            st.info("A publication figure could not be generated because simulated truth labels are unavailable.")
-        compact_summary = summary_df.rename(
-            columns={
-                "true_group": "Scenario",
-                "Statistical_Unit": "Unit",
-                "Evaluation_Status": "Status",
-                "true_value_n": "True units",
-                "matching_flag_n": "Matched flags",
-                "flag_truth_match_rate": "Match rate",
-            }
-        )
-        compact_cols = ["Scenario", "Unit", "Status", "True units", "Matched flags", "Match rate"]
-        compact_summary = compact_summary[[c for c in compact_cols if c in compact_summary.columns]]
-        if "Match rate" in compact_summary:
-            compact_summary["Match rate"] = compact_summary["Match rate"].map(
-                lambda value: f"{float(value):.1%}" if pd.notna(value) else "Not evaluated"
-            )
-        st.dataframe(
-            compact_summary,
-            hide_index=True,
-            width="stretch",
-            height=min(240, 38 + 35 * len(compact_summary)),
-        )
-    if flag_comparison_fig is not None:
-        if view == "Downloads":
-            flag_comparison_png = _figure_download_bytes(flag_comparison_fig, "png")
-            flag_comparison_svg = _figure_download_bytes(flag_comparison_fig, "svg")
-        plt.close(flag_comparison_fig)
-
-    validation_zip = (
-        _validation_zip_bytes(
-            tables,
-            flag_comparison_png=flag_comparison_png,
-            flag_comparison_svg=flag_comparison_svg,
-        )
-        if view == "Downloads"
-        else b""
-    )
-    if view == "Downloads":
-        download_actions = [
-            {
-                "label": "Download Validation Package",
-                "data": validation_zip,
-                "file_name": "psymas_truth_flag_validation.zip",
-                "mime": "application/zip",
-                "key": "download_simulation_validation_zip",
-                "disabled": not validation_zip,
-            },
-            {
-                "label": "Download Summary CSV",
-                "data": _df_csv_bytes(summary_df),
-                "file_name": "truth_flag_match_summary.csv",
-                "key": "download_simulation_validation_summary",
-                "disabled": summary_df.empty,
-            },
-            {
-                "label": "Download Figure PNG",
-                "data": flag_comparison_png,
-                "file_name": "psymas_truth_flag_match.png",
-                "mime": "image/png",
-                "key": "download_scenario_flagged_percentages_png",
-                "disabled": not flag_comparison_png,
-            },
-        ]
-    else:
-        download_actions = []
-    with download_slot:
-        if download_actions:
-            st.markdown("#### Downloads")
-        _render_page_download_bar(download_actions)
 
 
-def _research_export_zip_bytes() -> bytes:
-    """Package Dataset A/B/C files for paper and validation workflows."""
-    _ensure_run_store()
-    store = get_run_store()
-    dataset_b_tables: dict[str, pd.DataFrame] = {}
-    for table_name in DATA_TABLES:
-        table = store.load_table(table_name)
-        if isinstance(table, pd.DataFrame) and not table.empty:
-            dataset_b_tables[table_name] = table
-
-    master_df = dataset_b_tables.get("master_results", pd.DataFrame())
-    if not isinstance(master_df, pd.DataFrame) or master_df.empty:
-        master_df = _master_results_for_lineage()
-    if isinstance(master_df, pd.DataFrame) and not master_df.empty:
-        dataset_b_tables["master_results"] = master_df
-
-    data_availability = _data_availability_table_df()
-    if not data_availability.empty:
-        dataset_b_tables["data_availability"] = data_availability
-
-    review_decisions = _case_review_decisions_df()
-    if not review_decisions.empty:
-        dataset_b_tables["human_review_decisions"] = review_decisions
-
-    try:
-        audit_df = _table_df(_stage_table_options("Audit Trail")[0]["records"])
-        if not audit_df.empty:
-            dataset_b_tables["audit_records"] = audit_df
-    except Exception:
-        pass
-
-    try:
-        config_df = _table_df(_stage_table_options("Settings")[0]["records"])
-        if not config_df.empty:
-            dataset_b_tables["configuration"] = config_df
-    except Exception:
-        pass
-
-    try:
-        validation_tables = _simulation_validation_tables(include_detail=True, include_pair=True)
-        for name, df in validation_tables.items():
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                dataset_b_tables[f"simulation_validation_{name}"] = df
-    except Exception:
-        pass
-
-    run_id = str(st.session_state.get("detect_run_id") or st.session_state.get("psymas_active_run_id") or "")
-    return build_research_export_zip(
-        root_dir=Path.cwd(),
-        dataset_b_tables=dataset_b_tables,
-        master_df=master_df if isinstance(master_df, pd.DataFrame) else pd.DataFrame(),
-        run_id=run_id,
-        extra_notes="Generated from the PsyMAS Streamlit workspace. Dataset C is a blank expert-review template.",
-    )
 
 
 def _render_audit_page() -> None:
@@ -17675,207 +15215,8 @@ def _render_configuration_page() -> None:
     )
 
 
-def _render_research_tools_page() -> None:
-    view = _workspace_view(
-        "Research tools",
-        ["Worked Example", "Validation", "Research Export"],
-        key="research_tools_view",
-        default="Worked Example",
-    )
-    if view == "Worked Example":
-        _render_worked_example_page()
-        return
-    if view == "Validation":
-        _render_simulation_validation_page(embedded=False)
-        return
-
-    st.caption("Research export packages Dataset A/B/C artifacts for manuscript validation and reproducibility.")
-    with st.spinner("Preparing the research export package..."):
-        research_zip = _research_export_zip_bytes()
-    _render_page_download_bar(
-        [
-            {
-                "label": "Download Research Package",
-                "data": research_zip,
-                "file_name": "psymas_research_export.zip",
-                "mime": "application/zip",
-                "key": "research_export_zip_download_v3",
-                "disabled": not research_zip,
-            },
-        ]
-    )
 
 
-def _render_worked_example_page() -> None:
-    output_dir = Path("outputs")
-    candidates = load_worked_example_candidates(Path.cwd())
-    if candidates.empty:
-        st.error("No worked-example candidate data were found. Load the demo data or generate PsyMAS outputs first.")
-        return
-
-    profile_options = {
-        "Domain-distinct: PK / RT / TP": "domain_distinct",
-        "Original: PK / RT / mixed high-ability": "mixed_high_ability",
-    }
-    profile_label = st.selectbox(
-        "Recommended comparison set",
-        list(profile_options),
-        index=0,
-        key="worked_example_profile_label",
-    )
-    profile = profile_options[profile_label]
-    rec_cases, rec_labels = recommended_worked_example_cases(Path.cwd(), profile=profile)
-    if st.session_state.get("worked_example_last_profile") != profile:
-        for case_name, canonical in rec_cases.items():
-            st.session_state[f"worked_example_{case_name}_id"] = canonical
-            st.session_state[f"worked_example_{case_name}_label"] = rec_labels.get(case_name, "")
-        st.session_state["worked_example_last_profile"] = profile
-        st.session_state.pop("worked_example_result", None)
-
-    option_ids = candidates["canonical_id"].astype(str).tolist()
-
-    def _case_option_label(canonical: str) -> str:
-        row = candidates[candidates["canonical_id"].astype(str).eq(str(canonical))]
-        if row.empty:
-            return str(canonical)
-        r = row.iloc[0]
-        strength_bits = []
-        for domain in ["PK", "RT", "TP", "SIM", "MF"]:
-            col = f"{domain}_Strength"
-            val = str(r.get(col, "") or "").lower()
-            if val and val not in {"none", "nan"}:
-                strength_bits.append(f"{domain}:{val}")
-        strengths = " | ".join(strength_bits) if strength_bits else "no counted domain signal"
-        return (
-            f"{r.get('examinee_id', canonical)} · {r.get('true_group', '')} · "
-            f"score {int(r.get('score', 0)) if pd.notna(r.get('score', pd.NA)) else 'NA'} · "
-            f"RT {float(r.get('mean_rt', 0)):.1f} · fast {int(r.get('very_fast_count', 0) or 0)} · {strengths}"
-        )
-
-    st.markdown("#### Case comparison setup")
-    st.caption("Use the recommended set for a clean manuscript figure, or manually replace any case below.")
-    case_cols = st.columns(3)
-    selected_cases: dict[str, str] = {}
-    selected_labels: dict[str, str] = {}
-    for idx, case_name in enumerate(["Case A", "Case B", "Case C"]):
-        with case_cols[idx]:
-            current = str(st.session_state.get(f"worked_example_{case_name}_id") or rec_cases.get(case_name) or option_ids[0])
-            default_index = option_ids.index(current) if current in option_ids else 0
-            selected = st.selectbox(
-                case_name,
-                option_ids,
-                index=default_index,
-                format_func=_case_option_label,
-                key=f"worked_example_{case_name}_id",
-            )
-            selected_cases[case_name] = str(selected)
-            selected_labels[case_name] = st.text_input(
-                f"{case_name} label",
-                value=str(st.session_state.get(f"worked_example_{case_name}_label") or rec_labels.get(case_name, "")),
-                key=f"worked_example_{case_name}_label",
-            )
-
-    with st.expander("Candidate preview", expanded=False):
-        preview_cols = [
-            "examinee_id",
-            "true_group",
-            "score",
-            "mean_rt",
-            "very_fast_count",
-            "exposed_correct_count",
-            "exposed_difficult_fast_correct_count",
-            "answer_change_count",
-            "RT_Strength",
-            "PK_Strength",
-            "TP_Strength",
-            "MF_Strength",
-            "Evidence_Status",
-            "Review_Priority",
-        ]
-        st.dataframe(candidates[[c for c in preview_cols if c in candidates.columns]], use_container_width=True, hide_index=True, height=320)
-
-    generate_now = st.button(
-        "Generate Worked-Example Package",
-        key="generate_worked_example_package",
-        type="primary",
-        use_container_width=False,
-    )
-    result = st.session_state.get("worked_example_result")
-    if generate_now or result is None:
-        with st.spinner("Generating worked-example tables and figures..."):
-            try:
-                result = generate_worked_example_package(
-                    Path.cwd(),
-                    output_dir,
-                    cases=selected_cases,
-                    case_labels=selected_labels,
-                )
-                st.session_state["worked_example_result"] = result
-                st.success(f"Worked-example outputs written to {result.output_dir}.")
-            except Exception as exc:
-                st.error(f"Could not generate worked-example outputs: {exc}")
-                return
-
-    if result is None:
-        st.info("Click Generate to create the worked-example files.")
-        return
-
-    selected_cases = getattr(result, "selected_cases", {}) or {}
-    if selected_cases:
-        st.markdown(
-            "Selected cases: "
-            + "; ".join(f"**{case}** = `{examinee}`" for case, examinee in selected_cases.items())
-        )
-
-    downloads = [
-        {
-            "label": "Download Worked Example ZIP",
-            "data": getattr(result, "zip_bytes", b""),
-            "file_name": "psymas_worked_example_outputs.zip",
-            "mime": "application/zip",
-            "key": "download_worked_example_zip",
-            "disabled": not getattr(result, "zip_bytes", b""),
-        }
-    ]
-    _render_page_download_bar(downloads)
-
-    view = _workspace_view(
-        "Worked-example outputs",
-        ["Tables", "Figures", "Caption Text", "Files"],
-        key="worked_example_view",
-        default="Tables",
-    )
-    if view == "Tables":
-        st.markdown("#### Table 3. Worked Example Case Inputs")
-        st.dataframe(result.table3, use_container_width=True, hide_index=True)
-        st.markdown("#### Table 4. Deterministic Evidence Outputs for Case A")
-        st.dataframe(result.table4, use_container_width=True, hide_index=True)
-        st.markdown("#### Table 5. Report Audit Results for Worked Example")
-        st.dataframe(result.table5, use_container_width=True, hide_index=True)
-        return
-    if view == "Figures":
-        for title, filename in [
-            ("Figure 2. PsyMAS analyst interface and evidence-review functions", "figure2_single_case_evidence_lineage.png"),
-            ("Figure 3. Draft-to-Audited Report Example", "figure3_report_audit_example.png"),
-            ("Figure 4. Three-Case Evidence Profile Grid", "figure4_three_case_evidence_grid.png"),
-        ]:
-            path = output_dir / filename
-            st.markdown(f"#### {title}")
-            if path.exists():
-                st.image(str(path), use_container_width=True)
-            else:
-                st.info(f"{filename} is not available yet.")
-        return
-    if view == "Caption Text":
-        st.markdown(result.captions_md)
-        return
-    files = pd.DataFrame(
-        [
-            {"file": path.name, "path": str(path), "bytes": path.stat().st_size if path.exists() else 0}
-            for path in getattr(result, "files", [])
-        ]
-    )
-    st.dataframe(files, use_container_width=True, hide_index=True)
 
 
 def _render_workbench_page(stage: str) -> None:
@@ -18138,244 +15479,8 @@ def _render_scenario_page() -> None:
     )
 
 
-def _render_tool_irt() -> None:
-    st.markdown("---")
-    st.subheader("IRT (item/person parameters)")
-    if "model_settings" not in st.session_state:
-        st.session_state.model_settings = _interpret_prompt("")
-    if "is_verified" not in st.session_state:
-        st.session_state.is_verified = False
-    if "prompt_analyzed" not in st.session_state:
-        st.session_state.prompt_analyzed = False
-    if "last_prompt" not in st.session_state:
-        st.session_state.last_prompt = ""
-
-    _render_prompt_and_confirm()
-
-    if not st.session_state.is_verified:
-        st.info("Select settings and confirm to unlock IRT execution.")
-    else:
-        has_sidebar_data = bool(st.session_state.get("last_uploaded_responses"))
-        if has_sidebar_data:
-            n_r = len(st.session_state.last_uploaded_responses)
-            n_c = len(st.session_state.last_uploaded_responses[0]) if n_r else 0
-            rt_txt = " + RT" if st.session_state.get("last_uploaded_rt_data") else ""
-            st.caption(f"Using session data: **{n_r}** rows × **{n_c}** items{rt_txt}.")
-        else:
-            st.warning("Use **Bulk upload** on the **Preparation** page to load response data before running the IRT agent.")
-
-        # Status check only; don't auto-install on reruns
-        r_ok_irt, r_msg_irt = _check_r_packages(install_if_missing=False)
-        if not r_ok_irt and r_msg_irt:
-            st.warning(r_msg_irt)
-
-        run_irt = st.button("Run IRT agent", key="run_irt_only", type="primary")
-        if run_irt:
-            if has_sidebar_data:
-                responses = st.session_state.last_uploaded_responses
-                rt_data = st.session_state.get("last_uploaded_rt_data") or []
-            else:
-                st.error("Upload response data on the **Preparation** page to run the IRT agent.")
-                st.stop()
-            state = {
-                "responses": responses,
-                "rt_data": rt_data,
-                "theta": 0.0,
-                "latency_flags": [],
-                "next_step": "",
-                "model_settings": st.session_state.model_settings,
-                "is_verified": True,
-            }
-            with st.spinner("Running IRT agent…"):
-                try:
-                    out = _graph_module().irt_agent(state)
-                    st.session_state.irt_only_result = {**state, **out}
-                    st.success("IRT finished.")
-                    st.rerun()
-                except Exception as e:
-                    st.exception(e)
-        if st.session_state.get("irt_only_result"):
-            st.subheader("Last results")
-            _render_results(st.session_state.irt_only_result, response_only=True)
-    st.caption("Use the navigation sidebar to switch to another module.")
 
 
-def _render_tool_rt() -> None:
-    st.markdown("---")
-    st.subheader("RT (response time)")
-    has_sidebar_rt = bool(st.session_state.get("last_uploaded_responses")) and bool(st.session_state.get("last_uploaded_rt_data"))
-    if has_sidebar_rt:
-        n_r = len(st.session_state.last_uploaded_responses)
-        n_c = len(st.session_state.last_uploaded_responses[0]) if n_r else 0
-        st.caption(f"Using session data: **{n_r}** rows × **{n_c}** items + RT.")
-    else:
-        st.warning("Use **Bulk upload** on the **Preparation** page to load response and RT data before running the RT agent.")
-    run_rt_btn = st.button("Run RT agent", key="run_rt_only", type="primary")
-    if run_rt_btn:
-        if has_sidebar_rt:
-            try:
-                state = {
-                    "responses": st.session_state.last_uploaded_responses,
-                    "rt_data": st.session_state.last_uploaded_rt_data,
-                    "theta": 0.0,
-                    "latency_flags": [],
-                    "next_step": "",
-                }
-                with st.spinner("Running RT agent…"):
-                    out = _graph_module().rt_agent(state)
-                st.session_state.rt_only_result = {**state, **out}
-                st.success("Done.")
-                st.rerun()
-            except Exception as e:
-                st.exception(e)
-        else:
-            st.error("Upload response and RT on the **Preparation** page to run the RT agent.")
-    if st.session_state.get("rt_only_result"):
-        final_rt = st.session_state.rt_only_result
-        st.subheader("Latency flags")
-        if final_rt.get("latency_flags"):
-            st.write(", ".join(final_rt["latency_flags"]))
-        else:
-            st.info("No latency flags (RT agent returns flags when implemented).")
-    st.caption("Use the navigation sidebar to switch to another module.")
-
-
-def _render_backend_test() -> None:
-    """Debug UI: verify ψ in session and test backend endpoints directly."""
-    load_dotenv()
-    st.markdown("---")
-    st.subheader("Backend test")
-    st.caption("Verify ψ in session and test backend endpoints directly (health / IRT / Detect / status / result).")
-
-    st.markdown("**Backend URL**")
-    st.code(BACKEND_URL)
-
-    col_a, col_b = st.columns(2, gap="medium")
-    with col_a:
-        if st.button("GET /health"):
-            try:
-                r = _backend_get("/health", timeout=5)
-                st.write(r.status_code)
-                try:
-                    st.json(r.json())
-                except Exception:
-                    st.text(r.text)
-            except Exception as e:
-                st.error(f"/health failed: {e}")
-
-    responses = st.session_state.get("last_uploaded_responses") or []
-    rt_data = st.session_state.get("last_uploaded_rt_data") or []
-    answer_changes = st.session_state.get("prep_answer_changes") or []
-    psi_data = st.session_state.get("last_irt_item_params") or st.session_state.get("item_params") or []
-
-    st.markdown("**Session snapshot**")
-    st.caption(f"- Responses: **{len(responses)}** rows")
-    st.caption(f"- RT rows: **{len(rt_data)}**")
-    st.caption(f"- Answer-change rows: **{len(answer_changes)}**")
-    st.caption(f"- ψ item params: **{len(psi_data)}** items")
-    if psi_data and isinstance(psi_data, list) and isinstance(psi_data[0], dict):
-        st.caption(f"- ψ keys (first item): `{list(psi_data[0].keys())}`")
-
-    st.divider()
-    st.markdown("**Build Detect payload (what UI sends to backend)**")
-    raw_payload = {
-        "responses": responses,
-        "rt_data": rt_data,
-        "answer_changes": answer_changes,
-        "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
-        "compromised_items": st.session_state.get("prep_compromised_items") or [],
-        "model_settings": st.session_state.get("model_settings") or {},
-        "psi_data": psi_data,
-    }
-    payload = _json_safe(raw_payload)
-    st.caption(
-        "Payload sizes — "
-        f"responses: {len(payload.get('responses') or [])}, "
-        f"rt_data: {len(payload.get('rt_data') or [])}, "
-        f"answer_changes: {len(payload.get('answer_changes') or [])}, "
-        f"psi_data: {len(payload.get('psi_data') or [])}"
-    )
-    with st.expander("Show payload (JSON)", expanded=False):
-        st.json(payload)
-
-    st.divider()
-    st.markdown("**IRT backend — async (`/irt/start`) or sync (`/irt`)**")
-    with col_b:
-        if st.button("POST /irt/start", disabled=not bool(responses)):
-            try:
-                irt_payload = _json_safe(
-                    {
-                        "responses": responses,
-                        "rt_data": rt_data,
-                        "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
-                        "model_settings": st.session_state.get("model_settings") or {},
-                    }
-                )
-                r = _backend_post("/irt/start", json=irt_payload, timeout=30)
-                r.raise_for_status()
-                js = r.json()
-                st.json(js)
-                st.caption("Then poll `GET /irt/{job_id}/status` and `GET /irt/{job_id}/result`.")
-            except Exception as e:
-                st.error(f"/irt/start failed: {e}")
-        if st.button("POST /irt (sync, legacy)", disabled=not bool(responses)):
-            try:
-                irt_payload = _json_safe(
-                    {
-                        "responses": responses,
-                        "rt_data": rt_data,
-                        "itemtype": st.session_state.get("main_irt_itemtype", "2PL"),
-                        "model_settings": st.session_state.get("model_settings") or {},
-                    }
-                )
-                r = _backend_post("/irt", json=irt_payload, timeout=240)
-                r.raise_for_status()
-                js = r.json()
-                st.json(js)
-                if js.get("status") == "done":
-                    res = js.get("result") or {}
-                    ip = res.get("item_params") or []
-                    if ip:
-                        st.session_state["last_irt_item_params"] = ip
-                        st.session_state["item_params"] = ip
-                        st.success(f"Stored ψ in session: {len(ip)} items.")
-            except Exception as e:
-                st.error(f"/irt failed: {e}")
-
-    st.divider()
-    st.markdown("**Start Detect (/detect) and poll status**")
-    if st.button("POST /detect", disabled=not bool(responses)):
-        try:
-            r = _backend_post("/detect", json=payload, timeout=30)
-            r.raise_for_status()
-            js = r.json()
-            st.json(js)
-            run_id = js.get("run_id")
-            if run_id:
-                st.session_state["detect_run_id"] = run_id
-                st.session_state["detect_job_status"] = "running"
-                st.success(f"Started detect run_id: {run_id}")
-        except Exception as e:
-            st.error(f"/detect failed: {e}")
-
-    run_id = st.session_state.get("detect_run_id") or ""
-    if run_id:
-        st.markdown("**Latest run_id**")
-        st.code(run_id)
-        if st.button("GET /detect/{run_id}/status"):
-            try:
-                r = _backend_get(f"/detect/{run_id}/status", timeout=10)
-                r.raise_for_status()
-                st.json(r.json())
-            except Exception as e:
-                st.error(f"/status failed: {e}")
-        if st.button("GET /detect/{run_id}/result"):
-            try:
-                r = _backend_get(f"/detect/{run_id}/result", timeout=20)
-                r.raise_for_status()
-                st.json(r.json())
-            except Exception as e:
-                st.error(f"/result failed: {e}")
 
 if run_mode == "Scenario":
     _render_scenario_page()
