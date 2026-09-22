@@ -1,0 +1,1240 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/m944cn",
+    "id": "m944cn",
+    "slide": 5,
+    "layoutId": "a581ee37-7872-46d1-afae-684864bc8b11",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "74919145-e530-4b5c-a830-96a4e1cf5683",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#F4F7FA",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "+mn-lt"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "a581ee37-7872-46d1-afae-684864bc8b11",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "74919145-e530-4b5c-a830-96a4e1cf5683",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "74919145-e530-4b5c-a830-96a4e1cf5683",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/b6lwf694",
+      "id": "1",
+      "bbox": [
+        58,
+        42,
+        42,
+        42
+      ],
+      "geometry": "ellipse",
+      "fillColor": "#176B78",
+      "lineColor": "#176B78",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/c7uxobqp",
+      "id": "2",
+      "bbox": [
+        58,
+        46,
+        42,
+        34
+      ],
+      "geometry": "rect",
+      "text": "4",
+      "textPreview": "4",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "+mn-lt",
+        "color": "#FFFFFF",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "4"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "4",
+          "resolvedTextStyle": {
+            "fontSize": 18,
+            "color": "#FFFFFF",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "4",
+              "fontSize": 18,
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xsnehgra",
+      "id": "3",
+      "bbox": [
+        116,
+        40,
+        250,
+        20
+      ],
+      "geometry": "rect",
+      "text": "ASSESSMENT INPUTS",
+      "textPreview": "ASSESSMENT INPUTS",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "+mn-lt",
+        "color": "#176B78",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "ASSESSMENT INPUTS"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "ASSESSMENT INPUTS",
+          "resolvedTextStyle": {
+            "fontSize": 14,
+            "color": "#176B78",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "ASSESSMENT INPUTS",
+              "fontSize": 14,
+              "color": "#176B78",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ytwfq18v",
+      "id": "4",
+      "bbox": [
+        116,
+        64,
+        1080,
+        52
+      ],
+      "geometry": "rect",
+      "text": "The same case can combine performance, timing, exposure, and answer-change records",
+      "textPreview": "The same case can combine performance, timing, exposure, and answer-change records",
+      "resolvedFontSize": 34,
+      "resolvedTextStyle": {
+        "fontSize": 34,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "The same case can combine performance, timing, exposure, and"
+          },
+          {
+            "index": 2,
+            "text": "answer-change records"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "The same case can combine performance, timing, exposure, and answer-change records",
+          "resolvedTextStyle": {
+            "fontSize": 34,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "The same case can combine performance, timing, exposure, and answer-change records",
+              "fontSize": 34,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/zu5wj690",
+      "id": "5",
+      "bbox": [
+        116,
+        124,
+        1048,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#176B78",
+      "lineColor": "#176B78",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kvexsbql",
+      "id": "6",
+      "bbox": [
+        116,
+        198,
+        10,
+        58
+      ],
+      "geometry": "rect",
+      "fillColor": "#25A7C9",
+      "lineColor": "#25A7C9",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lwnelgr6",
+      "id": "7",
+      "bbox": [
+        150,
+        190,
+        250,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Responses",
+      "textPreview": "Responses",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "fontSize": 22,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Responses"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Responses",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Responses",
+              "fontSize": 22,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/mxwful8r",
+      "id": "8",
+      "bbox": [
+        440,
+        190,
+        290,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Item-level 0/1 scores",
+      "textPreview": "Item-level 0/1 scores",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#16324F",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Item-level 0/1 scores"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Item-level 0/1 scores",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#16324F",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Item-level 0/1 scores",
+              "fontSize": 20,
+              "color": "#16324F",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/7y5wnq9c",
+      "id": "9",
+      "bbox": [
+        790,
+        190,
+        380,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Baseline psychometric evidence",
+      "textPreview": "Baseline psychometric evidence",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Baseline psychometric evidence"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Baseline psychometric evidence",
+          "resolvedTextStyle": {
+            "fontSize": 19,
+            "color": "#61758A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Baseline psychometric evidence",
+              "fontSize": 19,
+              "color": "#61758A",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/be5wz2xs",
+      "id": "10",
+      "bbox": [
+        116,
+        290,
+        10,
+        58
+      ],
+      "geometry": "rect",
+      "fillColor": "#C98213",
+      "lineColor": "#C98213",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/adwfqxw7",
+      "id": "11",
+      "bbox": [
+        150,
+        282,
+        250,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Response times",
+      "textPreview": "Response times",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "fontSize": 22,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Response times"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Response times",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Response times",
+              "fontSize": 22,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xgne1cfy",
+      "id": "12",
+      "bbox": [
+        440,
+        282,
+        290,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Item-level timing",
+      "textPreview": "Item-level timing",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#16324F",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Item-level timing"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Item-level timing",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#16324F",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Item-level timing",
+              "fontSize": 20,
+              "color": "#16324F",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/cfexs7ed",
+      "id": "13",
+      "bbox": [
+        790,
+        282,
+        380,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Rapid-guessing and timing context",
+      "textPreview": "Rapid-guessing and timing context",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Rapid-guessing and timing context"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Rapid-guessing and timing context",
+          "resolvedTextStyle": {
+            "fontSize": 19,
+            "color": "#61758A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Rapid-guessing and timing context",
+              "fontSize": 19,
+              "color": "#61758A",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3a5wvixw",
+      "id": "14",
+      "bbox": [
+        116,
+        382,
+        10,
+        58
+      ],
+      "geometry": "rect",
+      "fillColor": "#5B4AA5",
+      "lineColor": "#5B4AA5",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/29cfmxwb",
+      "id": "15",
+      "bbox": [
+        150,
+        374,
+        250,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Item / exposure metadata",
+      "textPreview": "Item / exposure metadata",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "fontSize": 22,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Item / exposure"
+          },
+          {
+            "index": 2,
+            "text": "metadata"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Item / exposure metadata",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Item / exposure metadata",
+              "fontSize": 22,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/pcnexsfm",
+      "id": "16",
+      "bbox": [
+        440,
+        374,
+        290,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Parameters and compromised items",
+      "textPreview": "Parameters and compromised items",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#16324F",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Parameters and compromised"
+          },
+          {
+            "index": 2,
+            "text": "items"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Parameters and compromised items",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#16324F",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Parameters and compromised items",
+              "fontSize": 20,
+              "color": "#16324F",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/obexoneh",
+      "id": "17",
+      "bbox": [
+        790,
+        374,
+        380,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Preknowledge review",
+      "textPreview": "Preknowledge review",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Preknowledge review"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Preknowledge review",
+          "resolvedTextStyle": {
+            "fontSize": 19,
+            "color": "#61758A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Preknowledge review",
+              "fontSize": 19,
+              "color": "#61758A",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/76pg7mx0",
+      "id": "18",
+      "bbox": [
+        116,
+        474,
+        10,
+        58
+      ],
+      "geometry": "rect",
+      "fillColor": "#C93232",
+      "lineColor": "#C93232",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/m5gfyhwf",
+      "id": "19",
+      "bbox": [
+        150,
+        466,
+        250,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Answer-change records",
+      "textPreview": "Answer-change records",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "fontSize": 22,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Answer-change records"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Answer-change records",
+          "resolvedTextStyle": {
+            "fontSize": 22,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Answer-change records",
+              "fontSize": 22,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/i1kzqlgn",
+      "id": "20",
+      "bbox": [
+        440,
+        466,
+        290,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Initial and final responses",
+      "textPreview": "Initial and final responses",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#16324F",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Initial and final responses"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Initial and final responses",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#16324F",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Initial and final responses",
+              "fontSize": 20,
+              "color": "#16324F",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/j2t0zqh8",
+      "id": "21",
+      "bbox": [
+        790,
+        466,
+        380,
+        30
+      ],
+      "geometry": "rect",
+      "text": "Tampering / answer-change review",
+      "textPreview": "Tampering / answer-change review",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Tampering / answer-change review"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Tampering / answer-change review",
+          "resolvedTextStyle": {
+            "fontSize": 19,
+            "color": "#61758A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Tampering / answer-change review",
+              "fontSize": 19,
+              "color": "#61758A",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/432hsvyt",
+      "id": "22",
+      "bbox": [
+        116,
+        590,
+        1000,
+        42
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFF5E3",
+      "lineColor": "#C98213",
+      "lineWidth": 1
+    },
+    {
+      "order": 23,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/54bi10ze",
+      "id": "23",
+      "bbox": [
+        138,
+        601,
+        950,
+        22
+      ],
+      "geometry": "rect",
+      "text": "Optional inputs expand the review context; missing inputs remain visible as missing evidence.",
+      "textPreview": "Optional inputs expand the review context; missing inputs remain visible as missing evidence.",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Optional inputs expand the review context; missing inputs remain visible as missing evidence."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Optional inputs expand the review context; missing inputs remain visible as missing evidence.",
+          "resolvedTextStyle": {
+            "fontSize": 18,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Optional inputs expand the review context; missing inputs remain visible as missing evidence.",
+              "fontSize": 18,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 24,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/65kjulgz",
+      "id": "24",
+      "bbox": [
+        58,
+        680,
+        600,
+        18
+      ],
+      "geometry": "rect",
+      "text": "PsyMAS · AIME Con 2026",
+      "textPreview": "PsyMAS · AIME Con 2026",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "PsyMAS · AIME Con 2026"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "PsyMAS · AIME Con 2026",
+          "resolvedTextStyle": {
+            "fontSize": 12,
+            "color": "#61758A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "PsyMAS · AIME Con 2026",
+              "fontSize": 12,
+              "color": "#61758A",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

@@ -1,0 +1,1610 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/jpovii",
+    "id": "jpovii",
+    "slide": 6,
+    "layoutId": "a581ee37-7872-46d1-afae-684864bc8b11",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "74919145-e530-4b5c-a830-96a4e1cf5683",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#F4F7FA",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "+mn-lt"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "a581ee37-7872-46d1-afae-684864bc8b11",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "74919145-e530-4b5c-a830-96a4e1cf5683",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "74919145-e530-4b5c-a830-96a4e1cf5683",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/pkjmp87e",
+      "id": "1",
+      "bbox": [
+        58,
+        42,
+        42,
+        42
+      ],
+      "geometry": "ellipse",
+      "fillColor": "#176B78",
+      "lineColor": "#176B78",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2xsnut83",
+      "id": "2",
+      "bbox": [
+        58,
+        46,
+        42,
+        34
+      ],
+      "geometry": "rect",
+      "text": "5",
+      "textPreview": "5",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "+mn-lt",
+        "color": "#FFFFFF",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "5"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "5",
+          "resolvedTextStyle": {
+            "fontSize": 18,
+            "color": "#FFFFFF",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "5",
+              "fontSize": 18,
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3y14nyp8",
+      "id": "3",
+      "bbox": [
+        116,
+        40,
+        250,
+        20
+      ],
+      "geometry": "rect",
+      "text": "FROM INDICES TO DOMAINS",
+      "textPreview": "FROM INDICES TO DOMAINS",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "+mn-lt",
+        "color": "#176B78",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "FROM INDICES TO DOMAINS"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "FROM INDICES TO DOMAINS",
+          "resolvedTextStyle": {
+            "fontSize": 14,
+            "color": "#176B78",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "FROM INDICES TO DOMAINS",
+              "fontSize": 14,
+              "color": "#176B78",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/cnu503q5",
+      "id": "4",
+      "bbox": [
+        116,
+        64,
+        1080,
+        52
+      ],
+      "geometry": "rect",
+      "text": "Indices are assigned to the behavior they are intended to examine",
+      "textPreview": "Indices are assigned to the behavior they are intended to examine",
+      "resolvedFontSize": 34,
+      "resolvedTextStyle": {
+        "fontSize": 34,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Indices are assigned to the behavior they are intended to examine"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Indices are assigned to the behavior they are intended to examine",
+          "resolvedTextStyle": {
+            "fontSize": 34,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Indices are assigned to the behavior they are intended to examine",
+              "fontSize": 34,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/do36t87q",
+      "id": "5",
+      "bbox": [
+        116,
+        124,
+        1048,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#176B78",
+      "lineColor": "#176B78",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qlcnyd8z",
+      "id": "6",
+      "bbox": [
+        116,
+        172,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/bmloripk",
+      "id": "7",
+      "bbox": [
+        130,
+        179,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "rg:CUMP",
+      "textPreview": "rg:CUMP",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "rg:CUMP"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "rg:CUMP",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "rg:CUMP",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/srq5ojql",
+      "id": "8",
+      "bbox": [
+        116,
+        224,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/tszmhor6",
+      "id": "9",
+      "bbox": [
+        130,
+        231,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "rg:NT",
+      "textPreview": "rg:NT",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "rg:NT"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "rg:NT",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "rg:NT",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/1k7al8j2",
+      "id": "10",
+      "bbox": [
+        116,
+        276,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0zy9c3ih",
+      "id": "11",
+      "bbox": [
+        130,
+        283,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "pk:L_T",
+      "textPreview": "pk:L_T",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "pk:L_T"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "pk:L_T",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "pk:L_T",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fypsjy1w",
+      "id": "12",
+      "bbox": [
+        116,
+        328,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/exgrat0b",
+      "id": "13",
+      "bbox": [
+        130,
+        335,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "pk:W_T",
+      "textPreview": "pk:W_T",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "pk:W_T"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "pk:W_T",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "pk:W_T",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/porap8je",
+      "id": "14",
+      "bbox": [
+        116,
+        380,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/onitg3it",
+      "id": "15",
+      "bbox": [
+        130,
+        387,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "tt:EDI_SD family",
+      "textPreview": "tt:EDI_SD family",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "tt:EDI_SD family"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "tt:EDI_SD family",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "tt:EDI_SD family",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/nm9sni18",
+      "id": "16",
+      "bbox": [
+        116,
+        432,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2l0red0n",
+      "id": "17",
+      "bbox": [
+        130,
+        439,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "tt:GBT_SD",
+      "textPreview": "tt:GBT_SD",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "tt:GBT_SD"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "tt:GBT_SD",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "tt:GBT_SD",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xsratsja",
+      "id": "18",
+      "bbox": [
+        116,
+        484,
+        210,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF3F8",
+      "lineColor": "#25A7C9",
+      "lineWidth": 1
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/critknip",
+      "id": "19",
+      "bbox": [
+        130,
+        491,
+        180,
+        20
+      ],
+      "geometry": "rect",
+      "text": "pm:person-fit family",
+      "textPreview": "pm:person-fit family",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "pm:person-fit family"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "pm:person-fit family",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "pm:person-fit family",
+              "fontSize": 17,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/wvqdgrq1",
+      "id": "20",
+      "bbox": [
+        550,
+        190,
+        260,
+        56
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#C98213",
+      "lineWidth": 1
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/hwzupw7m",
+      "id": "21",
+      "bbox": [
+        570,
+        205,
+        220,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Response-Time",
+      "textPreview": "Response-Time",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Response-Time"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Response-Time",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Response-Time",
+              "fontSize": 20,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ut8ve18v",
+      "id": "22",
+      "bbox": [
+        550,
+        280,
+        260,
+        56
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#5B4AA5",
+      "lineWidth": 1
+    },
+    {
+      "order": 23,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vuhcnmpg",
+      "id": "23",
+      "bbox": [
+        570,
+        295,
+        220,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Preknowledge",
+      "textPreview": "Preknowledge",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Preknowledge"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Preknowledge",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Preknowledge",
+              "fontSize": 20,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 24,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/4zadkbqx",
+      "id": "24",
+      "bbox": [
+        550,
+        370,
+        260,
+        56
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#C93232",
+      "lineWidth": 1
+    },
+    {
+      "order": 25,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/50jutg7i",
+      "id": "25",
+      "bbox": [
+        570,
+        385,
+        220,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Tampering",
+      "textPreview": "Tampering",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Tampering"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Tampering",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Tampering",
+              "fontSize": 20,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 26,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ixsvi18r",
+      "id": "26",
+      "bbox": [
+        550,
+        460,
+        260,
+        56
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#E9EFF5",
+      "lineColor": "#61758A",
+      "lineWidth": 1
+    },
+    {
+      "order": 27,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/jy1cr6pc",
+      "id": "27",
+      "bbox": [
+        570,
+        475,
+        220,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Misfit\n(supporting)",
+      "textPreview": "Misfit | (supporting)",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Misfit"
+          },
+          {
+            "index": 2,
+            "text": "(supporting)"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Misfit",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Misfit",
+              "fontSize": 20,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "(supporting)",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "(supporting)",
+              "fontSize": 20,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 28,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/036t87qt",
+      "id": "28",
+      "bbox": [
+        380,
+        326,
+        90,
+        34
+      ],
+      "geometry": "rect",
+      "text": "→",
+      "textPreview": "→",
+      "resolvedFontSize": 30,
+      "resolvedTextStyle": {
+        "fontSize": 30,
+        "typeface": "+mn-lt",
+        "color": "#176B78",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "→"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "→",
+          "resolvedTextStyle": {
+            "fontSize": 30,
+            "color": "#176B78",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "→",
+              "fontSize": 30,
+              "color": "#176B78",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 29,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/l4fuhc7e",
+      "id": "29",
+      "bbox": [
+        372,
+        398,
+        250,
+        42
+      ],
+      "geometry": "rect",
+      "text": "One index family → one governed path",
+      "textPreview": "One index family → one governed path",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "+mn-lt",
+        "color": "#176B78",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "One index family → one"
+          },
+          {
+            "index": 2,
+            "text": "governed path"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "One index family → one governed path",
+          "resolvedTextStyle": {
+            "fontSize": 18,
+            "color": "#176B78",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "One index family → one governed path",
+              "fontSize": 18,
+              "color": "#176B78",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 30,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3i5gna9w",
+      "id": "30",
+      "bbox": [
+        930,
+        250,
+        190,
+        100
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFF0F0",
+      "lineColor": "#C93232",
+      "lineWidth": 1
+    },
+    {
+      "order": 31,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2hwfe5sb",
+      "id": "31",
+      "bbox": [
+        950,
+        274,
+        150,
+        25
+      ],
+      "geometry": "rect",
+      "text": "Review priority",
+      "textPreview": "Review priority",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#102A43",
+        "bold": true,
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Review priority"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Review priority",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#102A43",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Review priority",
+              "fontSize": 20,
+              "color": "#102A43",
+              "bold": true,
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 32,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/pknypkr2",
+      "id": "32",
+      "bbox": [
+        950,
+        308,
+        150,
+        35
+      ],
+      "geometry": "rect",
+      "text": "only after\ndomain synthesis",
+      "textPreview": "only after | domain synthesis",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "center",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "only after"
+          },
+          {
+            "index": 2,
+            "text": "domain synthesis"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "only after",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#61758A",
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "only after",
+              "fontSize": 17,
+              "color": "#61758A",
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "domain synthesis",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "color": "#61758A",
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "domain synthesis",
+              "fontSize": 17,
+              "color": "#61758A",
+              "alignment": "center"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 33,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ojexgfah",
+      "id": "33",
+      "bbox": [
+        116,
+        590,
+        1020,
+        36
+      ],
+      "geometry": "rect",
+      "text": "Correction variants are collapsed before domain strength is calculated; display-only outputs remain visible but do not increase priority.",
+      "textPreview": "Correction variants are collapsed before domain strength is calculated; display-only outputs remain visible but do not increase priority.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "+mn-lt",
+        "color": "#16324F",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Correction variants are collapsed before domain strength is calculated; display-only outputs remain visible but do not"
+          },
+          {
+            "index": 2,
+            "text": "increase priority."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Correction variants are collapsed before domain strength is calculated; display-only outputs remain visible but do not increase priority.",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "color": "#16324F",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "Correction variants are collapsed before domain strength is calculated; display-only outputs remain visible but do not increase priority.",
+              "fontSize": 20,
+              "color": "#16324F",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    },
+    {
+      "order": 34,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fulwja9k",
+      "id": "34",
+      "bbox": [
+        58,
+        680,
+        600,
+        18
+      ],
+      "geometry": "rect",
+      "text": "PsyMAS · AIME Con 2026",
+      "textPreview": "PsyMAS · AIME Con 2026",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "+mn-lt",
+        "color": "#61758A",
+        "alignment": "left",
+        "insets": {
+          "top": 4.8,
+          "right": 9.6,
+          "bottom": 4.8,
+          "left": 9.6
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "PsyMAS · AIME Con 2026"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "PsyMAS · AIME Con 2026",
+          "resolvedTextStyle": {
+            "fontSize": 12,
+            "color": "#61758A",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "PsyMAS · AIME Con 2026",
+              "fontSize": 12,
+              "color": "#61758A",
+              "alignment": "left"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

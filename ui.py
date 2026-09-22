@@ -71,6 +71,12 @@ from psymas_ui.evidence_governance import (
 from psymas_ui.review import build_final_flag_review
 from psymas_ui.run_store import get_run_store
 from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot
+from psymas_ui.deployment import (
+    locked_llm_configuration as _locked_llm_configuration,
+    managed_llm_message as _managed_llm_message,
+    managed_llm_model as _managed_llm_model,
+    managed_llm_provider as _managed_llm_provider,
+)
 from psymas_ui.llm import (
     DEFAULT_GEMINI_MODEL_IDS,
     LOCAL_OLLAMA_MODEL_IDS,
@@ -14283,7 +14289,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
         # These selectors are scoped to the open case. They allow a reviewer to
         # choose either provider without changing the application-wide settings.
         case_provider_key = f"case_llm_provider_{selected_id}"
-        case_provider_options = ["openrouter", "local_ollama"]
+        case_provider_options = [_managed_llm_provider()] if _locked_llm_configuration() else ["openrouter", "local_ollama"]
         case_provider_labels = {"openrouter": "Hosted API", "local_ollama": "Local Ollama"}
         if st.session_state.get(case_provider_key) not in case_provider_options:
             st.session_state[case_provider_key] = _llm_provider()
@@ -14293,6 +14299,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 options=case_provider_options,
                 format_func=lambda value: case_provider_labels[value],
                 key=case_provider_key,
+                disabled=_locked_llm_configuration(),
                 help="Choose the connection first, then choose one of its models.",
             )
 
@@ -14327,6 +14334,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     f"{case_provider_labels[selected_case_provider]} · {str(model_id).split('/')[-1]}",
                 ),
                 key=case_model_key,
+                disabled=_locked_llm_configuration(),
                 help="Switch among configured models for this case only. Selecting a model loads its default prompt profile.",
             ) if case_model_ids else ""
         # Initialize/migrate the persisted prompt state before applying the
@@ -15758,6 +15766,26 @@ def _render_audit_page() -> None:
 def _render_flexible_llm_settings() -> None:
     """Provider-specific model settings that remain editable after setup."""
     load_dotenv()
+    if _locked_llm_configuration():
+        provider = _managed_llm_provider()
+        model = _managed_llm_model() or _effective_llm_model()
+        st.markdown("#### Managed hosted model")
+        st.info(_managed_llm_message())
+        st.caption("API credentials are supplied as a private deployment secret. They are never displayed, saved through this page, or included in downloads.")
+        if st.button("Test managed connection", key="railway_llm_connection_check", type="primary"):
+            with st.spinner("Testing the managed model…"):
+                if provider == "openrouter":
+                    ok, error, elapsed = _test_openrouter_model(_configured_openrouter_api_key(), model)
+                else:
+                    ok, error, elapsed = _test_ollama_model(model)
+                st.session_state["llm_connection_result"] = (
+                    ok,
+                    f"Managed model responded in {elapsed:.2f}s." if ok else f"Managed model test failed: {error}",
+                )
+        result = st.session_state.get("llm_connection_result")
+        if result:
+            (st.success if result[0] else st.error)(result[1])
+        return
     preferences = _persisted_llm_preferences()
     curated_openrouter_ids = [model_id for _, model_id in OPENROUTER_FREE_MODELS]
 

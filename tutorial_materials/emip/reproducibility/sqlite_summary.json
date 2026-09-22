@@ -1,0 +1,54 @@
+{
+  "source_database": "C:\\research\\2026-2-psych-mas\\data\\output\\psymas_run.sqlite",
+  "run_counts": [
+    {
+      "run_id": "9458ac0d-ff96-4659-8cc9-43ce86f036b8",
+      "n": 500
+    }
+  ],
+  "profile_counts": [
+    {
+      "evidence_status": "Convergent (Traceable)",
+      "review_priority": "Critical / Expedited",
+      "n": 26
+    },
+    {
+      "evidence_status": "Isolated (Context-Dependent)",
+      "review_priority": "Medium",
+      "n": 89
+    },
+    {
+      "evidence_status": "Isolated (Traceable)",
+      "review_priority": "High",
+      "n": 34
+    },
+    {
+      "evidence_status": "No substantive evidence pattern",
+      "review_priority": "Low",
+      "n": 320
+    },
+    {
+      "evidence_status": "Supporting evidence only",
+      "review_priority": "Low",
+      "n": 11
+    },
+    {
+      "evidence_status": "Weak",
+      "review_priority": "Low",
+      "n": 20
+    }
+  ],
+  "tables": [
+    "b3_input",
+    "column_legend",
+    "domain_evidence",
+    "final_flags",
+    "governed_review",
+    "indices_export",
+    "indices_table",
+    "master_results",
+    "review_decisions",
+    "review_queue",
+    "runs"
+  ]
+}

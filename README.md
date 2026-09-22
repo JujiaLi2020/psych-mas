@@ -64,6 +64,28 @@ docker compose -f docker-compose.release.yml up -d
 
 Open `http://localhost:8501`. Stop with `docker compose -f docker-compose.release.yml down`.
 
+### 4. Railway deployment (managed API profile)
+
+Railway uses the same v0.7.7 application image with a deployment profile; it is not a second software version. Create a backend service from this repository using the default Dockerfile command, and a UI service using:
+
+```bash
+sh scripts/run_ui_railway.sh
+```
+
+Set these variables in both services:
+
+```text
+PSYMAS_DEPLOYMENT_PROFILE=railway
+PSYMAS_LOCK_LLM=1
+PSYMAS_LLM_PROVIDER=openrouter
+PSYMAS_OPENROUTER_MODEL_ID=deepseek/deepseek-v4-flash-0731
+OPENROUTER_API_KEY=<Railway Secret>
+```
+
+Set `PSYMAS_BACKEND_URL` in the UI service to the backend service URL. Railway provides `PORT` automatically. In this profile, the API key and model are deployment-managed: users cannot view, replace, or switch them from the PsyMAS interface. The key is read only from Railway's secret environment and is never baked into the image, committed to Git, or included in exports. Keep the backend at one replica unless a shared Redis job store is configured.
+
+For a public demonstration, use a separate Railway project or environment and apply rate limits, authentication, or an access-control layer before sharing the URL. Do not use a public deployment for confidential assessment data.
+
 ## First Use
 
 1. Open **Scenario** and select **Demo**, or choose an input scenario.

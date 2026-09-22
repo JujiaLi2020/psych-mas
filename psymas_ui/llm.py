@@ -19,6 +19,11 @@ from mmls import (
     OPENROUTER_FREE_MODEL_IDS,
     OPENROUTER_FREE_MODELS,
 )
+from psymas_ui.deployment import (
+    locked_llm_configuration,
+    managed_llm_model,
+    managed_llm_provider,
+)
 
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -31,6 +36,11 @@ LLM_CONFIG_PATH = Path(
 
 def _load_persisted_llm_config() -> None:
     """Restore UI-managed credentials and model preferences."""
+    # A managed deployment must never inherit user-editable settings from a
+    # mounted desktop data directory. Railway environment variables are the
+    # source of truth for the provider, model, and credential.
+    if locked_llm_configuration():
+        return
     if not LLM_CONFIG_PATH.exists():
         return
     values = dotenv_values(LLM_CONFIG_PATH)
@@ -66,6 +76,8 @@ def _write_persisted_llm_config(updates: dict[str, str]) -> None:
 
 def save_openrouter_api_key(api_key: str) -> None:
     """Persist the OpenRouter key locally and activate it for this process."""
+    if locked_llm_configuration():
+        raise RuntimeError("LLM configuration is managed by the deployment administrator.")
     key = str(api_key or "").strip()
     if not key or "\n" in key or "\r" in key:
         raise ValueError("Enter a valid OpenRouter API key.")
@@ -75,6 +87,8 @@ def save_openrouter_api_key(api_key: str) -> None:
 
 def clear_openrouter_api_key() -> None:
     """Disable the OpenRouter credential across application restarts."""
+    if locked_llm_configuration():
+        raise RuntimeError("LLM configuration is managed by the deployment administrator.")
     _write_persisted_llm_config({"OPENROUTER_API_KEY": ""})
     os.environ["OPENROUTER_API_KEY"] = ""
 
@@ -113,6 +127,8 @@ def save_llm_preferences(
     ollama_num_predict: int = 512,
 ) -> None:
     """Persist separate selections for each provider and activate them immediately."""
+    if locked_llm_configuration():
+        raise RuntimeError("LLM configuration is managed by the deployment administrator.")
     provider = str(provider or "").strip()
     if provider not in {"openrouter", "local_ollama"}:
         raise ValueError("Choose OpenRouter or Local Ollama.")
@@ -359,12 +375,16 @@ def load_openrouter_model_options(force: bool = False) -> tuple[list[tuple[str, 
 
 def preferred_llm_provider() -> str:
     """Choose the configured LLM provider."""
+    if locked_llm_configuration():
+        return managed_llm_provider()
     provider = os.getenv("PSYMAS_LLM_PROVIDER", "openrouter").strip()
     return provider if provider in {"openrouter", "local_ollama"} else "openrouter"
 
 
 def llm_provider() -> str:
     """Current LLM provider. Defaults to OpenRouter but allows local Ollama."""
+    if locked_llm_configuration():
+        return managed_llm_provider()
     provider = st.session_state.get("llm_provider") or preferred_llm_provider()
     if provider not in {"openrouter", "local_ollama"}:
         provider = "openrouter"
@@ -396,6 +416,10 @@ def effective_llm_model() -> str:
     """Return the pinned model when valid, otherwise the current selected model."""
     provider = llm_provider()
     model_ids = current_model_ids()
+    if locked_llm_configuration():
+        managed_model = managed_llm_model()
+        if managed_model:
+            return managed_model
     default_model = model_ids[0] if model_ids else (
         LOCAL_OLLAMA_MODEL_IDS[0] if provider == "local_ollama" else OPENROUTER_FREE_MODEL_IDS[0]
     )
@@ -439,6 +463,9 @@ def call_selected_llm_text(
     provider: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Call the selected provider model, optionally overriding it for one case."""
+    if locked_llm_configuration():
+        provider = managed_llm_provider()
+        model_id = managed_llm_model() or model_id
     provider = provider or llm_provider()
     candidates = [str(model_id).strip()] if str(model_id or "").strip() else model_variants_with_selected_first()
     if provider == "local_ollama":

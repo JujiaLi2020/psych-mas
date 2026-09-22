@@ -14,7 +14,7 @@ $choice = Read-Host "Choose 1, 2, or 3"
 switch ($choice) {
     "1" {
         $values.PSYMAS_LLM_PROVIDER = "openrouter"
-        $values.PSYMAS_OPENROUTER_MODEL_ID = "openai/gpt-4o-mini"
+        $values.PSYMAS_OPENROUTER_MODEL_ID = "deepseek/deepseek-v4-flash-0731"
         $values.OPENROUTER_API_KEY = (Read-Host "OpenRouter API key").Trim()
         $values.Remove("OLLAMA_CHAT_URL")
     }

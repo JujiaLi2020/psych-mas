@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.venv/
+.env
+!.env.example
+__pycache__/
+*.py[cod]
+.DS_Store
+
+
+# Local-only (do not push to GitHub)
+.RData
+.Rhistory
+PsyMASPresentation/
+
+# Others
+R_Secmin/
+.langgraph_api/*.pckl
+
+# Generated run state and temporary artifacts
+data/output/
+tmp/
+.streamlit/secrets.toml
+
+
+# Files
+Presentation/
+document/
+.Rproj.user
+Funding/
+.positai
+api/

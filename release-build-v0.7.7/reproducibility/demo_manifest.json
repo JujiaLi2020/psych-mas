@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.2",
+  "generation_software_version": "0.7.6",
+  "package_software_version": "0.7.7",
+  "snapshot_status": "restored_evaluated_run; not recomputed at Demo startup",
+  "run_id": "9458ac0d-ff96-4659-8cc9-43ce86f036b8",
+  "scenario": "B",
+  "seed": 2026,
+  "generation_script": "generate_psymas_data.R",
+  "design": {
+    "n_examinees": 500,
+    "n_items": 40,
+    "item_type": "dichotomous",
+    "irt_model": "2PL",
+    "response_time_scale": "log-time"
+  },
+  "parameter_provenance": {
+    "item_parameters": "simulation_metadata; supplied to the saved demonstration run",
+    "item_parameter_reestimation": "not used in the saved demonstration run; mirt is the fallback when item_params.csv is absent",
+    "person_parameters": "stored in the snapshot; no independent re-estimation provenance was recorded for this saved run"
+  },
+  "bundled_file_sha256": {
+    "data/upload/responses.csv": "ED8EFBD09C5323A117C784A16F085E1FF3087E6B1BD45ADF82DEFCEE8642240F",
+    "data/upload/response_times.csv": "6392B9BD3FAC270C30B12D21AB35CEBCC09BC95F32E4AF9B22611966ECBF16E4",
+    "data/upload/compromised_items.csv": "8C437D8D0D9023DB693A11C3F5AF5D736AC4E05045A1FC4C3E6869F2141479CE",
+    "data/upload/answer_changes.csv": "A1010E381EBA0B910486975D465B639A219F260749741420E6C357A96623CE79",
+    "reproducibility/generate_psymas_data.R": "D0A95C779B117CF0075E2E6FE2926DF8544B5401AC3BB5B4179E6067AAFF21CC",
+    "data/psymas_demo_evaluated_snapshot.zip": "9A9A024050D9871D7F86379954751FB676A88BB3803DE1052EEE9B92148DFC52"
+  },
+  "regeneration_note": "The evaluated snapshot restores processed inputs and SQLite outputs. Archive response_long.csv and auxiliary truth tables to regenerate the simulation independently."
+}

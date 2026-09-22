@@ -1,0 +1,9 @@
+{
+  "collection_script": "tutorial_materials/emip/reproducibility/collect_materials.py",
+  "collection_mode": "read_only_saved_run_extraction",
+  "current_distribution": "0.7.7",
+  "snapshot_generation_version": "0.7.6",
+  "run_id": "9458ac0d-ff96-4659-8cc9-43ce86f036b8",
+  "examinee_case": 332,
+  "new_detector_run_performed": false
+}

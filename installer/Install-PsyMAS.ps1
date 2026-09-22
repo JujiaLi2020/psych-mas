@@ -145,7 +145,7 @@ $settings = [ordered]@{
     PSYMAS_DATA_DIR = $dockerDataPath
     OPENROUTER_API_KEY = ""
     PSYMAS_LLM_PROVIDER = "openrouter"
-    PSYMAS_OPENROUTER_MODEL_ID = "openai/gpt-4o-mini"
+    PSYMAS_OPENROUTER_MODEL_ID = "deepseek/deepseek-v4-flash-0731"
     PSYMAS_OLLAMA_MODEL_ID = "llama3.1:8b"
 }
 
