@@ -40,6 +40,10 @@ def _load_persisted_llm_config() -> None:
         "PSYMAS_OPENROUTER_MODEL_ID",
         "PSYMAS_OLLAMA_MODEL_ID",
         "OLLAMA_CHAT_URL",
+        "PSYMAS_OLLAMA_NUM_CTX",
+        "PSYMAS_OLLAMA_TEMPERATURE",
+        "PSYMAS_OLLAMA_TOP_P",
+        "PSYMAS_OLLAMA_NUM_PREDICT",
     ):
         if key in values:
             os.environ[key] = str(values.get(key) or "").strip()
@@ -91,6 +95,10 @@ def persisted_llm_preferences() -> dict[str, str]:
         "openrouter_model_id": os.getenv("PSYMAS_OPENROUTER_MODEL_ID", "").strip(),
         "ollama_model_id": os.getenv("PSYMAS_OLLAMA_MODEL_ID", "").strip(),
         "ollama_chat_url": configured_ollama_chat_url(),
+        "ollama_num_ctx": os.getenv("PSYMAS_OLLAMA_NUM_CTX", "8192").strip(),
+        "ollama_temperature": os.getenv("PSYMAS_OLLAMA_TEMPERATURE", "0.2").strip(),
+        "ollama_top_p": os.getenv("PSYMAS_OLLAMA_TOP_P", "0.9").strip(),
+        "ollama_num_predict": os.getenv("PSYMAS_OLLAMA_NUM_PREDICT", "512").strip(),
     }
 
 
@@ -99,6 +107,10 @@ def save_llm_preferences(
     openrouter_model_id: str,
     ollama_model_id: str,
     ollama_chat_url: str,
+    ollama_num_ctx: int = 8192,
+    ollama_temperature: float = 0.2,
+    ollama_top_p: float = 0.9,
+    ollama_num_predict: int = 512,
 ) -> None:
     """Persist separate selections for each provider and activate them immediately."""
     provider = str(provider or "").strip()
@@ -113,11 +125,23 @@ def save_llm_preferences(
         raise ValueError("Enter a local Ollama model name.")
     if not ollama_chat_url.startswith(("http://", "https://")):
         raise ValueError("The Ollama endpoint must start with http:// or https://.")
+    if int(ollama_num_ctx) < 2048:
+        raise ValueError("Ollama context length must be at least 2048 tokens.")
+    if not 0 <= float(ollama_temperature) <= 2:
+        raise ValueError("Ollama temperature must be between 0 and 2.")
+    if not 0 < float(ollama_top_p) <= 1:
+        raise ValueError("Ollama top_p must be greater than 0 and at most 1.")
+    if int(ollama_num_predict) < 64:
+        raise ValueError("Ollama output length must be at least 64 tokens.")
     updates = {
         "PSYMAS_LLM_PROVIDER": provider,
         "PSYMAS_OPENROUTER_MODEL_ID": openrouter_model_id,
         "PSYMAS_OLLAMA_MODEL_ID": ollama_model_id,
         "OLLAMA_CHAT_URL": ollama_chat_url,
+        "PSYMAS_OLLAMA_NUM_CTX": str(int(ollama_num_ctx)),
+        "PSYMAS_OLLAMA_TEMPERATURE": str(float(ollama_temperature)),
+        "PSYMAS_OLLAMA_TOP_P": str(float(ollama_top_p)),
+        "PSYMAS_OLLAMA_NUM_PREDICT": str(int(ollama_num_predict)),
     }
     _write_persisted_llm_config(updates)
     os.environ.update(updates)
@@ -161,7 +185,17 @@ def call_ollama(model_id: str, messages: list[dict], timeout: int = 120) -> tupl
     if not model_id or not messages:
         return None, "No local model or messages."
     try:
-        body = {"model": model_id, "messages": messages, "stream": False}
+        body = {
+            "model": model_id,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "num_ctx": int(os.getenv("PSYMAS_OLLAMA_NUM_CTX", "8192")),
+                "temperature": float(os.getenv("PSYMAS_OLLAMA_TEMPERATURE", "0.2")),
+                "top_p": float(os.getenv("PSYMAS_OLLAMA_TOP_P", "0.9")),
+                "num_predict": int(os.getenv("PSYMAS_OLLAMA_NUM_PREDICT", "512")),
+            },
+        }
         endpoint = configured_ollama_chat_url()
         resp = requests.post(endpoint, json=body, timeout=timeout)
         resp.raise_for_status()
@@ -402,19 +436,26 @@ def call_selected_llm_text(
     *,
     timeout: int = 90,
     model_id: str | None = None,
+    provider: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Call the selected provider model, optionally overriding it for one case."""
-    provider = llm_provider()
+    provider = provider or llm_provider()
     candidates = [str(model_id).strip()] if str(model_id or "").strip() else model_variants_with_selected_first()
     if provider == "local_ollama":
+        last_error = None
         for candidate in candidates:
             text, err = call_ollama(candidate, [{"role": "user", "content": prompt}], timeout=timeout)
             if text and not err:
                 return text, None
-        return None, f"Local Ollama: no response for '{candidates[0]}'. Start Ollama at {configured_ollama_chat_url()} and pull the selected model."
+            last_error = err
+        detail = f" Last error: {last_error}" if last_error else ""
+        return None, f"Local Ollama: no response for '{candidates[0]}'. Start Ollama at {configured_ollama_chat_url()} and pull the selected model.{detail}"
     api_key = os.getenv("OPENROUTER_API_KEY", "")
+    last_error = None
     for candidate in candidates:
         text, err = call_openrouter(api_key, candidate, [{"role": "user", "content": prompt}], timeout=timeout)
         if text and not err:
             return text, None
-    return None, f"OpenRouter: model '{candidates[0]}' returned no response. Try another configured model or set OPENROUTER_API_KEY in .env."
+        last_error = err
+    detail = f" Last error: {last_error}" if last_error else ""
+    return None, f"OpenRouter: model '{candidates[0]}' returned no response. Try another configured model or set OPENROUTER_API_KEY in .env.{detail}"

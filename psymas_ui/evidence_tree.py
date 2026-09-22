@@ -43,7 +43,7 @@ STRENGTH_LEGEND = (
 
 PRIORITY_LEGEND = (
     ("Critical / Expedited", "#DC2626"),
-    ("High (Context-Heavy)", "#FB923C"),
+    ("High · Context review", "#FB923C"),
     ("High", "#C87512"),
     ("Medium", "#C87512"),
     ("Low", "#94A3B8"),
@@ -191,15 +191,10 @@ def short_conclusion_label(priority: object, status: object) -> str:
         return "No evidence pattern"
     if "weak" in status_text.lower() and priority_text.lower() == "low":
         return "Low · weak signal"
-    legacy_verifiable = "verif" + "iable"
-    if "isolated" in status_text.lower() and (legacy_verifiable in status_text.lower() or "traceable" in status_text.lower()):
-        return f"{priority_text} · isolated-traceable"
-    if "isolated" in status_text.lower():
-        return f"{priority_text} · isolated"
-    if "convergent" in status_text.lower() and (legacy_verifiable in status_text.lower() or "traceable" in status_text.lower()):
-        return f"{priority_text} · convergent-traceable"
-    if "convergent" in status_text.lower():
-        return f"{priority_text} · convergent"
+    if "single-scenario" in status_text.lower():
+        return f"{priority_text} · single-scenario"
+    if "cross-scenario" in status_text.lower():
+        return f"{priority_text} · cross-scenario"
     return f"{priority_text} · {status_text.split('(')[0].strip()}"
 
 
@@ -438,8 +433,6 @@ def priority_level_key(priority: object) -> str:
     text = _clean_text(priority).lower()
     if "critical" in text or "expedited" in text:
         return "critical"
-    if "context-heavy" in text or ("high" in text and "context" in text):
-        return "high_context"
     if text == "high" or text.startswith("high"):
         return "high"
     if text == "medium" or text.startswith("medium"):
@@ -452,7 +445,6 @@ def priority_level_key(priority: object) -> str:
 def priority_color(priority: object) -> str:
     return {
         "critical": "#DC2626",
-        "high_context": "#FB923C",
         "high": "#C87512",
         "medium": "#C87512",
         "low": "#94A3B8",
@@ -464,7 +456,6 @@ def priority_style(priority: object) -> dict[str, str]:
     """Light-theme cell/chip styling aligned with domain strength tiers."""
     return {
         "critical": {"bg": "#FEF2F2", "text": "#991B1B", "border": "#DC2626"},
-        "high_context": {"bg": "#FFF1F2", "text": "#9F1239", "border": "#FB923C"},
         "high": {"bg": "#FFF7ED", "text": "#9A3412", "border": "#C87512"},
         "medium": {"bg": "#FFF7ED", "text": "#9A3412", "border": "#C87512"},
         "low": {"bg": "#F8FAFC", "text": "#475569", "border": "#94A3B8"},

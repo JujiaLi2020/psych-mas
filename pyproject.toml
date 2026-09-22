@@ -43,7 +43,7 @@ config = [
     "config/index_thresholds.yaml",
     "config/rulebook_index.csv",
 ]
-data = ["data/psymas_demo_evaluated_snapshot.zip"]
+data = ["data/psymas_demo_evaluated_snapshot_v0.7.7.zip"]
 "data/sample" = ["data/sample/*.csv"]
 "data/upload" = ["data/upload/*.csv"]
 

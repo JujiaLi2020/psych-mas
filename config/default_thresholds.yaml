@@ -3,6 +3,9 @@ description: Default PsyMAS rule and threshold registry. Edit values, upload the
 defaults:
   alpha: 0.05
   enabled: true
+  unit_of_count: family_level_signal
+  missing_flag_policy: do_not_count
+  uncalibrated_threshold_policy: retain_for_display_and_audit
 governance:
   domain_strength:
     B3-00:
@@ -11,35 +14,35 @@ governance:
       strength: unavailable
     B3-01:
       condition: no_indicators
-      evidence_pattern: No primary or supporting indicators are flagged
+      evidence_pattern: No eligible primary or supporting family signals are flagged
       strength: none
     B3-02:
       condition: supporting_only
       min_supporting: 1
       max_supporting: 1
-      evidence_pattern: One supporting indicator is flagged, with no primary indicator
+      evidence_pattern: One eligible supporting family signal is flagged, with no primary signal
       strength: weak
     B3-03:
       condition: primary_only
       min_primary: 1
       max_primary: 1
-      evidence_pattern: One isolated primary indicator is flagged
+      evidence_pattern: One or more eligible primary family signals are flagged, with no supporting signal
       strength: moderate
     B3-04:
       condition: supporting_only
       min_supporting: 2
-      evidence_pattern: Multiple supporting indicators are flagged, with no primary indicator
+      evidence_pattern: At least two eligible supporting family signals are flagged, with no primary signal
       strength: moderate
     B3-05:
       condition: primary_and_supporting
       min_primary: 1
       min_supporting: 1
-      evidence_pattern: One primary indicator together with supporting indicators within the same domain
+      evidence_pattern: An eligible primary family signal is flagged together with supporting family evidence
       strength: strong
     B3-06:
       condition: multiple_primary
       min_primary: 2
-      evidence_pattern: Multiple primary indicators are flagged within the same domain
+      evidence_pattern: Multiple eligible primary family signals are flagged within the same domain
       strength: strong
   review_priority:
     purpose: Optional human-review queue ordering only
@@ -47,7 +50,7 @@ governance:
     output_table: review_queue.csv
     B6-01:
       rule_id: RP-01
-      case_status: None
+      case_status: No governed scenario
       review_priority: Low
     B6-02:
       rule_id: RP-02
@@ -55,23 +58,23 @@ governance:
       review_priority: Low
     B6-03a:
       rule_id: RP-03a
-      case_status: Isolated (Context-Dependent)
+      case_status: Single-scenario signal
       review_priority: Medium
     B6-03b:
       rule_id: RP-03b
-      case_status: Isolated (Verifiable)
+      case_status: Single-scenario signal
       review_priority: High
     B6-04a:
       rule_id: RP-04a
-      case_status: Convergent (Context-Dependent)
-      review_priority: High (Context-Heavy)
+      case_status: Cross-scenario pattern
+      review_priority: High
     B6-04b:
       rule_id: RP-04b
-      case_status: Convergent (Traceable)
+      case_status: Cross-scenario pattern
       review_priority: Critical / Expedited
     B6-05:
       rule_id: RP-05
-      case_status: No substantive evidence pattern
+      case_status: Data-dependent review
       review_priority: Low
   index_activation:
     primary_flag_columns:

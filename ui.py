@@ -74,6 +74,7 @@ from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot
 from psymas_ui.llm import (
     DEFAULT_GEMINI_MODEL_IDS,
     LOCAL_OLLAMA_MODEL_IDS,
+    LOCAL_OLLAMA_MODELS,
     OPENROUTER_FREE_MODELS,
     call_openrouter as _call_openrouter,
     call_selected_llm_text as _call_selected_llm_text,
@@ -121,6 +122,12 @@ except Exception:
     DataReturnMode = None
     JsCode = None
 
+HUMAN_DECISION_OPTIONS = [
+    "No further action",
+    "Resolved through contextual review",
+    "Additional evidence required",
+    "Escalate for policy review",
+]
 # Load .env early so os.getenv() (keys, BACKEND_URL) works everywhere.
 load_dotenv()
 
@@ -347,6 +354,10 @@ def _clear_demo_loaded_state() -> None:
         "prep_compromised_file_name",
         "prep_answer_changes",
         "prep_answer_changes_file_name",
+        "prep_examinee_metadata",
+        "prep_examinee_metadata_file_name",
+        "prep_item_metadata",
+        "prep_item_metadata_file_name",
         "forensic_result",
         "detect_run_id",
         "detect_job_status",
@@ -435,13 +446,18 @@ def _prep_detect_requirements(prep_ab_fns: list[str]) -> dict:
 
 def _infer_prep_upload_kind(name: str, df: pd.DataFrame | None) -> str | None:
     """Infer which Preparation data slot an uploaded file belongs to."""
-    stem = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    # Streamlit normally supplies a basename, but normalize a full path too so
+    # bulk uploads behave consistently across browsers and packaged builds.
+    file_stem = Path(str(name or "")).stem
+    stem = re.sub(r"[^a-z0-9]+", "_", file_stem.lower()).strip("_")
     standard_names = {
         "responses": "response",
         "response_times": "rt",
         "item_params": "psi",
         "compromised_items": "compromised",
         "answer_changes": "answer_changes",
+        "examinee_metadata": "examinee_metadata",
+        "item_metadata": "item_metadata",
     }
     if stem in standard_names:
         return standard_names[stem]
@@ -544,6 +560,13 @@ def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[st
                 st.session_state["prep_last_answer_changes_sig"] = sig
                 st.session_state["prep_answer_changes_file_name"] = name
                 loaded.append(f"Answer changes: {name}")
+            elif kind in {"examinee_metadata", "item_metadata"}:
+                if df is None:
+                    raise ValueError("Metadata must be a CSV.")
+                state_key = f"prep_{kind}"
+                st.session_state[state_key] = df.to_dict(orient="records")
+                st.session_state[f"{state_key}_file_name"] = name
+                loaded.append(f"{kind.replace('_', ' ').title()}: {name}")
             elif kind == "psi":
                 psi = _load_psi_upload(f)
                 if not psi:
@@ -1171,11 +1194,11 @@ def _parse_scenario_suggestion(text: str) -> tuple[str, str]:
     return letter, (explanation[:400] if explanation else "Suggested based on your description.")
 
 
-def _parse_scenario_json_or_legacy(text: str) -> tuple[str, str]:
+def _parse_scenario_response(text: str) -> tuple[str, str]:
     """
     Prefer parsing a structured JSON reply of the form:
       {"scenario_letter": "A|B|C", "agents": [...], "rationale": "..."}
-    Fallback to the original two-line A/B parser when JSON is not present.
+    Fall back to the concise A/B/C response parser when JSON is not present.
     Returns (letter, rationale_or_explanation).
     """
     raw = (text or "").strip()
@@ -1199,10 +1222,8 @@ def _parse_scenario_json_or_legacy(text: str) -> tuple[str, str]:
         if letter or rationale:
             return letter, (rationale[:400] if rationale else "Suggested based on your description.")
     except Exception:
-        # Fall back to legacy plain-text parsing.
         pass
     letter, explanation = _parse_scenario_suggestion(raw)
-    # Legacy parser had no agent list; clear any previous suggestion.
     st.session_state["_llm_suggested_agents"] = []
     return letter, explanation
 
@@ -1248,7 +1269,7 @@ def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
     # Use same provider and model as Psych-MAS Assistant (Model engine tab)
     text, err = _call_selected_llm_text(prompt, timeout=60)
     if text and not err:
-        letter, explanation = _parse_scenario_json_or_legacy(text)
+        letter, explanation = _parse_scenario_response(text)
         return letter, explanation
     return "", err or "No selected LLM model returned a response."
     # Google (Gemini): try each model variant (same as Psych-MAS Summary)
@@ -1271,7 +1292,7 @@ def _suggest_aberrance_scenario(user_description: str) -> tuple[str, str]:
                 .get("text", "")
                 or ""
             ).strip()
-            letter, explanation = _parse_scenario_json_or_legacy(text)
+            letter, explanation = _parse_scenario_response(text)
             return letter, explanation
         except requests.exceptions.HTTPError as e:
             last_err = f"{e.response.status_code if e.response is not None else 'HTTP'}: {e}"
@@ -1313,9 +1334,9 @@ APPENDIX_B2_RULEBOOK: list[dict[str, str]] = [
     {"function": "detect_pm", "index": "Q_ST_*", "domain_role": "MF / Supporting", "required_data": "responses + RT + model params / statistic", "flagging_rule": "Flag if statistic exceeds the prespecified combined score-time cutoff", "threshold_source": "Model-based or simulation-calibrated cutoff. Combined score-time statistic."},
     {"function": "detect_pm", "index": "Q_RT_*", "domain_role": "MF / Supporting", "required_data": "responses + RT + model params / statistic", "flagging_rule": "Flag if statistic exceeds the prespecified response-time person-fit cutoff; correction variants collapse to one family-level signal", "threshold_source": "Model-based or simulation-calibrated cutoff. Joint response-time person-fit evidence."},
     {"function": "detect_pm", "index": "L_RT_*", "domain_role": "MF / Supporting", "required_data": "responses + RT + model params / statistic", "flagging_rule": "Flag if statistic is sufficiently extreme under the response-time person-fit null distribution; correction variants collapse to one family-level signal", "threshold_source": "Model-based or simulation-calibrated cutoff. Response-time person-fit evidence."},
-    {"function": "detect_as", "index": "OMG_ST", "domain_role": "SIM / Preferred Primary", "required_data": "responses + RT / pair statistic", "flagging_rule": "Flag if pair statistic exceeds the prespecified similarity cutoff", "threshold_source": "Historical pair distribution or simulated null distribution. Score-time similarity."},
+    {"function": "detect_as", "index": "OMG_ST", "domain_role": "SIM / Support Only", "required_data": "responses + RT / pair statistic", "flagging_rule": "Visible for pair-level interpretation; not counted without a calibrated pairwise rule", "threshold_source": "Historical pair distribution or simulated null distribution. Score-time similarity."},
     {"function": "detect_as", "index": "GBT_ST", "domain_role": "SIM / Supporting", "required_data": "responses + RT / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified similarity cutoff or if p-value is below alpha, when available", "threshold_source": "Model-based, empirical, or simulated null distribution. Similarity test."},
-    {"function": "detect_as", "index": "OMG_S", "domain_role": "SIM / Fallback Primary", "required_data": "responses / pair statistic", "flagging_rule": "Flag if pair statistic exceeds the prespecified score-similarity cutoff", "threshold_source": "Historical pair distribution or simulated null distribution. Score similarity."},
+    {"function": "detect_as", "index": "OMG_S", "domain_role": "SIM / Support Only", "required_data": "responses / pair statistic", "flagging_rule": "Visible for pair-level interpretation; not counted without a calibrated pairwise rule", "threshold_source": "Historical pair distribution or simulated null distribution. Score similarity."},
     {"function": "detect_as", "index": "WOMG_S", "domain_role": "SIM / Supporting", "required_data": "responses / pair statistic", "flagging_rule": "Flag if pair statistic exceeds the prespecified weighted-similarity cutoff", "threshold_source": "Historical pair distribution or simulated null distribution. Weighted omega similarity."},
     {"function": "detect_as", "index": "GBT_S", "domain_role": "SIM / Supporting", "required_data": "responses / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified cutoff or if p-value is below alpha, when available", "threshold_source": "Model-based, empirical, or simulated null distribution. Generalized binomial similarity."},
     {"function": "detect_as", "index": "M4_S", "domain_role": "SIM / Supporting", "required_data": "pair responses / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified pair-similarity cutoff", "threshold_source": "Historical pair distribution or simulated null distribution. Similarity metric."},
@@ -1325,8 +1346,8 @@ APPENDIX_B2_RULEBOOK: list[dict[str, str]] = [
     {"function": "detect_as", "index": "M4_R", "domain_role": "SIM / Supporting", "required_data": "responses / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified response-based similarity cutoff", "threshold_source": "Historical pair distribution or simulated null distribution. Response-based metric."},
     {"function": "detect_as", "index": "OMG_RT", "domain_role": "SIM / Supporting", "required_data": "responses + RT / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified RT-similarity cutoff", "threshold_source": "Historical RT-pair distribution or simulated null distribution. RT-based similarity."},
     {"function": "detect_as", "index": "GBT_RT", "domain_role": "SIM / Supporting", "required_data": "responses + RT / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified cutoff or if p-value is below alpha, when available", "threshold_source": "Model-based, empirical, or simulated null distribution. RT similarity."},
-    {"function": "detect_ac", "index": "OMG_S", "domain_role": "SIM / Preferred Primary", "required_data": "responses + model params / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified copying-evidence cutoff", "threshold_source": "Model-based, empirical, or simulated null distribution. Copying evidence."},
-    {"function": "detect_ac", "index": "GBT_S", "domain_role": "SIM / Fallback Primary", "required_data": "responses + model params / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified cutoff or if p-value is below alpha, when available", "threshold_source": "Model-based, empirical, or simulated null distribution. Copying evidence."},
+    {"function": "detect_ac", "index": "OMG_S", "domain_role": "SIM / Support Only", "required_data": "responses + model params / pair statistic", "flagging_rule": "Visible for pair-level interpretation; not counted without a calibrated pairwise rule", "threshold_source": "Model-based, empirical, or simulated null distribution. Copying evidence."},
+    {"function": "detect_ac", "index": "GBT_S", "domain_role": "SIM / Support Only", "required_data": "responses + model params / pair statistic", "flagging_rule": "Visible for pair-level interpretation; not counted without a calibrated pairwise rule", "threshold_source": "Model-based, empirical, or simulated null distribution. Copying evidence."},
     {"function": "detect_ac", "index": "OMG_R", "domain_role": "SIM / Supporting", "required_data": "responses + model params / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified response-copying cutoff", "threshold_source": "Model-based, empirical, or simulated null distribution. Response copying evidence."},
     {"function": "detect_ac", "index": "GBT_R", "domain_role": "SIM / Supporting", "required_data": "responses + model params / pair statistic", "flagging_rule": "Flag if statistic exceeds the prespecified cutoff or if p-value is below alpha, when available", "threshold_source": "Model-based, empirical, or simulated null distribution. Copying evidence."},
     {"function": "detect_pk", "index": "L_ST", "domain_role": "PK / Preferred Primary", "required_data": "responses + RT + compromised items / statistic + p-value", "flagging_rule": "Flag if p-value is below the prespecified alpha level", "threshold_source": "Model-based null distribution. Score-time preknowledge."},
@@ -1426,8 +1447,7 @@ DEFAULT_B3_DOMAIN_STRENGTH_RULES: dict[str, dict] = {
     "B3-03": {
         "condition": "primary_only",
         "min_primary": 1,
-        "max_primary": 1,
-        "evidence_pattern": "One isolated primary indicator is flagged",
+        "evidence_pattern": "One or more eligible primary family signals are flagged, with no supporting signal",
         "strength": "moderate",
     },
     "B3-04": {
@@ -1452,13 +1472,13 @@ DEFAULT_B3_DOMAIN_STRENGTH_RULES: dict[str, dict] = {
 }
 
 DEFAULT_B5_REVIEW_PRIORITY_RULES: dict[str, dict] = {
-    "B6-01": {"rule_id": "RP-01", "case_status": "None", "review_priority": "Low"},
+    "B6-01": {"rule_id": "RP-01", "case_status": "No governed scenario", "review_priority": "Low"},
     "B6-02": {"rule_id": "RP-02", "case_status": "Weak", "review_priority": "Low"},
-    "B6-03a": {"rule_id": "RP-03a", "case_status": "Isolated (Context-Dependent)", "review_priority": "Medium"},
-    "B6-03b": {"rule_id": "RP-03b", "case_status": "Isolated (Traceable)", "review_priority": "High"},
-    "B6-04a": {"rule_id": "RP-04a", "case_status": "Convergent (Context-Dependent)", "review_priority": "High (Context-Heavy)"},
-    "B6-04b": {"rule_id": "RP-04b", "case_status": "Convergent (Traceable)", "review_priority": "Critical / Expedited"},
-    "B6-05": {"rule_id": "RP-05", "case_status": "No substantive evidence pattern", "review_priority": "Low"},
+    "B6-03a": {"rule_id": "RP-03a", "case_status": "Single-scenario signal", "review_priority": "Medium"},
+    "B6-03b": {"rule_id": "RP-03b", "case_status": "Single-scenario signal", "review_priority": "High"},
+    "B6-04a": {"rule_id": "RP-04a", "case_status": "Cross-scenario pattern", "review_priority": "High"},
+    "B6-04b": {"rule_id": "RP-04b", "case_status": "Cross-scenario pattern", "review_priority": "Critical / Expedited"},
+    "B6-05": {"rule_id": "RP-05", "case_status": "Data-dependent review", "review_priority": "Low"},
     "B6-06": {"rule_id": "RP-06", "case_status": "Supporting evidence only", "review_priority": "Low"},
 }
 
@@ -2320,8 +2340,7 @@ def _tt_family_variant(index_name: str) -> tuple[str, str, str, str]:
     base = _strip_index_flag_suffix(index_name)
     base = re.sub(r"^tt_", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+", "", base)
-    # Some legacy rulebook rows grouped EDI corrections together; the actual flag
-    # column is more reliable for identifying the returned variant.
+    # A grouped package label is normalized to the current family-level rule.
     if "/" in base and "EDI_SD" in base:
         return "tt_EDI_SD", "unknown", "score", "sensitivity_only"
     if "/" in base and "EDI_R" in base:
@@ -3062,7 +3081,7 @@ def _active_b5_review_priority_rules() -> dict[str, tuple[str, str, str]]:
         by_status[status] = (
             str(rule.get("rule_id", "")),
             str(code),
-            str(rule.get("review_priority", "Low")),
+            str(rule.get("review_priority", "Low")).strip(),
         )
     return by_status
 
@@ -3674,7 +3693,7 @@ def _b3_domain_profile_from_input(examinee_rows: pd.DataFrame, domain: str) -> d
     }
 
 
-_GOV_PRIMARY_SCENARIO_DOMAINS = {"RT", "SIM", "PK", "TP"}
+_GOV_PRIMARY_SCENARIO_DOMAINS = {"RT", "PK", "TP"}
 _GOV_SUPPORTING_DOMAINS = {"MF"}
 _GOV_HIGH_VERIFIABILITY_DOMAINS = {"PK", "TP"}
 
@@ -3698,30 +3717,86 @@ def _gov_case_status(domain_profiles: dict[str, dict]) -> tuple[str, str, list[s
     has_high_verifiability = bool(set(scenario_moderate_plus) & _GOV_HIGH_VERIFIABILITY_DOMAINS)
 
     if not available:
-        return "No substantive evidence pattern", "Low", []
+        return "Data-dependent review", "Low", []
     if available and all(ranks[k] == 0 for k in available):
-        return "None", "Low", ["EP-01"]
+        return "No governed scenario", "Low", ["EP-01"]
     if not scenario_moderate_plus and supporting_moderate_plus:
         return "Supporting evidence only", "Low", ["EP-02s"]
     if len(scenario_weak) >= 2 and not scenario_moderate_plus:
         return "Weak", "Low", ["EP-02"]
     if len(scenario_moderate_plus) == 1:
         return (
-            "Isolated (Traceable)" if has_high_verifiability else "Isolated (Context-Dependent)",
+            "Single-scenario signal",
             "High" if has_high_verifiability else "Medium",
             ["EP-03b" if has_high_verifiability else "EP-03a"],
         )
     if len(scenario_moderate_plus) >= 2:
         return (
-            "Convergent (Traceable)" if has_high_verifiability else "Convergent (Context-Dependent)",
-            "Critical / Expedited" if has_high_verifiability else "High (Context-Heavy)",
+            "Cross-scenario pattern",
+            "Critical / Expedited" if has_high_verifiability else "High",
             ["EP-04b" if has_high_verifiability else "EP-04a"],
         )
-    return "No substantive evidence pattern", "Low", []
+    return "Data-dependent review", "Low", []
 
 
 def _gov_review_priority_rule(status: str) -> tuple[str, str, str]:
     return _active_b5_review_priority_rules().get(status, ("RP-00", "B6-00", "Low"))
+
+
+def _gov_review_priority_rule_for_case(
+    status: str,
+    priority: str,
+) -> tuple[str, str, str]:
+    """Resolve duplicate profile rules using the already computed priority."""
+    if status == "Single-scenario signal":
+        if priority == "High":
+            return "RP-03b", "B6-03b", "High"
+        return "RP-03a", "B6-03a", "Medium"
+    if status == "Cross-scenario pattern":
+        if priority == "Critical / Expedited":
+            return "RP-04b", "B6-04b", "Critical / Expedited"
+        return "RP-04a", "B6-04a", "High"
+    return _gov_review_priority_rule(status)
+
+
+def _current_case_profile_from_domains(case_domains: pd.DataFrame) -> tuple[str, list[str]]:
+    """Return the current rulebook profile from domain strengths, not saved labels.
+
+    Saved snapshots may contain labels from an older rulebook.  Case review
+    narrative must follow the current domain configuration, especially when
+    two primary scenario domains (RT, PK, TP) are active.
+    """
+    strengths: dict[str, str] = {}
+    if isinstance(case_domains, pd.DataFrame) and not case_domains.empty and "Domain" in case_domains.columns:
+        for _, row in case_domains.iterrows():
+            domain = str(row.get("Domain", "") or "").strip().upper()
+            strength = str(row.get("Strength", "") or "").strip().lower()
+            if domain and strength:
+                strengths[domain] = strength
+
+    primary = [
+        domain for domain in ("RT", "PK", "TP")
+        if strengths.get(domain) in {"weak", "moderate", "strong"}
+    ]
+    moderate_plus = [
+        domain for domain in primary
+        if _GOV_STRENGTH_RANK.get(strengths.get(domain, ""), -1) >= 2
+    ]
+    supporting_active = strengths.get("MF") in {"weak", "moderate", "strong"}
+
+    if len(moderate_plus) >= 2:
+        return "Cross-scenario pattern", moderate_plus
+    if len(moderate_plus) == 1:
+        return "Single-scenario signal", moderate_plus
+    if len(primary) >= 2:
+        return "Cross-scenario pattern", primary
+    if len(primary) == 1:
+        return "Single-scenario signal", primary
+    if supporting_active:
+        return "Supporting evidence only", []
+    if any(value == "unavailable" for value in strengths.values()):
+        return "Data-dependent review", []
+    return "No governed scenario", []
 
 
 def _build_governed_evidence_profile(
@@ -3762,7 +3837,7 @@ def _build_governed_evidence_profile(
                 for code in b2_domains
             }
         status, priority, case_rules = _gov_case_status(profiles)
-        priority_rule, priority_code, priority_value = _gov_review_priority_rule(status)
+        priority_rule, priority_code, priority_value = _gov_review_priority_rule_for_case(status, priority)
         priority = priority_value
         missing = [
             f"{code}:{profile['note']}"
@@ -3794,7 +3869,7 @@ def _build_governed_evidence_profile(
                 "Missing_Evidence": " | ".join(missing),
                 "Trace_Columns": ", ".join(trace_cols),
                 "Draft_Statement": _governance_statement(status, primary_concern),
-                "Audit_Status": "pass_trace_required" if trace_cols or status in {"None", "Weak", "No substantive evidence pattern"} else "needs_trace_review",
+                "Audit_Status": "pass_trace_required" if trace_cols or status in {"None", "Weak", "No governed scenario", "Data-dependent review"} else "needs_trace_review",
                 **{f"{code}_Strength": profile["strength"] for code, profile in profiles.items()},
             }
         )
@@ -3825,17 +3900,13 @@ def _build_governed_evidence_profile(
 
 
 def _governance_statement(status: str, primary_concern: str) -> str:
-    if status == "Convergent (Traceable)":
-        return f"Multiple domains show convergent traceable evidence ({primary_concern}); expedited human review is required."
-    if status == "Convergent (Context-Dependent)":
-        return f"Multiple domains show convergent but context-dependent evidence ({primary_concern}); contextual records should be reviewed before adjudication."
-    if status == "Isolated (Traceable)":
-        return f"A single traceable domain is elevated ({primary_concern}); objective logs should be checked before adjudication."
-    if status == "Isolated (Context-Dependent)":
-        return f"A single context-dependent domain is elevated ({primary_concern}); interpret cautiously and check legitimate contextual explanations."
+    if status == "Cross-scenario pattern":
+        return f"Multiple governed domains are active ({primary_concern}); contextual records should be reviewed before adjudication."
+    if status == "Single-scenario signal":
+        return f"A single governed domain is elevated ({primary_concern}); interpret cautiously and check legitimate contextual explanations."
     if status == "Weak":
         return "Only weak evidence accumulation was identified from the available evidence."
-    if status == "No substantive evidence pattern":
+    if status in {"Data-dependent review", "No governed scenario"}:
         return "No substantive case-level evidence pattern was identified from the available domains."
     return "No elevated forensic concern was identified from the available evidence."
 
@@ -5589,10 +5660,6 @@ st.markdown("""
         border-left: 4px solid #C87512;
         background: #FFF7ED;
     }
-    .psymas-case-chip.psymas-priority-high_context {
-        border-left: 4px solid #FB923C;
-        background: #FFF1F2;
-    }
     .psymas-case-chip.psymas-priority-critical {
         border-left: 4px solid #DC2626;
         background: #FEF2F2;
@@ -5717,6 +5784,29 @@ st.markdown("""
         letter-spacing: 0.05em;
         margin-bottom: 0.08rem;
     }
+    .psymas-ai-suggestion .source-note {
+        color: #475569 !important;
+        font-size: 0.68rem;
+        line-height: 0.95rem;
+        margin: 0 0 0.18rem 0;
+    }
+    /* The case-level action should read as the primary, affirmative action. */
+    div[class*="st-key-generate_case_explanation_"] button {
+        background: #198754 !important;
+        border: 1px solid #146C43 !important;
+        color: #FFFFFF !important;
+        font-weight: 750 !important;
+        box-shadow: 0 2px 5px rgba(20, 108, 67, 0.2) !important;
+    }
+    div[class*="st-key-generate_case_explanation_"] button:hover {
+        background: #157347 !important;
+        border-color: #0F5132 !important;
+        color: #FFFFFF !important;
+    }
+    div[class*="st-key-generate_case_explanation_"] button p,
+    div[class*="st-key-generate_case_explanation_"] button span {
+        color: #FFFFFF !important;
+    }
     .psymas-ai-suggestion .text {
         min-height: 0;
         max-height: 18rem;
@@ -5786,7 +5876,6 @@ st.markdown("""
     .psymas-priority-pill.low { background: #F8FAFC; color: #475569; border-color: #94A3B8; }
     .psymas-priority-pill.medium { background: #FFF7ED; color: #9A3412; border-color: #C87512; }
     .psymas-priority-pill.high { background: #FFF7ED; color: #9A3412; border-color: #C87512; }
-    .psymas-priority-pill.high_context { background: #FFF1F2; color: #9F1239; border-color: #FB923C; }
     .psymas-priority-pill.critical { background: #FEF2F2; color: #991B1B; border-color: #DC2626; }
     .psymas-priority-pill.unknown { background: #FFFFFF; color: #64748B; border-color: #CBD5E1; }
     .psymas-examinee-priority-legend {
@@ -6289,7 +6378,7 @@ st.markdown("""
         font-size: 0.75rem;
         line-height: 1.15rem;
     }
-    .psymas-adjudication-card.unreviewed { border-left-color: #94A3B8; }
+    .psymas-adjudication-card.no-action { border-left-color: #94A3B8; }
     .psymas-adjudication-card.rule { border-left-color: #C87512; background: #FFFBEB; }
     .psymas-adjudication-card.potential { border-left-color: #C87512; background: #FFF7ED; }
     .psymas-adjudication-card.definite { border-left-color: #DC2626; background: #FEF2F2; }
@@ -6343,7 +6432,7 @@ st.markdown("""
         transform: rotate(-2deg);
         text-transform: uppercase;
     }
-    .psymas-stamp.unreviewed {
+    .psymas-stamp.no-action {
         border-color: #64748B;
         color: #475569 !important;
         background: #F8FAFC;
@@ -6554,6 +6643,65 @@ if st.session_state.get("sidebar_nav") == "Scenario" and st.session_state.get("r
 # Initialize LLM provider once so it's set even if user never opens Settings (e.g. after refresh on Aberrance Summary).
 if "llm_provider" not in st.session_state:
     st.session_state.llm_provider = _preferred_llm_provider()
+
+
+def _llm_connection_signature(provider: str | None = None, model_id: str | None = None) -> str:
+    """Return the provider/model identity for the cached connection result."""
+    provider = provider or _llm_provider()
+    model_id = model_id or _effective_llm_model()
+    return f"{provider}|{model_id}"
+
+
+def _llm_connection_is_current(model_id: str | None = None) -> bool:
+    """Use only a successful test for the currently selected provider and model."""
+    result = st.session_state.get("llm_connection_result")
+    return bool(
+        isinstance(result, (tuple, list))
+        and len(result) >= 1
+        and bool(result[0])
+        and st.session_state.get("llm_connection_signature")
+        == _llm_connection_signature(model_id=model_id)
+    )
+
+
+def _check_llm_connection(*, model_id: str | None = None, provider: str | None = None, timeout: int = 5) -> tuple[bool, str]:
+    """Test the active LLM once and cache the result for the current provider/model."""
+    provider = provider or _llm_provider()
+    model_id = model_id or _effective_llm_model()
+    signature = _llm_connection_signature(provider, model_id)
+    if provider == "openrouter":
+        api_key = _configured_openrouter_api_key()
+        if not api_key:
+            result = (False, "OpenRouter API key is not configured.")
+        else:
+            ok, error, elapsed = _test_openrouter_model(api_key, model_id, timeout=timeout)
+            result = (ok, f"Model responded in {elapsed:.2f}s." if ok else f"Model test failed: {error}")
+    else:
+        previous_url = os.environ.get("OLLAMA_CHAT_URL")
+        # Prefer the endpoint currently shown in Configuration. This lets the
+        # case page connect immediately even before the user saves settings.
+        ollama_url = st.session_state.get("ollama_chat_url_editor") or _configured_ollama_chat_url()
+        os.environ["OLLAMA_CHAT_URL"] = str(ollama_url).strip()
+        try:
+            ok, error, elapsed = _test_ollama_model(model_id, timeout=timeout)
+        finally:
+            if previous_url is None:
+                os.environ.pop("OLLAMA_CHAT_URL", None)
+            else:
+                os.environ["OLLAMA_CHAT_URL"] = previous_url
+        result = (ok, f"Model responded in {elapsed:.2f}s." if ok else f"Model test failed: {error}")
+    st.session_state["llm_connection_result"] = result
+    st.session_state["llm_connection_signature"] = signature
+    return result
+
+
+# A single short health check makes the configured provider available immediately
+# after startup. It is cached by provider/model, so normal Streamlit reruns do not
+# repeatedly call a remote API or Ollama.
+_auto_llm_signature = _llm_connection_signature()
+if st.session_state.get("llm_auto_checked_signature") != _auto_llm_signature:
+    _check_llm_connection(timeout=3)
+    st.session_state["llm_auto_checked_signature"] = _auto_llm_signature
 run_mode = st.session_state.get("run_mode", "Scenario")
 active_workflow_stage = _STAGE_ALIASES.get(st.session_state.get("workflow_stage", "Assessment Data"), st.session_state.get("workflow_stage", "Assessment Data"))
 
@@ -6613,37 +6761,6 @@ if _nav_req in NAV_OPTIONS or _nav_req in FLOW_STAGES or _nav_req in _INTERNAL_N
     active_workflow_stage = _stage
     st.session_state["_psymas_just_nav_programmatic"] = True
 
-# Back-compat: older sessions may still point to removed tool pages
-_LEGACY_TOOL_PAGES = {"Aberrance only": "Aberrance", "IRT only": "IRT", "RT only": "RT", "Full workflow": "Aberrance"}
-if run_mode in _LEGACY_TOOL_PAGES:
-    # Route legacy tool pages to the main Aberrance dashboard instead of the removed Tools page.
-    st.session_state.run_mode = "Aberrance Summary"
-    st.rerun()
-_LEGACY_WORKBENCH_MODES = {
-    "_Workbench Domain Evidence": "_Workbench Evidence Review",
-    "_Workbench Evidence Governance": "_Workbench Evidence Review",
-    "_Workbench Evidence Synthesis": "_Workbench Evidence Review",
-    "_Workbench Review Prioritization": "_Workbench Evidence Review",
-    "_Workbench Review Report": "_Workbench Evidence Review",
-    "_Workbench Report": "_Workbench Evidence Review",
-    "_Workbench Audit Trail": "_Workbench Audit",
-    "_Workbench Audit Configuration": "_Workbench Configuration",
-    "_Workbench Research Tools": "Preparation",
-    "_Workbench Worked Example": "Preparation",
-    "_Workbench Simulation Validation": "Preparation",
-}
-if run_mode in _LEGACY_WORKBENCH_MODES:
-    _legacy_target = _LEGACY_WORKBENCH_MODES[run_mode]
-    if _legacy_target != run_mode:
-        st.session_state.run_mode = _legacy_target
-        st.rerun()
-if run_mode == "Settings":
-    st.session_state.workflow_stage = "Configuration"
-    st.session_state.run_mode = "_Workbench Configuration"
-    st.rerun()
-if run_mode == "Command Center":
-    st.session_state.run_mode = "Aberrance Summary"
-    st.rerun()
 
 with st.sidebar:
     st.markdown(
@@ -6695,6 +6812,8 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+
+
     st.divider()
     _has_resp = bool(st.session_state.get("last_uploaded_responses"))
     _has_rt = bool(st.session_state.get("last_uploaded_rt_data"))
@@ -6844,6 +6963,16 @@ with st.sidebar:
     n_c = len((st.session_state.get("last_uploaded_responses") or [{}])[0]) if n_r else 0
     detect_status = st.session_state.get("detect_job_status", "pending")
     model_short_sb = str(_effective_llm_model()).split("/")[-1]
+    llm_result_sb = st.session_state.get("llm_connection_result")
+    llm_signature_sb = st.session_state.get("llm_connection_signature")
+    current_llm_signature_sb = f"{provider_sb}|{_effective_llm_model()}"
+    llm_connected_sb = bool(
+        isinstance(llm_result_sb, (tuple, list))
+        and len(llm_result_sb) >= 1
+        and bool(llm_result_sb[0])
+        and llm_signature_sb == current_llm_signature_sb
+    )
+    llm_state_sb = "connected" if llm_connected_sb else ("unavailable" if llm_result_sb and not bool(llm_result_sb[0]) else "not tested")
     sidebar_status = [
         ("Response", resp_loaded, f"{n_r}x{n_c}" if resp_loaded else ""),
     ]
@@ -6855,7 +6984,7 @@ with st.sidebar:
         sidebar_status.append(("Answer changes", tt_loaded, str(answer_change_rows) if tt_loaded else ""))
     sidebar_status.extend(
         [
-            ("LLM", True, model_short_sb),
+            ("LLM", llm_connected_sb, f"{model_short_sb} · {llm_state_sb}"),
             ("Agents", backend_ok and detect_status != "error", detect_status if detect_status != "pending" else backend_note),
         ]
     )
@@ -6868,6 +6997,52 @@ with st.sidebar:
         for label, ok, extra in sidebar_status
     )
     st.markdown(f"<div class='psymas-sidebar-status'>{status_html}</div>", unsafe_allow_html=True)
+
+    # Keep setup guidance in the navigation area so users do not have to infer
+    # infrastructure problems from a disabled action on a later page.
+    setup_checks = []
+    if not backend_ok:
+        if str(backend_note).startswith("starting Docker Desktop"):
+            backend_setup_message = "Docker Desktop is starting automatically. The backend will reconnect when it is ready."
+            backend_setup_action = "Retry connection"
+        else:
+            backend_setup_message = "Start Docker Desktop and the PsyMAS backend service."
+            backend_setup_action = "Open Data Setup"
+        setup_checks.append((
+            "Docker / backend",
+            backend_setup_message,
+            "Assessment Data",
+            backend_setup_action,
+        ))
+    if not llm_connected_sb:
+        if provider_sb == "openrouter" and not or_key_sb.strip():
+            llm_setup_message = "Add an OpenRouter API key in Configuration."
+        elif provider_sb == "local_ollama":
+            llm_setup_message = "Start Ollama and connect the selected local model."
+        else:
+            llm_setup_message = "Check the selected LLM connection in Configuration."
+        setup_checks.append(("LLM", llm_setup_message, "Configuration", "Open Configuration"))
+
+    if setup_checks:
+        st.markdown("<div class='psymas-sidebar-setup-title'>Setup checks</div>", unsafe_allow_html=True)
+        for check_label, check_message, check_target, check_action in setup_checks:
+            st.markdown(
+                "<div class='psymas-sidebar-setup-item'>"
+                f"<strong>{html.escape(check_label)}</strong>"
+                f"<span>{html.escape(check_message)}</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                check_action,
+                key=f"sidebar_setup_{check_target}_{check_label}",
+                use_container_width=True,
+            ):
+                if check_action == "Retry connection":
+                    st.session_state.pop("_psymas_local_stack_start_attempted", None)
+                    st.session_state.pop("_psymas_local_stack_start_note", None)
+                st.session_state["_nav_request"] = check_target
+                st.rerun()
     st.divider()
 
 # Global action hierarchy: neutral buttons by default, primary only for the next step.
@@ -7108,6 +7283,31 @@ st.markdown(
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+    .psymas-sidebar-setup-title {
+        margin: 0.8rem 0 0.38rem 0;
+        color: #334155;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+    .psymas-sidebar-setup-item {
+        display: grid;
+        gap: 0.12rem;
+        margin: 0.34rem 0 0.42rem 0;
+        padding-left: 0.55rem;
+        border-left: 3px solid #C87512;
+        color: #334155;
+        font-size: 0.7rem;
+        line-height: 1.25;
+    }
+    .psymas-sidebar-setup-item strong {
+        color: #0F172A;
+        font-weight: 750;
+    }
+    .psymas-sidebar-setup-item span {
+        color: #64748B;
     }
     .psymas-result-meta {
         color: #111827 !important;
@@ -8499,7 +8699,7 @@ def _review_priority_pill_html(priority: object) -> str:
 
 _CASE_REVIEW_PRIORITY_OPTIONS: tuple[str, ...] = (
     "Critical / Expedited",
-    "High (Context-Heavy)",
+    "High · Context review",
     "High",
     "Medium",
     "Low",
@@ -8507,7 +8707,7 @@ _CASE_REVIEW_PRIORITY_OPTIONS: tuple[str, ...] = (
 
 _CASE_PRIORITY_FILTER_SHORT: dict[str, str] = {
     "Critical / Expedited": "Critical",
-    "High (Context-Heavy)": "High·Ctx",
+    "High · Context review": "High·Ctx",
     "High": "High",
     "Medium": "Medium",
     "Low": "Low",
@@ -8515,7 +8715,7 @@ _CASE_PRIORITY_FILTER_SHORT: dict[str, str] = {
 
 _CASE_PRIORITY_SORT: dict[str, int] = {
     "Critical / Expedited": 0,
-    "High (Context-Heavy)": 1,
+    "High · Context review": 1,
     "High": 2,
     "Medium": 3,
     "Low": 4,
@@ -8534,6 +8734,10 @@ def _case_review_queue_sorted(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "Examinee_ID" not in df.columns:
         return df
     out = df.copy()
+    if "Review_Priority" in out.columns:
+        out["Review_Priority"] = out["Review_Priority"].astype(str).str.strip()
+    if "Evidence_Status" in out.columns:
+        out["Evidence_Status"] = out["Evidence_Status"].astype(str).str.strip()
     if "Review_Priority" in out.columns:
         out["_priority_rank"] = out["Review_Priority"].astype(str).map(_CASE_PRIORITY_SORT).fillna(99)
         out = out.sort_values(
@@ -8678,7 +8882,7 @@ def _case_review_list_df(review_queue_df: pd.DataFrame) -> pd.DataFrame:
     for _, row in display_df.iterrows():
         examinee_id = str(row.get("Examinee_ID", ""))
         payload = decisions.get(examinee_id, {}) if isinstance(decisions, dict) else {}
-        final_values.append(str(payload.get("final_decision", "") or ""))
+        final_values.append(str(payload.get("final_decision") or "").strip())
         note_values.append(str(payload.get("reviewer_note", "") or ""))
     display_df["Human_Final_Decision"] = final_values
     display_df["Reviewer_Note"] = note_values
@@ -8870,7 +9074,7 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
         """,
         unsafe_allow_html=True,
     )
-    decision_options = ["", "No Issue", "Rule Violation", "Potential Misconduct", "Definite Misconduct"]
+    decision_options = [""] + HUMAN_DECISION_OPTIONS
     if "Examinee_ID" in list_df.columns:
         list_df = list_df.copy()
         list_df["_Examinee_ID_Num"] = pd.to_numeric(list_df["Examinee_ID"], errors="coerce")
@@ -8883,9 +9087,9 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
     table_df = pd.DataFrame()
     table_df["Examinee"] = list_df["Examinee_ID"].astype(str).map(lambda value: f"#{value}")
     table_df["_Examinee_ID_Num"] = pd.to_numeric(list_df["Examinee_ID"], errors="coerce")
-    table_df["Priority"] = list_df["Review_Priority"].astype(str) if "Review_Priority" in list_df.columns else ""
+    table_df["Priority"] = list_df["Review_Priority"].astype(str).str.strip() if "Review_Priority" in list_df.columns else ""
     if "Evidence_Status" in list_df.columns:
-        system_profile = list_df["Evidence_Status"].astype(str)
+        system_profile = list_df["Evidence_Status"].astype(str).str.strip()
     elif "Review_Queue_Status" in list_df.columns:
         system_profile = list_df["Review_Queue_Status"].astype(str)
     else:
@@ -8905,7 +9109,7 @@ def _render_case_review_queue_list(review_queue_df: pd.DataFrame) -> str:
     if "Human_Decision" in list_df.columns:
         fallback_decision = list_df["Human_Decision"].astype(str)
         human_decision = human_decision.where(human_decision.str.strip().ne("") & human_decision.ne("nan"), fallback_decision)
-    table_df["Human decision"] = human_decision.replace("nan", "")
+    table_df["Human decision"] = human_decision.replace("nan", "").str.strip()
     table_df["Reviewer note"] = list_df["Reviewer_Note"].astype(str).replace("nan", "") if "Reviewer_Note" in list_df.columns else ""
     column_order = ["_Examinee_ID_Num", "Examinee", "Priority", "System profile", "Concern", "Domains", "Human decision", "Reviewer note"]
     st.markdown(
@@ -9145,9 +9349,6 @@ function(params) {
     const lower = value.toLowerCase();
     if (lower.includes("critical") || lower.includes("expedited")) {
         return { backgroundColor: "#FDF2F8", color: "#831843", fontWeight: "700", borderLeft: "3px solid #DC2626" };
-    }
-    if (lower.includes("context-heavy") || (lower.includes("high") && lower.includes("context"))) {
-        return { backgroundColor: "#FFF1F2", color: "#9F1239", fontWeight: "700", borderLeft: "3px solid #FB923C" };
     }
     if (lower === "high" || lower.startsWith("high")) {
         return { backgroundColor: "#FFF7ED", color: "#9A3412", fontWeight: "700", borderLeft: "3px solid #C87512" };
@@ -9785,20 +9986,43 @@ def _sync_review_decisions_from_store(*, force: bool = False) -> None:
     if not _run_store_ready():
         return
     run_id = _active_run_id()
-    if not force and st.session_state.get("_review_decisions_synced_run_id") == run_id:
-        return
+    already_synced = st.session_state.get("_review_decisions_synced_run_id") == run_id
     stored = get_run_store().load_review_decisions(run_id)
     if not stored:
         st.session_state["_review_decisions_synced_run_id"] = run_id
         return
+    # The run database is authoritative after a run is loaded.  The previous
+    # merge policy kept stale session reports for the same examinee, so a
+    # freshly reopened run could show an old deterministic summary instead of
+    # the saved LLM explanation.  Unsaved widget edits are still protected by
+    # the per-run sync guard above; once the run changes, replace them with the
+    # persisted records.
     merged = dict(st.session_state.get("case_review_decisions") or {})
     for examinee_id, payload in stored.items():
-        if examinee_id not in merged or not str(merged[examinee_id].get("final_decision", "")).strip():
+        if isinstance(payload, dict) and "final_decision" in payload:
+            payload = dict(payload)
+            payload["final_decision"] = str(payload.get("final_decision") or "").strip()
+        current = merged.get(examinee_id)
+        saved_text = str(payload.get("llm_explanation", "") or "").strip()
+        current_text = str(current.get("llm_explanation", "") or "").strip() if isinstance(current, dict) else ""
+        # A prior UI session may have cached the short deterministic summary.
+        # Replace that stale narrative with a persisted model report even when
+        # the run ID itself has already been marked as synced.
+        stale_summary = current_text.startswith("System priority is ")
+        if force or not already_synced or not current or (saved_text and stale_summary):
             merged[examinee_id] = payload
-        else:
-            current = merged[examinee_id]
-            if isinstance(current, dict):
-                current.setdefault("reviewer_note", payload.get("reviewer_note", ""))
+            if saved_text and stale_summary:
+                # Rehydrate the persisted report on this same Streamlit
+                # session instead of retaining the old deterministic summary.
+                case_id = str(examinee_id)
+                for key in (
+                    f"case_reviewer_explanation_{case_id}",
+                    f"case_llm_status_{case_id}",
+                    f"case_llm_validation_{case_id}",
+                    f"case_llm_fallback_{case_id}",
+                    f"case_report_signature_{case_id}",
+                ):
+                    st.session_state.pop(key, None)
     st.session_state["case_review_decisions"] = merged
     st.session_state["_review_decisions_synced_run_id"] = run_id
 
@@ -9922,6 +10146,10 @@ _SNAPSHOT_SESSION_INPUT_KEYS: tuple[str, ...] = (
     "prep_compromised_items",
     "prep_answer_changes_file_name",
     "prep_compromised_file_name",
+    "prep_examinee_metadata",
+    "prep_examinee_metadata_file_name",
+    "prep_item_metadata",
+    "prep_item_metadata_file_name",
     "last_detect_agents",
     "last_irt_itemtype",
     "main_irt_itemtype",
@@ -10045,6 +10273,24 @@ def _restore_evaluated_snapshot(data: bytes, *, preserve_review_decisions: bool 
     """Restore evaluated run from zip; hydrates session so Evidence Review works without Detect."""
     store = get_run_store()
     preserved_decisions: dict[str, dict] = {}
+    try:
+        # Validate the release before unpacking: an obsolete snapshot must not
+        # overwrite the current SQLite run store before it is rejected.
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            snapshot_manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        snapshot_version = str(
+            snapshot_manifest.get("generation_software_version")
+            or snapshot_manifest.get("software_version")
+            or ""
+        ).strip()
+        if snapshot_version != APP_VERSION:
+            return (
+                False,
+                f"Snapshot was generated with PsyMAS v{snapshot_version or 'unknown'}; "
+                f"generate a new snapshot with PsyMAS v{APP_VERSION} before loading Demo.",
+            )
+    except Exception as exc:
+        return False, f"Could not validate snapshot manifest: {exc}"
     if preserve_review_decisions:
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -10359,7 +10605,7 @@ def _render_demo_evaluated_snapshot_panel() -> None:
             st.download_button(
                 "Download evaluated snapshot",
                 data=snapshot_bytes or b"",
-                file_name="psymas_demo_evaluated_snapshot.zip",
+                file_name="psymas_demo_evaluated_snapshot_v0.7.7.zip",
                 mime="application/zip",
                 disabled=not snapshot_bytes,
                 use_container_width=True,
@@ -10474,8 +10720,15 @@ def _compact_case_table_text(df: pd.DataFrame, columns: list[str], max_rows: int
     return out.to_csv(index=False)
 
 
-def _selected_case_trace_for_llm(case_trace: pd.DataFrame, max_per_domain: int = 2) -> pd.DataFrame:
-    """Keep only the strongest counted index traces for the reviewer-facing LLM prompt."""
+def _selected_case_trace_for_llm(
+    case_trace: pd.DataFrame,
+    max_per_domain: int | None = None,
+) -> pd.DataFrame:
+    """Keep family-level counted traces for the reviewer-facing LLM prompt.
+
+    Correction variants remain available in the evidence tables and audit store,
+    but the narrative prompt must not present them as independent evidence.
+    """
     if not isinstance(case_trace, pd.DataFrame) or case_trace.empty:
         return pd.DataFrame()
     trace = case_trace.copy()
@@ -10526,12 +10779,33 @@ def _selected_case_trace_for_llm(case_trace: pd.DataFrame, max_per_domain: int =
     trace = trace.sort_values(["_domain_rank", "_use_rank", "_role_rank", "Function", "_index_name"])
     selected_parts = []
     for domain in ["RT", "PK", "TP", "MF", "SIM", "CP"]:
-        sub = trace[trace["Domain"].astype(str).eq(domain)].head(max_per_domain)
+        sub = trace[trace["Domain"].astype(str).eq(domain)].copy()
+        if sub.empty:
+            continue
+        family_column = next(
+            (column for column in ("Aggregation_Family", "aggregation_family") if column in sub.columns),
+            None,
+        )
+        if family_column:
+            sub["_family_key"] = sub[family_column].astype(str).str.strip()
+        else:
+            sub["_family_key"] = ""
+        sub["_family_key"] = sub["_family_key"].where(
+            sub["_family_key"].ne(""), sub["_index_name"]
+        )
+        sub = sub.drop_duplicates("_family_key", keep="first")
+        if max_per_domain is not None:
+            sub = sub.head(max_per_domain)
+        if family_column:
+            sub["Index"] = sub["_family_key"].map(
+                lambda value: f"{value} family" if value else ""
+            )
         if not sub.empty:
             selected_parts.append(sub)
     if not selected_parts:
         selected_parts = [trace.head(8)]
-    out = pd.concat(selected_parts, ignore_index=True).drop(columns=[c for c in trace.columns if c.startswith("_")], errors="ignore")
+    out = pd.concat(selected_parts, ignore_index=True) if selected_parts else pd.DataFrame()
+    out = out.drop(columns=[c for c in out.columns if c.startswith("_")], errors="ignore")
     return out
 
 
@@ -10653,7 +10927,7 @@ def _case_pk_prompt_cue(examinee_id: str) -> str:
     )
 
 
-def _case_cp_prompt_cue(examinee_id: str) -> str:
+def _case_cp_prompt_cue(examinee_id: str, *, include_answer_changes: bool = True) -> str:
     """Compact CP localization summary for LLM review guidance."""
     flags = _forensic_result_flags_from_session()
     cp_data = flags.get("cp_agent", {}) if isinstance(flags, dict) else {}
@@ -10689,11 +10963,16 @@ def _case_cp_prompt_cue(examinee_id: str) -> str:
     ]
     unique_n = len(set(positions))
     agreement = "high" if unique_n <= 2 else ("moderate" if unique_n <= 4 else "low")
+    inspection_text = (
+        f"Tell the reviewer to inspect accuracy, response time, and answer changes before and after item {main_item}."
+        if include_answer_changes
+        else f"Tell the reviewer to inspect accuracy and response time before and after item {main_item}."
+    )
     return (
         "CP cue: "
         f"main estimated shift near item {main_item}; method agreement {agreement}; "
         f"method locations: {'; '.join(details)}. "
-        f"Tell the reviewer to inspect accuracy, response time, and answer changes before and after item {main_item}. "
+        f"{inspection_text} "
         "This is localization/display-only guidance unless a calibrated CP rule is active."
     )
 
@@ -10718,7 +10997,7 @@ def _build_case_reviewer_context(
     summary_items = {
         "Examinee_ID": selected_id,
         "Review_Queue_Status": case_row.get("Review_Queue_Status", ""),
-        "Review_Priority": case_row.get("Review_Priority", ""),
+        "Review_Priority": str(case_row.get("Review_Priority", "") or "").strip(),
         "Domains_For_Review": case_row.get("Domains_For_Review", ""),
         "Highest_Domain_Strength": case_row.get("Highest_Domain_Strength", ""),
         "Rules_Triggered": case_row.get("Rule_IDs_Triggered", ""),
@@ -10726,7 +11005,11 @@ def _build_case_reviewer_context(
         "Human_Final_Decision": case_row.get("Human_Final_Decision", "") or case_row.get("Human_Decision", ""),
         "Human_Reviewer_Note": case_row.get("Human_Reviewer_Note", "") or case_row.get("Reviewer_Note", ""),
     }
-    selected_trace = _selected_case_trace_for_llm(case_trace, max_per_domain=2)
+    current_profile, current_primary_domains = _current_case_profile_from_domains(case_domains)
+    summary_items["Current_Evidence_Profile"] = current_profile
+    # Pass one row per eligible family. Keep the prompt small enough for local
+    # models to reason about one case instead of summarizing the packet itself.
+    selected_trace = _selected_case_trace_for_llm(case_trace, max_per_domain=4)
     domain_cols = [
         "Domain",
         "Strength",
@@ -10741,6 +11024,8 @@ def _build_case_reviewer_context(
         "Domain",
         "Function",
         "Index",
+        "Aggregation_Family",
+        "Correction_Variant",
         "Evidence_Use",
         "Role",
         "Flag_Type",
@@ -10756,25 +11041,94 @@ def _build_case_reviewer_context(
             strength = str(row.get("Strength", "") or "").strip().lower()
             if strength in {"weak", "moderate", "strong"}:
                 active_domains.append(f"{row.get('Domain')}: {strength}")
-    raw_input_cues = [
-        _case_pk_prompt_cue(selected_id),
-        _case_cp_prompt_cue(selected_id),
-    ]
+    primary_domain_strengths = {}
+    supporting_domain_strengths = {}
+    for item in active_domains:
+        domain, _, strength = item.partition(":")
+        domain = domain.strip().upper()
+        strength = strength.strip().lower()
+        if domain in {"RT", "PK", "TP"}:
+            primary_domain_strengths[domain] = strength
+        elif domain == "MF":
+            supporting_domain_strengths[domain] = strength
+    primary_text = ", ".join(
+        f"{domain} {primary_domain_strengths[domain]}"
+        for domain in ("RT", "PK", "TP")
+        if domain in primary_domain_strengths
+    ) or "none"
+    # Keep the narrative packet limited to governed domains that are active for
+    # this examinee. Inactive detector rows remain available in the evidence
+    # tables and audit trail, but should not invite a local model to promote
+    # them into the case explanation.
+    active_domain_codes = {
+        item.split(":", 1)[0].strip().upper()
+        for item in active_domains
+        if ":" in item
+    }
+    if isinstance(selected_trace, pd.DataFrame) and "Domain" in selected_trace.columns:
+        selected_trace = selected_trace[
+            selected_trace["Domain"].astype(str).str.upper().isin(active_domain_codes)
+        ].copy()
+    if current_profile == "Cross-scenario pattern":
+        priority_basis = (
+            f"{primary_text} -> cross-scenario pattern -> "
+            f"{summary_items['Review_Priority'] or 'priority not assigned'}"
+        )
+    elif current_profile == "Single-scenario signal":
+        priority_basis = (
+            f"{primary_text} -> single-scenario signal -> "
+            f"{summary_items['Review_Priority'] or 'priority not assigned'}"
+        )
+    elif current_profile == "Supporting evidence only":
+        priority_basis = (
+            f"Supporting MF evidence only -> supporting evidence only -> "
+            f"{summary_items['Review_Priority'] or 'priority not assigned'}"
+        )
+    else:
+        priority_basis = f"{current_profile} -> {summary_items['Review_Priority'] or 'priority not assigned'}"
+    # Only expose PK item-level cues when PK is an active governed domain.
+    # Otherwise the model may carry an exposed-item check into a case whose
+    # PK evidence is explicitly ``none``.
+    pk_active = any(
+        str(row.get("Domain", "")).upper() == "PK"
+        and str(row.get("Strength", "")).strip().lower() in {"weak", "moderate", "strong"}
+        for _, row in case_domains.iterrows()
+    ) if isinstance(case_domains, pd.DataFrame) and not case_domains.empty else False
+    raw_input_cues = []
+    if pk_active:
+        raw_input_cues.append(_case_pk_prompt_cue(selected_id))
+    else:
+        raw_input_cues.append("PK item cue: not applicable; no governed PK evidence is active for this case.")
+    tp_active = any(
+        str(row.get("Domain", "")).upper() == "TP"
+        and str(row.get("Strength", "")).strip().lower() in {"weak", "moderate", "strong"}
+        for _, row in case_domains.iterrows()
+    ) if isinstance(case_domains, pd.DataFrame) and not case_domains.empty else False
+    raw_input_cues.append(
+        _case_cp_prompt_cue(selected_id, include_answer_changes=tp_active)
+    )
     return (
-        "Evidence packet source\n"
+        "BEGIN CASE PACKET\n"
+        "This packet is evidence for one examinee. It is not a document to summarize.\n"
+        + "PACKET_SOURCE: "
         + context_source
-        + "\nCase summary\n"
+        + "\nCASE_SUMMARY\n"
         + pd.DataFrame([summary_items]).to_csv(index=False)
-        + "\nActive governed domains\n"
+        + "\nACTIVE_GOVERNED_DOMAINS\n"
         + ("; ".join(active_domains) if active_domains else "No active governed domains.")
-        + "\nDomain evidence\n"
+        + "\nPRIORITY_BASIS\n"
+        + priority_basis
+        + "\nSUPPORTING_DOMAIN_CONTEXT\n"
+        + ("; ".join(f"{d} {s}" for d, s in supporting_domain_strengths.items()) or "none")
+        + "\nDOMAIN_EVIDENCE_FOR_THIS_EXAMINEE\n"
         + _compact_case_table_text(case_domains, domain_cols, max_rows=12)
-        + "\nEvidence data: selected key index evidence for LLM interpretation\n"
-        + _compact_case_table_text(selected_trace, trace_cols, max_rows=12)
-        + "\nRaw-input derived review cues for interpretation and localization\n"
+        + "\nGOVERNED_INDEX_FAMILIES_FOR_THIS_EXAMINEE\n"
+        + _compact_case_table_text(selected_trace, trace_cols, max_rows=24)
+        + "\nRAW_REVIEW_CUES_FOR_NAVIGATION_ONLY\n"
         + "\n".join(raw_input_cues)
-        + "\nEvidence data: display-only and auxiliary indices for localization/audit, not counted unless explicitly governed\n"
-        + _compact_case_table_text(case_auxiliary, aux_cols, max_rows=20)
+        + "\nNON_COUNTED_CONTEXT_ONLY\n"
+        + _compact_case_table_text(case_auxiliary, aux_cols, max_rows=8)
+        + "\nEND CASE PACKET"
     )
 
 
@@ -10791,6 +11145,31 @@ def _evidence_bound_case_summary(
     governed_parts: list[str] = []
     context_parts: list[str] = []
 
+    def friendly_support(domain: str, hits: str) -> str:
+        value = str(hits or "").strip()
+        if not value:
+            return ""
+        tokens = [token.strip() for token in re.split(r"[,;]", value) if token.strip()]
+        short = []
+        for token in tokens:
+            token = re.sub(r"^detect_[a-z]+:", "", token, flags=re.IGNORECASE)
+            token = re.sub(r"_flag$|_pval_flag$", "", token, flags=re.IGNORECASE)
+            token = re.sub(r"^(rg|tt|pm|pk|ac|as)_", "", token, flags=re.IGNORECASE)
+            if token.lower().startswith("edi_sd"):
+                token = "EDI_SD family"
+            elif token.lower().startswith("gbt_sd"):
+                token = "GBT_SD family"
+            if token not in short:
+                short.append(token)
+        names = ", ".join(short[:4])
+        labels = {
+            "MF": "response-pattern fit",
+            "RT": "rapid-response timing",
+            "PK": "exposed-item performance",
+            "TP": "answer-change",
+        }
+        return f"{labels.get(domain, domain)} indicators ({names})" if names else labels.get(domain, domain)
+
     if not domain_df.empty and "Domain" in domain_df.columns:
         for domain in ["MF", "RT", "PK", "TP"]:
             rows = domain_df[domain_df["Domain"].astype(str).eq(domain)]
@@ -10800,13 +11179,25 @@ def _evidence_bound_case_summary(
             strength = str(rec.get("Strength", "") or "").strip().lower()
             if strength not in {"weak", "moderate", "strong"}:
                 continue
-            hits = str(rec.get("Primary_Hits", "") or "").strip() or str(rec.get("Supporting_Hits", "") or "").strip()
+            hits = "; ".join(
+                value for value in (
+                    str(rec.get("Primary_Hits", "") or "").strip(),
+                    str(rec.get("Supporting_Hits", "") or "").strip(),
+                ) if value
+            )
+            trace_primary, trace_supporting = _case_family_hits_from_trace(trace_df, domain)
+            hits = "; ".join(dict.fromkeys(
+                value.strip()
+                for text in (hits, ", ".join(trace_primary), ", ".join(trace_supporting))
+                for value in re.split(r"[,;]", text or "")
+                if value.strip()
+            ))
             rule = str(rec.get("Strength_Rule", "") or "").strip()
             label = _DOMAIN_LABELS.get(domain, domain)
             governed_parts.append(
                 f"{domain} ({label}) is {strength}"
                 + (f" via {rule}" if rule else "")
-                + (f"; main support: {_shorten_report_text(hits, 120)}" if hits else "")
+                + (f"; main support: {friendly_support(domain, hits)}" if hits else "")
             )
         for domain in ["SIM", "CP"]:
             rows = domain_df[domain_df["Domain"].astype(str).eq(domain)]
@@ -10825,33 +11216,100 @@ def _evidence_bound_case_summary(
             elif strength == "unavailable":
                 context_parts.append(f"{domain} unavailable.")
 
-    if not trace_df.empty and "Flag" in trace_df.columns:
-        flagged = trace_df[trace_df["Flag"].astype(str).str.lower().isin({"1", "true", "yes"})].copy()
-        if not flagged.empty:
-            for domain in ["MF", "RT", "PK", "TP"]:
-                sub = flagged[flagged.get("Domain", pd.Series(dtype=str)).astype(str).eq(domain)]
-                if sub.empty:
-                    continue
-                tokens = []
-                for _, row in sub.head(3).iterrows():
-                    token = f"{row.get('Function', '')}:{row.get('Index', '')}".strip(":")
-                    if token and token not in tokens:
-                        tokens.append(token)
-                if tokens:
-                    governed_parts.append(f"{domain} flagged indices include {', '.join(tokens)}")
-
-    if not governed_parts:
-        governed_text = "No governed index path is currently elevated."
-    else:
-        governed_text = " ".join(governed_parts[:5])
-    context_text = " ".join(context_parts[:3]) if context_parts else "No additional context-only evidence is highlighted."
+    active_labels = [
+        domain for domain in ["MF", "RT", "PK", "TP"]
+        if any(part.startswith(f"{domain} (") for part in governed_parts)
+    ]
     priority = str(case_row.get("Review_Priority", "") or "").strip() or "not assigned"
-    status = str(case_row.get("Evidence_Status", "") or "").strip() or "not assigned"
+    # Recompute the displayed profile from the current domain table.  This
+    # prevents legacy snapshot labels such as "Convergent (Traceable)" from
+    # leaking into the report after the rulebook has been updated.
+    status, _ = _current_case_profile_from_domains(domain_df)
+    active_set = set(active_labels)
+    if {"RT", "TP"}.issubset(active_set):
+        conclusion = (
+            "Review this case for unusually timed responses and concentrated answer changes. "
+            "First check whether the timing and answer-change patterns occur in the same item range."
+        )
+    elif {"RT", "PK"}.issubset(active_set):
+        conclusion = (
+            "Review this case for unusual response timing and performance on exposed or compromised items. "
+            "First compare the examinee's timing and exposed-item performance with the available reference data."
+        )
+    elif {"PK", "TP"}.issubset(active_set):
+        conclusion = (
+            "Review this case for unusual performance on exposed or compromised items and answer-change patterns. "
+            "First check whether the changed responses involve the same items."
+        )
+    elif "PK" in active_set:
+        conclusion = (
+            "Review this case for unusual performance on exposed or compromised items. "
+            "First compare exposed-item accuracy and timing with the available reference data."
+        )
+    elif "TP" in active_set:
+        conclusion = (
+            "Review this case for unusual answer-change patterns. "
+            "First inspect the direction and concentration of changes across the test."
+        )
+    elif "RT" in active_set:
+        conclusion = (
+            "Review this case for unusual response timing. "
+            "First compare item response times with the available item-level reference pattern."
+        )
+    elif active_labels:
+        conclusion = "Review the flagged response pattern and confirm whether contextual information explains it."
+    else:
+        conclusion = "No governed evidence path is currently elevated for this case."
+    governed_text = "\n".join(governed_parts[:4]) if governed_parts else "No governed index path is currently elevated."
+    context_text = "\n".join(context_parts[:3]) if context_parts else "No additional context-only evidence is highlighted."
+    pk_data_text = ""
+    if "PK" in active_set:
+        # Keep the deterministic fallback concrete: the reviewer should see
+        # the exposed-item comparison that qualifies the PK interpretation.
+        pk_data_text = _case_pk_prompt_cue(str(case_row.get("Examinee_ID", "")))
+    if {"RT", "PK"}.issubset(active_set):
+        pattern_text = (
+            "The governed pattern combines moderate response-time evidence with strong preknowledge evidence; "
+            "review timing and exposed-item performance together."
+        )
+    elif {"RT", "TP"}.issubset(active_set):
+        pattern_text = (
+            "The governed pattern combines response-time evidence with tampering evidence; "
+            "review whether the timing and answer-change patterns occur in the same item range."
+        )
+    elif {"PK", "TP"}.issubset(active_set):
+        pattern_text = (
+            "The governed pattern combines preknowledge and tampering evidence; "
+            "review whether answer changes involve exposed or compromised items."
+        )
+    elif len(active_set) == 1:
+        pattern_text = f"The governed pattern is limited to {next(iter(active_set))} evidence."
+    else:
+        pattern_text = "No multi-domain governed evidence pattern is active."
+    actions = []
+    if "RT" in active_set:
+        actions.append("compare flagged timing families with response-time records")
+    if "PK" in active_set:
+        actions.append("inspect all listed exposed/compromised items, separating correct and incorrect responses, and compare their accuracy and timing with the available reference data")
+    if "TP" in active_set:
+        actions.append("review initial/final responses and the direction and concentration of answer changes")
+    if "MF" in active_set:
+        actions.append("check whether the response-pattern fit evidence is explained by the active scenario domains")
+    action_text = "; then ".join(actions) if actions else "review the available evidence and missing-data notes"
+    support_text = f"{governed_text}\n"
+    if pk_data_text:
+        support_text += f"{pk_data_text}\n"
+    support_text += f"{context_text}\n\n"
     return (
-        f"System priority: {priority}; evidence profile: {status}. "
-        f"{governed_text} "
-        f"{context_text} "
-        "This is a review-support summary based on governed forensic indices, not a misconduct conclusion."
+        "1. Direct review conclusion\n"
+        f"{conclusion}\n\n"
+        "2. Evidence pattern\n"
+        f"System priority is {priority}; the governed case profile is {status}. {pattern_text} "
+        "The profile organizes review effort and is not a misconduct conclusion.\n\n"
+        "3. Main index support\n"
+        f"{support_text}"
+        "4. Recommended reviewer action\n"
+        f"{action_text}; then record whether contextual evidence supports or qualifies the pattern."
     )
 
 
@@ -10879,7 +11337,10 @@ def _case_review_focus_summary(
     except (TypeError, ValueError):
         low_score = False
 
-    cp_cue = _case_cp_prompt_cue(selected_id)
+    cp_cue = _case_cp_prompt_cue(
+        selected_id,
+        include_answer_changes="TP" in active,
+    )
     cp_item_match = re.search(r"item\s+(\d+)", cp_cue, flags=re.IGNORECASE)
     cp_item = cp_item_match.group(1) if cp_item_match else ""
 
@@ -10925,18 +11386,37 @@ def _generate_case_reviewer_explanation(
     case_trace: pd.DataFrame,
     case_auxiliary: pd.DataFrame,
     model_id: str | None = None,
+    provider: str | None = None,
 ) -> str:
     context = _build_case_reviewer_context(selected_id, case_row, case_domains, case_trace, case_auxiliary)
     prompt = _case_reviewer_prompt(context)
     load_dotenv()
-    text, err = _call_selected_llm_text(prompt, model_id=model_id, timeout=90)
+    # Local models can need substantially longer for the evidence-bound case note
+    # than for the short connection test used in Configuration.
+    provider = provider or _llm_provider()
+    llm_timeout = 180 if provider == "local_ollama" else 90
+    text, err = _call_selected_llm_text(prompt, model_id=model_id, provider=provider, timeout=llm_timeout)
     if text and not err:
         validated, violations = _validate_llm_case_report(
             text, case_row, case_domains, case_trace, case_auxiliary
         )
         if violations:
+            # Do not make a second slow model request. The deterministic
+            # validator already returns a safe evidence-bound fallback, which
+            # keeps case review responsive and prevents an unchecked draft from
+            # reaching the UI, database, or PDF.
+            st.session_state[f"case_llm_fallback_{selected_id}"] = True
+            st.session_state[f"case_llm_validation_{selected_id}"] = (
+                "The model draft did not pass the evidence-language audit; a deterministic evidence preview is shown. "
+                + "Reasons: "
+                + "; ".join(violations[:3])
+            )
             return validated
-        return text
+        st.session_state[f"case_llm_fallback_{selected_id}"] = False
+        st.session_state[f"case_llm_validation_{selected_id}"] = "Generated and passed the evidence-language audit."
+        return validated
+    st.session_state[f"case_llm_fallback_{selected_id}"] = False
+    st.session_state[f"case_llm_validation_{selected_id}"] = "The model did not return a usable response."
     return _format_llm_error(err or "No selected LLM model returned a response.")
 
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -10967,6 +11447,8 @@ def _generate_case_reviewer_explanation(
 
 DEFAULT_CASE_REVIEWER_PROMPT = """You are a senior psychometric forensic reviewer writing a concise case-review support note for PsyMAS.
 
+This is an individual examinee case review, not a description of the software, a dataset, a machine-learning system, or detector performance. Never write phrases such as "This appears to be a report from a machine learning system", "system performance", "the system is functioning correctly", or "the report shows how the dataset can be used". Begin with the examinee's review concern and use the supplied governed evidence for that case only.
+
 Use only the supplied case evidence packet. The packet may contain two kinds of information: governed evidence data and raw-input-derived review cues. Keep these roles separate.
 
 Evidence data to use for the review conclusion:
@@ -10982,9 +11464,15 @@ Raw inputs and derived review cues to use only for explanation and reviewer navi
 - compromised_items.csv: exposed/compromised item list; use to explain PK item-level checks such as exposed-item accuracy and response time.
 - answer_changes.csv: initial/final response or changed-item records; use to explain TP/tampering checks and whether changes cluster by item range.
 - CP localization outputs: item or item range where a shift is estimated; use as an inspection guide, not as counted evidence unless CP has a calibrated governed rule.
+- CP is a localization/display-only cue in the current rulebook. It may identify an item or range to inspect, but it must not be described as an active priority domain or as evidence strength.
 
 Evidence hierarchy:
 - Governed evidence data determines the review-support recommendation.
+- Priority basis is the controlling interpretation path. First explain the supplied PRIORITY_BASIS; do not recompute priority from raw indices.
+- Active primary domains (RT, PK, TP) determine the case profile and priority. MF is supporting context only. SIM and CP are non-priority context unless the rulebook explicitly marks them as governed.
+- Use only the current case-profile vocabulary: "No governed scenario", "Single-scenario signal", "Supporting evidence only", "Cross-scenario pattern", or "Data-dependent review". Never use legacy labels such as "Convergent", "Isolated", "Limited", "No substantive evidence pattern", "Convergent (Traceable)", "Convergent (Context-Dependent)", or "Highly Verifiable".
+- When two or more primary domains among RT, PK, and TP are active at moderate or strong level, describe the profile as "Cross-scenario pattern". MF does not create a second scenario domain.
+- Use index families only to explain the active domains named in PRIORITY_BASIS. Do not elevate an inactive domain because an auxiliary or raw cue is present.
 - Raw inputs explain what the reviewer should inspect and why.
 - Simulation truth labels, if present, are validation-only and must not be used for an individual case interpretation.
 - Missing raw inputs should be explicitly noted as a limitation, not silently ignored.
@@ -11007,11 +11495,15 @@ Decision boundary:
 - Do not use a human-selected B9 label in the narrative. B9 is displayed separately as a human adjudication field.
 - Never describe a binary flag value such as 1.0 as a probability, magnitude, or proof of unusually fast behavior.
 - Do not say the examinee "had prior familiarity", "used a strategy", "obtained answers without understanding", or "compromised integrity".
+- When TP is none or unavailable, do not present tampering or answer-change evidence as governed, flagged, or active. You may still tell the reviewer to inspect supplied answer-change or initial/final-response records as a raw-data check, clearly stating that those records do not contribute to TP strength.
+- When PK is none or unavailable, do not present preknowledge evidence as governed, flagged, or active. You may still mention supplied exposed/compromised-item data as a descriptive check, clearly stating that the data do not establish a PK signal.
 - Preferred wording: "is consistent with", "may reflect", "requires review", "should be checked against context".
 - The human analyst selects the final B9 adjudication outcome.
 
 Index and threshold rules:
 - If an index has a package-returned flag, call it a package-returned flag.
+- A binary package flag value such as 1.0 is only a flag indicator. In the narrative, write "package-returned flag" and omit the numeric value; never describe 1.0 as a magnitude, probability, severity, or unusually fast response.
+- Treat aggregation families as the unit of evidence. Correction variants such as EDI_SD_NO, EDI_SD_CO, and EDI_SD_TS are one EDI_SD family, not independent evidence. Mention the selected family-level signal in the narrative and leave variant detail to the audit table.
 - Do not describe p-value thresholds as probabilities of misconduct.
 - Do not report "p-value threshold = 1.0" as evidence strength.
 - Calibration-required, display-only, auxiliary, SIM support-only, and CP localization-only outputs may be mentioned for context but must not be treated as counted evidence.
@@ -11053,6 +11545,9 @@ Numeric interpretation requirements:
 - For PK, never write "misuse of exposed items", "prior knowledge", "prior familiarity", or "exposed-item advantage" unless the raw-input cue shows exposed-item accuracy above the cohort/reference or the selected key index evidence provides a clear value supporting that interpretation. Otherwise write "PK package flag is present, but descriptive exposed-item accuracy does not by itself support an advantage interpretation."
 - If the package flag is present but the numeric statistic is missing from the selected key evidence, say "package flag present; numeric value not shown here" and do not invent a value.
 - If a cue gives a comparison, include both sides, such as "selected exposed-item accuracy 25.0% vs cohort 46.4%" or "selected exposed-item RT 82.35 vs cohort 28.84".
+- A lower descriptive response time than the item or cohort mean is not, by itself, a rapid-guessing flag. Report the comparison as descriptive context and rely on governed RT families and package-returned flags for the response-time interpretation.
+- Do not equate a lower descriptive response time with low effort unless the governed RT evidence explicitly supports that interpretation. Prefer "descriptively faster than the reference" or "requires timing review".
+- When a PK cue lists exposed or compromised items, preserve the complete item set in the interpretation: report the total number, list correct exposed items and incorrect exposed items separately when supplied, and do not report only the correct items. The item-level cue is for review navigation; it does not replace the governed PK flag.
 
 Write under 320 words with four short sections:
 1. Direct review conclusion
@@ -11062,20 +11557,116 @@ Write under 320 words with four short sections:
 
 Section 1 must be written for a nontechnical reviewer. It must give one direct system interpretation and one next-step review recommendation. It must not include domain codes or index names, and must state the practical review concern without naming a behavior as fact. Use wording such as "This record should be reviewed for unusually timed responses and concentrated answer changes; first check whether these patterns occur in the same item range." Do not mention exposed-item misuse in Section 1 unless the PK raw-input cue is directionally supportive.
 
-Avoid repeating the same reason across sections. Section 2 should synthesize the active domains into one review hypothesis. Section 3 must be concrete and use short bullets. For each strongest governed domain, mention at most two index names and include the observed Value or package flag when present in the selected key index evidence. For each index, explain in plain language what it measures, whether the available raw-input cue supports or qualifies the interpretation, and what specific behavior it asks the reviewer to inspect. Section 4 should give concrete checks the reviewer should perform. Use cautious, evidence-bound language.
+The example wording above is not a template to copy. Rewrite Section 1 from the supplied PRIORITY_BASIS and active governed domains only. If TP is none, unavailable, supporting-only, or display-only, do not mention concentrated answer changes, tampering, or answer-change behavior as a case concern. If PK is inactive, do not present exposed-item performance as a governed concern.
 
-Case evidence:
+        Avoid repeating the same reason across sections. Section 2 should synthesize the active domains into one review hypothesis. Section 3 must be concrete and use short bullets. For every active governed domain, name at least one eligible family supplied in the packet, prioritizing the primary or strongest family when several supporting families are present. The full family list remains available in the evidence record and lineage view; do not turn the narrative into a long index inventory. Treat correction variants as part of their family, never as separate evidence. Include the observed Value or package flag when present, but never interpret a binary flag value of 1.0 as a p-value, probability, effect size, or threshold magnitude. For each named family, explain in plain language what it measures, whether the available raw-input cue supports or qualifies the interpretation, and what specific behavior it asks the reviewer to inspect. Section 4 should give concrete checks the reviewer should perform. When exposed-item details are supplied, tell the reviewer to inspect all listed items and identify correct and incorrect exposed items separately. Use cautious, evidence-bound language.
+
+FINAL TASK: Write the review note for this one examinee. Do not explain, classify, or summarize the packet itself. Do not describe PsyMAS, an LLM, a dataset, software performance, or detector performance. Do not use “Topic 1”, “Topic 2”, “Topic 3”, or “Topic 4”. Start with “Direct review conclusion”. Every sentence must refer to this examinee, a supplied evidence pattern, or a concrete reviewer action.
+The first sentence of Section 2 must explain the supplied PRIORITY_BASIS in plain language. Do not introduce a domain or behavior that is absent from the priority basis. If a domain is marked none, unavailable, supporting-only, or display-only, describe it only as a limitation or context cue.
+
+BEGIN CASE PACKET
 {case_context}
+END CASE PACKET
+"""
+
+
+LOCAL_CASE_REVIEWER_PROMPT = """You write a short reviewer note for one examinee. Use only the supplied case packet.
+
+Output exactly four labeled sections and no preface:
+Direct review conclusion
+Evidence pattern
+Main index support
+Recommended reviewer action
+
+Maximum 180 words. Use plain language. The conclusion must describe what to inspect, never intent, cheating, fraud, misconduct, sanctions, or guilt. Do not discuss the software, prompt, packet, dataset, or model.
+
+Rules:
+- Copy the supplied priority and governed domain strengths; never recompute or upgrade them.
+- Never print internal field names or packet labels, including PRIORITY_BASIS, DOMAIN_EVIDENCE, GOVERNED_INDEX_FAMILIES, RAW_REVIEW_CUES, NON_COUNTED_CONTEXT, or CASE_PACKET.
+- Before drafting, make a private allowlist from the governed domain rows. Only domains with strength weak, moderate, or strong may be described as active evidence. Do not promote a raw-input cue, localization output, display-only output, or inactive domain into evidence.
+- Apply the allowlist to behavior words as well: "answer changes" and "tampering" are allowed only when TP is active; "exposed-item performance" is a governed concern only when PK is active; "rapid responding" or "low effort" is a governed concern only when RT is active. If a domain is absent from the allowlist, omit its behavior words entirely, even if the packet contains related raw columns.
+- Explain the priority basis first. Use only active governed domains. MF is supporting context unless the packet says otherwise. SIM and CP are context/localization unless explicitly governed.
+- If TP is none, unavailable, or not governed, do not mention answer changes or tampering anywhere in the note, including reviewer actions. If PK or RT is inactive, do not describe it as active evidence.
+- CP is never an active evidence domain in this local note unless the packet explicitly marks it governed. When CP is display-only or localization-only, call it a "CP localization cue" and limit the action to checking accuracy and response time around the indicated item; never recommend checking answer changes through CP alone.
+- Treat each index family as one evidence unit. Name at most one strongest family per active domain; do not enumerate correction variants.
+- In Main index support, never write only a generic statement such as "the main support comes from". For every active governed domain, name one supplied aggregation family exactly as it appears in the packet, state what that family measures in plain language, and report its supplied package flag or numeric value when available. If no numeric value is supplied, write "package-returned flag present; numeric value not shown here".
+- Use these plain-language family descriptions when applicable: rg_CT, rg_CUMP, and rg_NT = response-time or effort indicators; pk_L_S and pk_L_ST = exposed-item performance indicators; pk_LR_S, pk_ML_S, pk_S_S, and pk_W_S = supporting exposed-item indicators; pm_ECI2_S, pm_ECI4_S, pm_L_ST, and pm_L_S = response-pattern fit indicators. Never describe an index as "threshold arguments", "p-values" alone, or another implementation detail without explaining the behavior it evaluates.
+- If MF is active, name one MF family as supporting response-pattern-fit evidence even when RT or PK are the primary domains. Do not silently omit an active governed domain.
+- A binary flag is only a package-returned review indicator. Never describe flag 1.0 as a p-value, probability, magnitude, or severity.
+- Use raw-data values only when supplied, especially exposed-item accuracy, reference accuracy, response time, and change-point location. Separate correct and incorrect exposed items only when supplied.
+- A descriptive response-time comparison is not a separate flag. Say "faster/slower than the reference" and do not call it rapid responding, low effort, or speededness unless the governed RT evidence explicitly supports that wording.
+- Describe PK as performance on exposed/compromised items that is directionally consistent with an advantage cue; do not state that prior access occurred.
+- State that CP is localization only when applicable.
+- Give exactly three concise reviewer checks, combining related checks when needed. Do not add a fifth action or a separate closing paragraph.
+- Make the three checks non-redundant: one for the main active-domain pattern, one for the supplied item or reference comparison, and one for contextual confirmation. A CP localization cue may refine a check, but must not create a new behavior claim or repeat the same exposed-item check.
+- Mention a CP localization cue at most once. If RT and PK are active, Section 1 should focus on their joint pattern; CP belongs only in one concise reviewer check about inspecting the indicated item range.
+
+Do not add facts. Start immediately with "Direct review conclusion".
+
+BEGIN CASE PACKET
+{case_context}
+END CASE PACKET
 """
 
 
 def _case_reviewer_prompt_template() -> str:
+    # Streamlit sessions can retain a prompt edited under an earlier workflow.
+    # Reset that stale template once when the evidence-bound prompt contract
+    # changes; subsequent edits made through the Prompt panel are preserved.
+    prompt_version = "case-review-evidence-v12-plain-family-mapping"
+    if st.session_state.get("_case_reviewer_prompt_version") != prompt_version:
+        st.session_state["case_reviewer_prompt_template"] = DEFAULT_CASE_REVIEWER_PROMPT
+        st.session_state["_case_reviewer_prompt_version"] = prompt_version
     template = str(st.session_state.get("case_reviewer_prompt_template") or "").strip()
     if not template:
         template = DEFAULT_CASE_REVIEWER_PROMPT
     if "{case_context}" not in template:
         template = template.rstrip() + "\n\nCase evidence:\n{case_context}\n"
     return template
+
+
+def _model_default_case_prompt(model_id: str, provider: str | None = None) -> str:
+    """Return the provider-specific default prompt for the selected case model."""
+    model = str(model_id or "").lower()
+    provider = str(provider or _llm_provider()).lower()
+    if provider == "local_ollama" or any(token in model for token in ("llama", "qwen", "mistral", "gemma")):
+        return LOCAL_CASE_REVIEWER_PROMPT
+    else:
+        profile = (
+            "Model profile: hosted report model. Use concise evidence-bound prose, exactly four numbered sections, "
+            "and include concrete values when the case packet supplies them. Never copy the prompt examples."
+        )
+    return f"{DEFAULT_CASE_REVIEWER_PROMPT.rstrip()}\n\n{profile}\n"
+
+
+def _sync_case_prompt_for_model(selected_id: str, model_id: str, provider: str | None = None) -> None:
+    """Update the default prompt on model changes without overwriting user edits."""
+    prompt_key = "case_reviewer_prompt_template"
+    model_key = f"case_prompt_model_{selected_id}"
+    default_key = f"case_prompt_default_{selected_id}"
+    provider = provider or _llm_provider()
+    new_default = _model_default_case_prompt(model_id, provider)
+    previous_default = str(st.session_state.get(default_key, "") or "")
+    current = str(st.session_state.get(prompt_key, "") or "")
+    provider_key = f"case_prompt_provider_{selected_id}"
+    model_changed = (
+        st.session_state.get(model_key) != str(model_id)
+        or st.session_state.get(provider_key) != str(provider)
+    )
+    stale_local_prompt = provider == "local_ollama" and any(
+        marker in current
+        for marker in (
+            "PRIORITY_BASIS",
+            "DOMAIN_EVIDENCE_FOR_THIS_EXAMINEE",
+            "RAW_REVIEW_CUES_FOR_NAVIGATION_ONLY",
+            "under 220 words",
+        )
+    )
+    if (model_changed and (not current.strip() or current.strip() == previous_default.strip())) or stale_local_prompt:
+        st.session_state[prompt_key] = new_default
+    st.session_state[default_key] = new_default
+    st.session_state[model_key] = str(model_id)
+    st.session_state[provider_key] = str(provider)
 
 
 def _case_reviewer_prompt(case_context: str) -> str:
@@ -11101,10 +11692,32 @@ def _validate_llm_case_report(
 ) -> tuple[str, list[str]]:
     """Reject common overclaims before text reaches the UI, database, or PDF."""
     report = str(text or "").strip()
+    # Models sometimes repeat a correction variant even though the prompt
+    # defines it as part of one family. Normalize that harmless naming
+    # variation before applying the evidence-boundary checks.
+    report = re.sub(
+        r"\b(?:tt[:_])?EDI_SD_(?:NO|CO|TS)(?:_pval)?(?:_flag)?\b",
+        "EDI_SD family",
+        report,
+        flags=re.IGNORECASE,
+    )
     lowered = report.lower()
     violations: list[str] = []
     prohibited = {
+        "it appears that you have provided": "meta-analysis of the prompt",
+        "topic 1:": "meta-analysis of the prompt",
+        "topic 2:": "meta-analysis of the prompt",
+        "topic 3:": "meta-analysis of the prompt",
+        "topic 4:": "meta-analysis of the prompt",
+        "overall, the data appears": "meta-analysis of the prompt",
+        "evaluation and interpretation of a large language model": "meta-analysis of the prompt",
+        "the system is functioning correctly": "meta-analysis of the prompt",
         "evidence of misconduct": "misconduct conclusion",
+        "convergent (traceable)": "legacy case-profile label",
+        "convergent (context-dependent)": "legacy case-profile label",
+        "isolated (context-dependent)": "legacy case-profile label",
+        "no substantive evidence pattern": "legacy case-profile label",
+        "highly verifiable": "legacy case-profile label",
         "strong convergent evidence of misconduct": "misconduct conclusion",
         "high likelihood of aberrance": "probability overclaim",
         "potential misconduct is suspected": "misconduct conclusion",
@@ -11113,21 +11726,126 @@ def _validate_llm_case_report(
         "engaged in rapid responding": "behavioral overclaim",
         "engaged in tampering": "behavioral overclaim",
         "obtained answers without understanding": "unsupported interpretation",
+        "threshold arguments": "implementation jargon",
+        "measures p-values": "implementation-only explanation",
+        "priority_basis": "internal packet label",
+        "domain_evidence": "internal packet label",
+        "governed_index_families": "internal packet label",
+        "raw_review_cues": "internal packet label",
+        "non_counted_context": "internal packet label",
+        "case_packet": "internal packet label",
+        # Do not reject an otherwise case-specific draft merely because a
+        # local model uses a generic noun such as "dataset". The prompt and
+        # evidence checks below determine whether the answer is actually
+        # case-specific; broad wording alone is not an evidence violation.
     }
     for phrase, reason in prohibited.items():
         if phrase in lowered:
             violations.append(reason)
 
-    if re.search(r"\bvalue\s*(?:is|of)?\s*1(?:\.0+)?\b[^.\n]{0,80}\b(indicat|meaning|show)", lowered):
+    # Package flags are binary indicators, not effect sizes or probabilities.
+    # Reject both singular and plural wording because persisted reports may use
+    # either form (for example, "observed values are 1.0 ... suggests").
+    if re.search(
+        r"\b(?:observed\s+)?values?\s+(?:are|is|of)?\s*1(?:\.0+)?\b"
+        r"[^.\n]{0,140}\b(?:suggest|indicat|mean|show|reflect)",
+        lowered,
+    ):
         violations.append("binary flag interpreted as a magnitude")
+    if re.search(
+        r"\b(?:value|values|observed\s+value|flag\s+value)\s*(?:is|are|of|=|:)?\s*1(?:\.0+)?\b",
+        lowered,
+    ):
+        violations.append("binary flag value exposed in narrative")
+
+    # Correction and p-value variants belong to one aggregation family. They
+    # may remain in audit data, but must not be narrated as separate evidence.
+    # Correction variants must be represented by their family-level signal.
+    if re.search(
+        r"\bedi_sd_(?:no|co|ts)(?:_pval)?(?:_flag)?\b"
+        r"|\bedi_sd_no\s*/\s*co\s*/\s*ts\b",
+        lowered,
+    ):
+        violations.append("correction variants presented as independent evidence")
+
+    # Keep the local report focused: one representative family per domain and
+    # no more than three reviewer actions. Full evidence remains in the trace.
+    family_groups = {
+        "RT": ("rg_ct", "rg_cump", "rg_nt"),
+        "PK": ("pk_l_s", "pk_l_st", "pk_lr_s", "pk_ml_s", "pk_s_s", "pk_w_s"),
+        "MF": ("pm_eci2_s", "pm_eci4_s", "pm_l_st", "pm_l_s", "pm_q_st", "pm_q_rt"),
+    }
+    for domain_code, family_names in family_groups.items():
+        family_hits = {name for name in family_names if re.search(rf"\b{re.escape(name)}\b", lowered)}
+        if len(family_hits) > 1:
+            violations.append(f"multiple {domain_code} index families narrated")
+    action_section = re.split(
+        r"\b(?:4\.\s*)?recommended reviewer action\b",
+        report,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    if len(action_section) == 2:
+        action_lines = re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s+\S+", action_section[1])
+        if len(action_lines) > 3:
+            violations.append("more than three reviewer actions")
+
+    # Section structure and complete family enumeration are soft presentation
+    # requirements. A short local-model narrative may omit headings or list
+    # only the strongest family; the complete governed record remains available
+    # in the Evidence Input Table and lineage view. Only evidence-boundary
+    # violations below trigger deterministic replacement.
 
     if isinstance(case_domains, pd.DataFrame) and not case_domains.empty and "Domain" in case_domains.columns:
+        domain_strengths = {
+            str(row.get("Domain", "") or "").strip().upper(): str(row.get("Strength", "") or "").strip().lower()
+            for _, row in case_domains.iterrows()
+        }
         pk_rows = case_domains[case_domains["Domain"].astype(str).str.upper().eq("PK")]
         if not pk_rows.empty:
             pk_strength = str(pk_rows.iloc[0].get("Strength", "") or "").strip().lower()
             if pk_strength in {"", "none", "unavailable", "localization only"}:
-                if re.search(r"\b(prior knowledge|preknowledge|prior familiarity|exposed-item advantage|misuse of exposed)", lowered):
-                    violations.append("PK context presented as governed PK evidence")
+                if re.search(
+                    r"\b(?:strong|moderate|weak|governed|flagged|evidence|signal|domain)\b"
+                    r"[^.\n]{0,100}\b(?:preknowledge|prior knowledge|preknowledge evidence|exposed[- ]item signal)\b"
+                    r"|\b(?:preknowledge|prior knowledge|preknowledge evidence|exposed[- ]item signal)\b"
+                    r"[^.\n]{0,100}\b(?:indicates|shows|demonstrates|establishes|confirms|supports)\b",
+                    lowered,
+                ):
+                    violations.append("unsupported governed PK conclusion")
+
+        tp_rows = case_domains[case_domains["Domain"].astype(str).str.upper().eq("TP")]
+        tp_strength = domain_strengths.get("TP", "")
+        tp_active = tp_strength in {"weak", "moderate", "strong"}
+        if not tp_active:
+            # A model may mention answer changes as a generic review idea even
+            # when TP is not governed for this case. Reject that claim before
+            # it reaches the UI or PDF; the deterministic fallback will omit
+            # TP from the conclusion and reviewer actions.
+            if re.search(
+                r"\b(?:tampering|answer[- ]change(?:s|d)?|changed responses?)\b",
+                report,
+                flags=re.IGNORECASE,
+            ):
+                violations.append("inactive TP described as active answer-change evidence")
+        if not tp_rows.empty:
+            if tp_strength in {"", "none", "unavailable", "localization only"}:
+                if re.search(
+                    r"\b(?:strong|moderate|weak|governed|flagged|evidence|signal|domain)\b"
+                    r"[^.\n]{0,100}\b(?:tampering|answer[- ]change evidence|answer[- ]change signal)\b"
+                    r"|\b(?:tampering|answer[- ]change evidence|answer[- ]change signal)\b"
+                    r"[^.\n]{0,100}\b(?:indicates|shows|demonstrates|establishes|confirms|supports)\b",
+                    lowered,
+                ):
+                    violations.append("unsupported governed TP conclusion")
+
+        cp_strength = domain_strengths.get("CP", "")
+        cp_active = cp_strength in {"weak", "moderate", "strong"}
+        if not cp_active and re.search(
+            r"\b(?:CP|change[- ]?pattern)\s+(?:domain|evidence|indicator|signal)\b",
+            lowered,
+        ):
+            violations.append("CP localization presented as governed evidence")
 
     if violations:
         return _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary), sorted(set(violations))
@@ -11194,7 +11912,7 @@ def _case_review_decisions_df() -> pd.DataFrame:
         rows.append(
             {
                 "Examinee_ID": examinee_id,
-                "Final_Decision": rec.get("final_decision", ""),
+                "Final_Decision": str(rec.get("final_decision") or "").strip(),
                 "Reviewer_Note": rec.get("reviewer_note", ""),
             }
         )
@@ -11207,7 +11925,6 @@ def _evidence_synthesis_with_human_review(governed_df: pd.DataFrame) -> pd.DataF
     out = governed_df.copy()
     if "Examinee_ID" not in out.columns:
         return out
-    out["Legacy_Cross_Domain_Pattern"] = out.get("Evidence_Status", "")
     out["Review_Priority"] = out.get("Review_Priority", "")
     out["Review_Priority_Rule"] = out.get("Review_Priority_Rule", "")
     strength_order = {"unavailable": -1, "none": 0, "weak": 1, "moderate": 2, "strong": 3}
@@ -11233,7 +11950,7 @@ def _evidence_synthesis_with_human_review(governed_df: pd.DataFrame) -> pd.DataF
                     highest_score = score
                     highest_strength = strength
         priority = str(row.get("Review_Priority", "") or "").strip()
-        if priority in {"Critical / Expedited", "High (Context-Heavy)", "High", "Medium"}:
+        if priority in {"Critical / Expedited", "High · Context review", "High", "Medium"}:
             queue_status = "Queued"
         elif active_domains:
             queue_status = "Monitor"
@@ -11297,6 +12014,7 @@ def _ask_case_review_llm(
     reviewer_note: str,
     reviewer_question: str,
     model_id: str | None = None,
+    provider: str | None = None,
 ) -> str:
     context = _build_case_reviewer_context(selected_id, case_row, case_domains, case_trace, case_auxiliary)
     prompt = _case_reviewer_prompt(context)
@@ -11308,7 +12026,9 @@ def _ask_case_review_llm(
         "Answer the reviewer question using only the evidence packet. Do not repeat or infer a human adjudication outcome."
     )
     load_dotenv()
-    text, err = _call_selected_llm_text(prompt, model_id=model_id, timeout=90)
+    provider = provider or _llm_provider()
+    llm_timeout = 180 if provider == "local_ollama" else 90
+    text, err = _call_selected_llm_text(prompt, model_id=model_id, provider=provider, timeout=llm_timeout)
     if text and not err:
         validated, _ = _validate_llm_case_report(
             text, case_row, case_domains, case_trace, case_auxiliary
@@ -11419,6 +12139,47 @@ def _case_has_cp_location_output(examinee_id: str | None = None) -> bool:
     return False
 
 
+def _case_family_hits_from_trace(case_trace: pd.DataFrame, domain: str) -> tuple[list[str], list[str]]:
+    """Recover current eligible family signals for one case/domain.
+
+    Persisted domain summaries can predate a registry update.  The Evidence
+    Input trace is the authoritative source for the current report, while
+    ``Aggregation_Family`` prevents correction variants from becoming separate
+    evidence signals.
+    """
+    if not isinstance(case_trace, pd.DataFrame) or case_trace.empty or "Domain" not in case_trace.columns:
+        return [], []
+    trace = case_trace[case_trace["Domain"].astype(str).eq(str(domain))].copy()
+    if trace.empty or "Flag" not in trace.columns:
+        return [], []
+    trace = trace[trace["Flag"].map(_gov_truthy_flag)]
+    if "Evidence_Eligible" in trace.columns:
+        trace = trace[trace["Evidence_Eligible"].map(_gov_truthy_flag)]
+    if "Evidence_Use" in trace.columns:
+        trace = trace[trace["Evidence_Use"].astype(str).str.lower().ne("display only")]
+    if trace.empty:
+        return [], []
+
+    primary: list[str] = []
+    supporting: list[str] = []
+    seen: set[str] = set()
+    for _, item in trace.iterrows():
+        function = str(item.get("Function", "") or "").strip()
+        family = str(item.get("Aggregation_Family", item.get("aggregation_family", "")) or "").strip()
+        index_name = str(item.get("Index", "") or item.get("Index_Column", "") or "").strip()
+        label = f"{function}:{family or index_name}".strip(":")
+        key = f"{function}|{family or index_name}"
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        role = str(item.get("Role_Class", item.get("Role", "")) or "").strip().lower()
+        if "primary" in role:
+            primary.append(label)
+        else:
+            supporting.append(label)
+    return primary, supporting
+
+
 def _case_cp_location_output_count() -> int:
     flags = _forensic_result_flags_from_session()
     cp_data = flags.get("cp_agent", {}) if isinstance(flags, dict) else {}
@@ -11490,7 +12251,29 @@ def _case_domain_issue_rows(case_domains: pd.DataFrame, case_trace: pd.DataFrame
         calibration_hits = str(drow.iloc[0].get("Calibration_Required_Hits", "")) if not drow.empty else ""
         available = str(drow.iloc[0].get("Available", "")) if not drow.empty else "0"
         missing_note = str(drow.iloc[0].get("Missing_Note", "")) if not drow.empty else ""
-        main_index = primary_hits or supporting_hits
+        # Keep the family-level evidence path visible in the case report.
+        # Using ``primary_hits or supporting_hits`` hid supporting families
+        # whenever a primary family existed, which made TP evidence appear
+        # weaker or internally inconsistent in exported reports.
+        hit_parts: list[str] = []
+        trace_primary, trace_supporting = _case_family_hits_from_trace(trace, domain)
+        def _canonical_hit(value: str) -> str:
+            value = str(value or "").strip()
+            value = re.sub(r"^(detect_[a-z]+:)(?:rg|tt|pm|pk|ac|as)_", r"\1", value, flags=re.IGNORECASE)
+            return value
+        primary_tokens = list(dict.fromkeys(
+            _canonical_hit(token) for text in (primary_hits, ", ".join(trace_primary))
+            for token in re.split(r"[,;]", text or "") if token.strip()
+        ))
+        supporting_tokens = list(dict.fromkeys(
+            _canonical_hit(token) for text in (supporting_hits, ", ".join(trace_supporting))
+            for token in re.split(r"[,;]", text or "") if token.strip()
+        ))
+        if primary_tokens:
+            hit_parts.append(f"primary: {', '.join(primary_tokens)}")
+        if supporting_tokens:
+            hit_parts.append(f"supporting: {', '.join(supporting_tokens)}")
+        main_index = "; ".join(hit_parts)
         if not main_index and not trace.empty and {"Domain", "Flag"}.issubset(trace.columns):
             flagged = trace[
                 trace["Domain"].astype(str).eq(domain)
@@ -12000,6 +12783,7 @@ def _build_case_review_pdf(
     llm_report: str,
     final_decision: str,
     reviewer_note: str,
+    narrative_source: str = "Evidence-bound system summary",
 ) -> tuple[bytes, str | None]:
     try:
         from reportlab.lib import colors
@@ -12009,6 +12793,12 @@ def _build_case_review_pdf(
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, HRFlowable
     except Exception as e:
         return b"", f"reportlab not installed: {e}"
+    case_row = case_row.copy()
+    if "Review_Priority" in case_row.index:
+        case_row["Review_Priority"] = str(case_row.get("Review_Priority", "") or "").strip()
+    if "Evidence_Status" in case_row.index:
+        case_row["Evidence_Status"] = str(case_row.get("Evidence_Status", "") or "").strip()
+    final_decision = str(final_decision or "").strip()
     buf = io.BytesIO()
     doc_id = f"PsyMAS-CASE-{selected_id}-{time.strftime('%Y%m%d')}"
     generated_at = time.strftime("%Y-%m-%d %H:%M")
@@ -12047,7 +12837,7 @@ def _build_case_review_pdf(
     ]
     meta_data = [
         ["Subject Examinee", html.escape(str(selected_id)), "Queue Status", html.escape(str(case_row.get("Review_Queue_Status", "")))],
-        ["Review Priority", html.escape(str(case_row.get("Review_Priority", ""))), "Final Reviewer Decision", html.escape(str(final_decision))],
+        ["Review Priority", html.escape(str(case_row.get("Review_Priority", ""))), "Human Reviewer Decision", html.escape(str(final_decision))],
         ["Domains for Review", html.escape(str(case_row.get("Domains_For_Review", ""))), "Highest Domain Strength", html.escape(str(case_row.get("Highest_Domain_Strength", "")))],
     ]
     meta_table = Table(meta_data, colWidths=[1.25 * inch, 2.0 * inch, 1.45 * inch, 2.15 * inch])
@@ -12137,7 +12927,7 @@ def _build_case_review_pdf(
     except Exception:
         pass
     story.append(Paragraph("II. Domain-Level Evidence Findings", h2))
-    domain_data = [["Domain", "Evidence Strength", "Primary Supporting Index", "Interpretation / Limitation"]]
+    domain_data = [["Domain", "Evidence Strength", "Eligible Evidence Families", "Interpretation / Limitation"]]
     for row in domain_rows:
         domain_data.append(
             [
@@ -12161,8 +12951,11 @@ def _build_case_review_pdf(
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
-    story.extend([domain_table, Paragraph("III. LLM-Assisted Review Narrative", h2)])
-    story.append(Paragraph("The following narrative is generated from the evidence tables above and remains subject to human reviewer confirmation.", small))
+    story.extend([domain_table, Paragraph("III. Review Narrative", h2)])
+    story.append(Paragraph(
+        html.escape(str(narrative_source)) + ". The narrative remains subject to human reviewer confirmation.",
+        small,
+    ))
     story.append(Spacer(1, 3))
     for para in str(llm_report or "No LLM report generated.").splitlines():
         if para.strip():
@@ -13333,10 +14126,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
     if "case_review_decisions" not in st.session_state or not isinstance(st.session_state.get("case_review_decisions"), dict):
         st.session_state["case_review_decisions"] = {}
     current_decision = st.session_state["case_review_decisions"].get(str(selected_id), {})
-    decision_options = ["No Issue", "Rule Violation", "Potential Misconduct", "Definite Misconduct"]
-    final_decision = str(current_decision.get("final_decision", ""))
-    if final_decision == "Unreviewed":
-        final_decision = ""
+    decision_options = HUMAN_DECISION_OPTIONS
+    final_decision = str(current_decision.get("final_decision") or "").strip()
     decision_widget_key = f"case_final_decision_{selected_id}"
     if st.session_state.get(decision_widget_key) in decision_options:
         final_decision = str(st.session_state.get(decision_widget_key))
@@ -13345,6 +14136,12 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
     if reviewer_note_key not in st.session_state:
         st.session_state[reviewer_note_key] = reviewer_note
     explanation_key = f"case_reviewer_explanation_{selected_id}"
+    # Rehydrate the previously generated case report from SQLite. Without
+    # this, reopening a run silently replaced a saved LLM report with the
+    # short deterministic evidence summary on every page render.
+    saved_explanation = str(current_decision.get("llm_explanation", "") or "").strip()
+    if saved_explanation and explanation_key not in st.session_state:
+        st.session_state[explanation_key] = saved_explanation
 
     st.markdown(
         f"""
@@ -13435,90 +14232,149 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     "CUMP and NT are separately specified rapid-guessing methods aggregated within the Response-Time domain; "
                     "EDI_SD correction variants collapse into one family-level signal. Rule identifiers such as RT-B3-04 "
                     "and TP-B3-05 are predefined governance rules, not statistical indices. Critical / Expedited indicates "
-                    "human-review urgency; convergent-traceable means the priority can be traced to domain evidence, inputs, "
-                    "and rules, not that misconduct has been determined."
+                    "human-review urgency; the case profile is traceable to domain evidence, inputs, and rules, "
+                    "not a misconduct determination."
                 )
         _render_case_domain_specific_visuals(selected_id, domain_issue_rows, flags)
 
     decision_meta = {
-        "No Issue": {
+        "No further action": {
             "symbol": "○",
             "level": "Level 0",
-            "class": "unreviewed",
+            "class": "no-action",
             "meaning": "No review-supported issue requiring action.",
             "key": "no_issue",
         },
-        "Rule Violation": {
+        "Resolved through contextual review": {
             "symbol": "△",
             "level": "Level 1",
             "class": "rule",
-            "meaning": "Procedure concern; intent not established.",
+            "meaning": "The observed pattern is explained by contextual review.",
             "key": "rule",
         },
-        "Potential Misconduct": {
+        "Additional evidence required": {
             "symbol": "▲",
             "level": "Level 2",
             "class": "potential",
-            "meaning": "Score risk is too high to certify.",
+            "meaning": "Available evidence is insufficient for a final determination.",
             "key": "potential",
         },
-        "Definite Misconduct": {
+        "Escalate for policy review": {
             "symbol": "■",
             "level": "Level 3",
             "class": "definite",
-            "meaning": "High-verifiability evidence supports severe action.",
+            "meaning": "The case should be reviewed under the applicable policy.",
             "key": "definite",
         },
     }
     llm_support_key = f"case_llm_support_{selected_id}"
+    llm_status_key = f"case_llm_status_{selected_id}"
     with st.container(border=True, key=f"case_llm_panel_{selected_id}"):
-        step_col, prompt_col, refresh_col = st.columns([0.68, 0.14, 0.18], vertical_alignment="center")
+        step_col, provider_col, model_col, prompt_col, refresh_col = st.columns(
+            [0.27, 0.17, 0.29, 0.11, 0.16],
+            vertical_alignment="bottom",
+        )
         with step_col:
             st.markdown(
                 '<div class="psymas-review-step-title"><span class="step-badge">3</span><span class="step-text">LLM support</span></div>',
                 unsafe_allow_html=True,
             )
+
+        # These selectors are scoped to the open case. They allow a reviewer to
+        # choose either provider without changing the application-wide settings.
+        case_provider_key = f"case_llm_provider_{selected_id}"
+        case_provider_options = ["openrouter", "local_ollama"]
+        case_provider_labels = {"openrouter": "Hosted API", "local_ollama": "Local Ollama"}
+        if st.session_state.get(case_provider_key) not in case_provider_options:
+            st.session_state[case_provider_key] = _llm_provider()
+        with provider_col:
+            selected_case_provider = st.selectbox(
+                "Provider",
+                options=case_provider_options,
+                format_func=lambda value: case_provider_labels[value],
+                key=case_provider_key,
+                help="Choose the connection first, then choose one of its models.",
+            )
+
+        if selected_case_provider == "openrouter":
+            custom_openrouter = st.session_state.get("openrouter_selected_model") or os.getenv("PSYMAS_OPENROUTER_MODEL_ID", "")
+            case_model_ids = list(dict.fromkeys(
+                [str(custom_openrouter)] if str(custom_openrouter).strip() else []
+                + [str(model_id) for _, model_id in OPENROUTER_FREE_MODELS]
+            ))
+            case_model_labels = {str(model_id): str(label) for label, model_id in OPENROUTER_FREE_MODELS}
+        else:
+            selected_ollama = st.session_state.get("ollama_selected_model") or os.getenv("PSYMAS_OLLAMA_MODEL_ID", "")
+            discovered_ollama = st.session_state.get("ollama_discovered_models") or []
+            case_model_ids = list(dict.fromkeys(
+                [str(selected_ollama)] if str(selected_ollama).strip() else []
+                + [str(model_id) for model_id in discovered_ollama]
+                + [str(model_id) for model_id in LOCAL_OLLAMA_MODEL_IDS]
+            ))
+            case_model_labels = {str(model_id): str(label) for label, model_id in LOCAL_OLLAMA_MODELS}
+        case_model_ids = [model_id for model_id in case_model_ids if model_id.strip()]
+        if not case_model_ids:
+            case_model_ids = [str(_effective_llm_model())] if str(_effective_llm_model()).strip() else []
+        case_model_key = f"case_llm_model_{selected_id}"
+        if case_model_key not in st.session_state or st.session_state.get(case_model_key) not in case_model_ids:
+            st.session_state[case_model_key] = case_model_ids[0] if case_model_ids else ""
+        with model_col:
+            selected_case_model = st.selectbox(
+                "Model",
+                options=case_model_ids,
+                format_func=lambda model_id: case_model_labels.get(
+                    str(model_id),
+                    f"{case_provider_labels[selected_case_provider]} · {str(model_id).split('/')[-1]}",
+                ),
+                key=case_model_key,
+                help="Switch among configured models for this case only. Selecting a model loads its default prompt profile.",
+            ) if case_model_ids else ""
+        # Initialize/migrate the persisted prompt state before applying the
+        # model-specific default; otherwise the legacy prompt-version reset
+        # could overwrite the newly selected model profile on this rerun.
+        _case_reviewer_prompt_template()
+        _sync_case_prompt_for_model(selected_id, selected_case_model, selected_case_provider)
         with prompt_col:
             if st.button("Prompt", key=f"toggle_case_prompt_{selected_id}", use_container_width=True):
                 st.session_state["show_case_reviewer_prompt"] = not bool(st.session_state.get("show_case_reviewer_prompt", False))
         with refresh_col:
-            refresh_suggestion = st.button("Generate", key=f"generate_case_explanation_{selected_id}", use_container_width=True)
+            refresh_suggestion = st.button("Generate", key=f"generate_case_explanation_{selected_id}", use_container_width=True, type="primary")
 
-        # This selector is deliberately scoped to the open case. It lets a reviewer
-        # compare already configured models without changing the application-wide
-        # provider/model setting in Configuration.
-        case_model_ids = list(dict.fromkeys(str(model_id) for model_id in (_current_model_ids() or []) if str(model_id).strip()))
-        if not case_model_ids:
-            case_model_ids = [str(_effective_llm_model())] if str(_effective_llm_model()).strip() else []
-        case_model_labels = {
-            str(model_id): str(label)
-            for label, model_id in (_current_model_options() or [])
-            if str(model_id).strip()
-        }
-        case_model_key = f"case_llm_model_{selected_id}"
-        if case_model_key not in st.session_state or st.session_state.get(case_model_key) not in case_model_ids:
-            st.session_state[case_model_key] = case_model_ids[0] if case_model_ids else ""
-        selected_case_model = st.selectbox(
-            "Model for this case",
-            options=case_model_ids,
-            format_func=lambda model_id: case_model_labels.get(
-                str(model_id),
-                f"{_llm_provider()} · {str(model_id).split('/')[-1]}",
-            ),
-            key=case_model_key,
-            help="Switch among models already configured for the active provider. This choice applies only to this case review.",
-        ) if case_model_ids else ""
-        st.caption(f"Provider: {_llm_provider()} · case-only model override")
+        st.caption(f"{case_provider_labels[selected_case_provider]} · case-only model override · prompt remains editable")
+        if not _llm_connection_is_current(model_id=selected_case_model) or st.session_state.get("llm_connection_signature") != _llm_connection_signature(provider=selected_case_provider, model_id=selected_case_model):
+            st.warning("The selected model is not connected.")
+            if st.button("Connect selected model", key=f"connect_case_llm_{selected_id}"):
+                with st.spinner("Connecting to the selected model…"):
+                    _check_llm_connection(provider=selected_case_provider, model_id=selected_case_model, timeout=10)
+                st.rerun()
+            connection_result = st.session_state.get("llm_connection_result")
+            connection_signature = st.session_state.get("llm_connection_signature")
+            if (
+                isinstance(connection_result, (tuple, list))
+                and len(connection_result) >= 2
+                and connection_signature == _llm_connection_signature(provider=selected_case_provider, model_id=selected_case_model)
+                and not bool(connection_result[0])
+            ):
+                st.error(str(connection_result[1]))
         if st.session_state.get("show_case_reviewer_prompt", False):
-            if "case_reviewer_prompt_template" not in st.session_state:
-                st.session_state["case_reviewer_prompt_template"] = DEFAULT_CASE_REVIEWER_PROMPT
+            prompt_key = "case_reviewer_prompt_template"
+            # An empty widget value is not a usable prompt.  Initialize it
+            # before creating the text area so Streamlit does not render a
+            # blank editor after a rerun or a model/provider switch.
+            if not str(st.session_state.get(prompt_key, "") or "").strip():
+                st.session_state[prompt_key] = _model_default_case_prompt(
+                    selected_case_model,
+                    selected_case_provider,
+                )
             with st.container(border=True):
-                st.caption("Default reviewer prompt. Keep `{case_context}` where the governed evidence record should be inserted.")
+                st.caption("Model default prompt. You can edit it; `{case_context}` is inserted automatically.")
                 if st.button("Restore default prompt", key=f"restore_case_prompt_{selected_id}"):
-                    st.session_state["case_reviewer_prompt_template"] = DEFAULT_CASE_REVIEWER_PROMPT
+                    default_prompt = _model_default_case_prompt(selected_case_model, selected_case_provider)
+                    st.session_state["case_reviewer_prompt_template"] = default_prompt
+                    st.session_state[f"case_prompt_default_{selected_id}"] = default_prompt
                 st.text_area(
                     "Current prompt",
-                    key="case_reviewer_prompt_template",
+                    key=prompt_key,
                     height=300,
                 )
         prompt_signature = hashlib.sha256(
@@ -13528,23 +14384,58 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 + str(_case_reviewer_prompt_template())
                 + "\n"
                 + str(selected_case_model)
+                + "\n"
+                + str(selected_case_provider)
             ).encode("utf-8")
         ).hexdigest()[:16]
         signature_key = f"case_report_signature_{selected_id}"
         if st.session_state.get(signature_key) != prompt_signature:
             st.session_state.pop(explanation_key, None)
             st.session_state.pop(llm_support_key, None)
+            st.session_state.pop(llm_status_key, None)
+            st.session_state.pop(f"case_llm_validation_{selected_id}", None)
+            st.session_state.pop(f"case_llm_fallback_{selected_id}", None)
             st.session_state[signature_key] = prompt_signature
+        if saved_explanation and explanation_key not in st.session_state and not refresh_suggestion:
+            st.session_state[explanation_key] = saved_explanation
         if refresh_suggestion:
             with st.spinner("Generating reviewer explanation from domain evidence and flagged indices..."):
-                explanation = _generate_case_reviewer_explanation(
-                    selected_id,
-                    case_row,
-                    case_domains,
-                    case_trace,
-                    case_auxiliary,
-                    model_id=selected_case_model,
+                try:
+                    explanation = _generate_case_reviewer_explanation(
+                        selected_id,
+                        case_row,
+                        case_domains,
+                        case_trace,
+                        case_auxiliary,
+                        model_id=selected_case_model,
+                        provider=selected_case_provider,
+                    )
+                except Exception as exc:
+                    explanation = f"LLM generation failed: {type(exc).__name__}: {exc}"
+                error_prefixes = (
+                    "LLM generation failed:",
+                    "OpenRouter:",
+                    "Local Ollama:",
+                    "LLM support unavailable:",
+                    "LLM explanation unavailable:",
                 )
+                if str(explanation).startswith(error_prefixes):
+                    st.session_state[llm_status_key] = ("error", str(explanation))
+                elif bool(st.session_state.get(f"case_llm_fallback_{selected_id}", False)):
+                    validation_reason = str(
+                        st.session_state.get(f"case_llm_validation_{selected_id}", "")
+                    ).strip()
+                    st.session_state[llm_status_key] = (
+                        "fallback",
+                        "The generated draft was replaced with a deterministic evidence-bound summary. "
+                        "Review the summary and regenerate after checking the selected model or prompt."
+                        + (f" {validation_reason}" if validation_reason else ""),
+                    )
+                else:
+                    st.session_state[llm_status_key] = (
+                        "success",
+                        f"Generated with {_llm_provider()} · {selected_case_model}.",
+                    )
                 st.session_state[explanation_key] = explanation
                 _persist_case_review_to_store(
                     str(selected_id),
@@ -13560,24 +14451,67 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 case_trace,
                 case_auxiliary,
             )
+        elif not st.session_state.get(llm_status_key):
+            st.session_state[llm_status_key] = (
+                "stored",
+                "Loaded the saved case review support from the active run database.",
+            )
+        raw_explanation_text = str(explanation_text)
         explanation_text = _validated_case_report(
-            str(explanation_text),
+            raw_explanation_text,
             case_row,
             case_domains,
             case_trace,
             case_auxiliary,
         )
         st.session_state[explanation_key] = explanation_text
+        # A snapshot may contain a report generated before the current
+        # evidence-boundary rules were introduced. Replace it in the run store
+        # once it has been normalized, so the PDF and later sessions cannot
+        # re-use the stale narrative.
+        if explanation_text != raw_explanation_text and _run_store_ready():
+            _persist_case_review_to_store(
+                str(selected_id),
+                final_decision=final_decision,
+                reviewer_note=str(st.session_state.get(reviewer_note_key, "")),
+                llm_explanation=explanation_text,
+            )
+        current_llm_status = st.session_state.get(llm_status_key)
+        is_llm_generated = (
+            isinstance(current_llm_status, tuple)
+            and len(current_llm_status) == 2
+            and current_llm_status[0] in {"success", "stored"}
+            and not bool(st.session_state.get(f"case_llm_fallback_{selected_id}", False))
+            and not raw_explanation_text.startswith("System priority is ")
+        )
+        suggestion_label = (
+            "AI-generated review support"
+            if is_llm_generated
+            else "Evidence-bound system summary"
+        )
+        suggestion_note = (
+            "Generated from governed evidence records and selected raw-data summaries; it supports human review and does not determine misconduct."
+            if is_llm_generated
+            else "Generated deterministically from governed evidence records. Select Generate to request LLM-assisted review support."
+        )
         st.markdown(
             f"""
 <div class="psymas-ai-suggestion">
-  <div class="label">AI suggestion from governed indices</div>
+  <div class="label">{suggestion_label}</div>
+  <div class="source-note">{suggestion_note}</div>
   <div class="text">{_ai_suggestion_html(str(explanation_text))}</div>
 </div>
             """,
             unsafe_allow_html=True,
         )
-
+        llm_status = st.session_state.get(llm_status_key)
+        if isinstance(llm_status, tuple) and len(llm_status) == 2:
+            if llm_status[0] == "error":
+                st.error(llm_status[1])
+            elif llm_status[0] == "fallback":
+                st.warning(llm_status[1])
+            else:
+                st.caption(llm_status[1])
         if st.session_state.get(llm_support_key):
             chat_support = _validated_case_report(
                 str(st.session_state[llm_support_key]),
@@ -13607,6 +14541,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     str(st.session_state.get(reviewer_note_key, "")),
                     reviewer_question,
                     model_id=selected_case_model,
+                    provider=selected_case_provider,
                 )
             st.rerun()
 
@@ -13624,10 +14559,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 index=decision_index,
                 placeholder="Choose final decision",
                 help=(
-                    "No Issue: no review-supported issue requiring action. "
-                    "Rule Violation: procedure concern; intent not established. "
-                    "Potential Misconduct: score risk is too high to certify. "
-                    "Definite Misconduct: high-verifiability evidence supports severe action."
+                    "Select the human review outcome. This records a procedural review result; "
+                    "it does not alter detector flags or domain evidence."
                 ),
                 key=f"case_decision_select_{selected_id}",
             )
@@ -13663,8 +14596,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 )
                 st.success("Recorded.")
         if final_decision:
-            stamp_class = decision_meta.get(final_decision, decision_meta["No Issue"])["class"]
-            stamp_symbol = decision_meta.get(final_decision, decision_meta["No Issue"])["symbol"]
+            stamp_class = decision_meta.get(final_decision, decision_meta["No further action"])["class"]
+            stamp_symbol = decision_meta.get(final_decision, decision_meta["No further action"])["symbol"]
             st.markdown(
                 f'<div class="psymas-stamp {stamp_class}">{html.escape(stamp_symbol)} {html.escape(final_decision)}</div>',
                 unsafe_allow_html=True,
@@ -13678,6 +14611,11 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
         str(st.session_state.get(explanation_key) or explanation_text),
         final_decision,
         reviewer_note,
+        narrative_source=(
+            "AI-generated review support from governed evidence records"
+            if is_llm_generated
+            else "Deterministic evidence-bound system summary"
+        ),
     )
     if pdf_err:
         st.warning(f"PDF could not be built: {pdf_err}")
@@ -15025,6 +15963,21 @@ def _render_flexible_llm_settings() -> None:
     selected_ollama = st.session_state.get("ollama_selected_model") or saved_ollama
     selected_openrouter = st.session_state.get("openrouter_selected_model") or saved_openrouter
     ollama_url = st.session_state.get("ollama_chat_url_editor") or preferences["ollama_chat_url"]
+    ollama_num_ctx = int(preferences.get("ollama_num_ctx", "8192") or 8192)
+    ollama_temperature = float(preferences.get("ollama_temperature", "0.2") or 0.2)
+    ollama_top_p = float(preferences.get("ollama_top_p", "0.9") or 0.9)
+    ollama_num_predict = int(preferences.get("ollama_num_predict", "512") or 512)
+    if provider == "local_ollama":
+        st.caption("Local generation controls. Larger context uses more memory; low temperature keeps case notes consistent.")
+        ctx_col, temp_col, top_p_col, predict_col = st.columns(4)
+        with ctx_col:
+            ollama_num_ctx = st.number_input("Context tokens", min_value=2048, max_value=32768, step=1024, value=ollama_num_ctx, key="ollama_num_ctx_editor")
+        with temp_col:
+            ollama_temperature = st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.1, value=ollama_temperature, key="ollama_temperature_editor")
+        with top_p_col:
+            ollama_top_p = st.number_input("Top-p", min_value=0.1, max_value=1.0, step=0.05, value=ollama_top_p, key="ollama_top_p_editor")
+        with predict_col:
+            ollama_num_predict = st.number_input("Output tokens", min_value=64, max_value=4096, step=64, value=ollama_num_predict, key="ollama_num_predict_editor")
 
     save_col, test_col = st.columns(2)
     with save_col:
@@ -15033,10 +15986,21 @@ def _render_flexible_llm_settings() -> None:
         test_model = st.button("Test selected model", key="test_selected_llm_model_v2", use_container_width=True)
     if save_settings:
         try:
-            _save_llm_preferences(provider, selected_openrouter, selected_ollama, ollama_url)
+            _save_llm_preferences(
+                provider,
+                selected_openrouter,
+                selected_ollama,
+                ollama_url,
+                ollama_num_ctx,
+                ollama_temperature,
+                ollama_top_p,
+                ollama_num_predict,
+            )
             st.session_state["selected_gemini_model"] = selected_openrouter if provider == "openrouter" else selected_ollama
             st.session_state["pinned_llm_model"] = None
             st.session_state["pinned_llm_provider"] = None
+            st.session_state.pop("llm_connection_result", None)
+            st.session_state.pop("llm_connection_signature", None)
             st.success("Provider and both model selections were saved for future sessions.")
         except ValueError as exc:
             st.error(str(exc))
@@ -15058,6 +16022,8 @@ def _render_flexible_llm_settings() -> None:
                 ok,
                 f"Model responded in {elapsed:.2f}s." if ok else f"Model test failed: {error}",
             )
+            tested_model = selected_openrouter if provider == "openrouter" else selected_ollama
+            st.session_state["llm_connection_signature"] = f"{provider}|{tested_model}"
     result = st.session_state.get("llm_connection_result")
     if result:
         (st.success if result[0] else st.error)(result[1])
@@ -15350,8 +16316,8 @@ _WORKBENCH_MODES = {
 }
 if run_mode in _WORKBENCH_MODES:
     _render_workbench_page(active_workflow_stage)
-    # Workbench pages are complete page views. Stop before legacy/main-content
-    # rendering can append a previous module or case-review fragment.
+    # Workbench pages are complete page views. Stop before the module renderer
+    # can append a second page or case-review fragment.
     st.stop()
 
 # ----- Main content: module title only when not Preparation -----
@@ -15953,7 +16919,6 @@ elif run_mode == "Preparation":
         "A": "Scenario A: Low-Stakes",
         "B": "Scenario B: High-Stakes",
         "C": "Scenario C: Demo",
-        "Custom": "Scenario C: Demo",  # backward compat
     }
     SCENARIO_PRESET_IMAGES = {
         "A": "https://placehold.co/480x120/1e3a5f/94a3b8?text=Low-stakes",
@@ -15966,7 +16931,7 @@ elif run_mode == "Preparation":
     if "ab_only_scenario_select" not in st.session_state:
         st.session_state["ab_only_scenario_select"] = ""
     scenario_letter = st.session_state.get("ab_only_scenario_select") or ""
-    if scenario_letter in ("D", "Custom"):
+    if scenario_letter == "D":
         st.session_state["ab_only_scenario_select"] = ""
         scenario_letter = ""
     show_psychometrics_controls = active_workflow_stage == "Deterministic Evidence"
@@ -15982,76 +16947,6 @@ elif run_mode == "Preparation":
             f"<img src='{banner_img}' style='max-height:110px;border-radius:12px;margin:0 0 6px 0;display:block;' />",
             unsafe_allow_html=True,
         )
-
-    # Manual agent suggestions are disabled for the Demo preset; Demo is loaded from Appendix C tables.
-    if False and show_psychometrics_controls and scenario_letter == "C":
-        with st.container(border=True):
-            st.markdown(
-                "<div style='font-size:0.85rem;color:#64748b;display:flex;align-items:center;justify-content:space-between;'>"
-                "<span>Describe your testing situation; the assistant will suggest agents.</span>"
-                "<span>Ctrl+Enter to send</span>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            prep_llm_req_main = st.text_area(
-                "Describe your testing situation for Preparation agents",
-                value=st.session_state.get("prep_llm_requirement_main", ""),
-                placeholder="Describe stakes, modality, security risks, proctoring, etc.…",
-                height=80,
-                key="prep_llm_requirement_main",
-                label_visibility="collapsed",
-            )
-            suggest_btn_main = st.button("Suggest agents from description", key="prep_suggest_agents_main")
-            # Keyboard shortcut: Ctrl+Enter / Cmd+Enter to trigger suggestion
-            st.markdown(
-                """
-                <script>
-                (function() {
-                  if (window._psymasPrepMainHotkeyBound) return;
-                  window._psymasPrepMainHotkeyBound = true;
-                  document.addEventListener('keydown', function(e) {
-                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                      const target = Array.from(document.querySelectorAll('button'))
-                        .find(b => b.innerText.trim() === 'Suggest agents from description');
-                      if (target) { e.preventDefault(); target.click(); }
-                    }
-                  });
-                })();
-                </script>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        if suggest_btn_main and (prep_llm_req_main or st.session_state.get("prep_llm_requirement_main", "")):
-            # Reuse the same LLM helper as the Scenario page.
-            with st.spinner("Asking LLM for agent suggestions…"):
-                letter_main, explanation_main = _suggest_aberrance_scenario(
-                    prep_llm_req_main.strip() or st.session_state.get("prep_llm_requirement_main", "")
-                )
-            suggested_agents = st.session_state.get("_llm_suggested_agents") or []
-            # If agents were explicitly suggested, prefer them. Otherwise, fall back to scenario-based defaults.
-            if suggested_agents:
-                for fn in ABERRANCE_FUNCTIONS:
-                    st.session_state[f"ab_only_cb_{fn}"] = fn in suggested_agents
-            else:
-                SCENARIO_PRESETS_AB_PREP = {
-                    "A": ["detect_rg", "detect_pm"],
-                    "B": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"],
-                    "C": DEMO_AGENT_PRESET,
-                }
-                if letter_main in SCENARIO_PRESETS_AB_PREP:
-                    st.session_state["ab_only_scenario_select"] = letter_main
-                    scenario_letter = letter_main
-                    for fn in ABERRANCE_FUNCTIONS:
-                        st.session_state[f"ab_only_cb_{fn}"] = fn in SCENARIO_PRESETS_AB_PREP[letter_main]
-            if explanation_main:
-                st.session_state["prep_llm_suggestion_main"] = explanation_main
-            st.rerun()
-        if st.session_state.get("prep_llm_suggestion_main"):
-            st.info(st.session_state["prep_llm_suggestion_main"])
-            if st.button("Clear suggestion", key="prep_clear_suggestion_main"):
-                st.session_state["prep_llm_suggestion_main"] = ""
-                st.rerun()
 
     # Simple checkbox list of all agents on Preparation
     # Ordered to match index categories: nm, pm, as, pk, (cp implicit), rg.
@@ -16226,6 +17121,11 @@ elif run_mode == "Preparation":
             st.session_state["prep_last_bulk_sig"] = bulk_sig
             st.session_state["prep_bulk_loaded_messages"] = loaded_bulk
             st.session_state["prep_bulk_error_messages"] = bulk_errors
+            # Refresh the readiness cards after the upload has been committed
+            # to session state; otherwise the first upload appears ignored.
+            st.rerun()
+        for msg in st.session_state.get("prep_bulk_loaded_messages") or []:
+            st.success(msg)
         for msg in st.session_state.get("prep_bulk_error_messages") or []:
             st.warning(msg)
     with st.container(border=True):
@@ -16430,9 +17330,19 @@ elif run_mode == "Preparation":
             f'<span class="psymas-pill" title="{_esc("Answer-change data loaded." if tt_ok else "Answer-change data not loaded; tampering evidence will be unavailable.")}">{_dot(tt_ok)}Answer changes</span>'
         )
     # LLM and LangGraph Agents are always relevant for Detect
+    llm_result_pill = st.session_state.get("llm_connection_result")
+    llm_signature_pill = st.session_state.get("llm_connection_signature")
+    current_llm_signature_pill = f"{_llm_provider()}|{_effective_llm_model()}"
+    llm_connected_pill = bool(
+        isinstance(llm_result_pill, (tuple, list))
+        and len(llm_result_pill) >= 1
+        and bool(llm_result_pill[0])
+        and llm_signature_pill == current_llm_signature_pill
+    )
+    llm_state_pill = "connected" if llm_connected_pill else ("unavailable" if llm_result_pill and not bool(llm_result_pill[0]) else "not tested")
     _pills_html.append(
-        f'<span class="psymas-pill" title="{_esc("LLM configured; verdict can use the selected model." if llm_configured else "LLM key missing; Detect will still run and use a rule-based verdict.")}">'
-        f'{_dot(True)}LLM ({llm_short}){" optional" if not llm_configured else ""}</span>'
+        f'<span class="psymas-pill" title="{_esc("LLM connection test passed." if llm_connected_pill else "LLM is not connected; Detect will still run and use deterministic evidence.")}">'
+        f'{_dot(llm_connected_pill)}LLM ({llm_short}) · {llm_state_pill}</span>'
     )
     _pills_html.append(
         f'<span class="psymas-pill" title="{_esc(backend_status_tip)}">{_dot(backend_ok)}LangGraph Agents — {_esc(backend_note)}</span>'

@@ -71,7 +71,7 @@ Open `http://localhost:8501`. Stop with `docker compose -f docker-compose.releas
 5. Select the IRT model when parameters must be estimated, then click **Run Full Forensic Review**.
 6. Review **02 Evidence**, **03 AI Review**, **04 Human Review**, and **05 Record**.
 
-The Demo loads an evaluated snapshot without recomputing all indices. The snapshot was generated with PsyMAS `v0.7.6`, packaged unchanged in the `v0.7.7` distribution, and preserves its original run ID.
+The Demo loads the evaluated snapshot generated for the current release without recomputing all indices. The snapshot manifest records the exact generation version, run ID, seed, input checksums, and parameter provenance.
 
 ## Input Files
 
@@ -105,7 +105,7 @@ Data -> Deterministic Evidence -> Evidence Governance -> AI Review -> Human Revi
 
 ## Reproducibility
 
-The capsule in `reproducibility/` contains the generation script, manifest, and snapshot checksum. The saved Demo run used supplied simulation item parameters and did not re-estimate them. A new run without `item_params.csv` can estimate parameters with `mirt`.
+The capsule in `reproducibility/` contains the generation script, manifest, and snapshot checksum. The saved Demo run uses the exact inputs and configuration recorded in the manifest. A new run without `item_params.csv` can estimate parameters with `mirt`.
 
 Docker image:
 

@@ -19,7 +19,7 @@
 #
 # Important design choice:
 #   This script creates simulation input data and records the generating
-#   parameters. The saved v0.7.6 demonstration supplied item parameters derived
+#   parameters. The saved v0.7.7 demonstration supplied item parameters derived
 #   from these simulation parameters; it did not re-estimate them with mirt.
 #   For new runs, PsyMAS uses mirt only when item_params.csv is absent.
 #   The prototype also derives data-availability indicators
