@@ -19,16 +19,18 @@ Windows 10/11, Docker Desktop, 8 GB RAM, and 5-10 GB free disk space are recomme
 
 ### 2. CLI installation
 
-The CLI can install or check the runtime dependencies and then start the same Docker-based PsyMAS services used by the installer. Requirements are Python 3.11+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+The CLI can silently install or check the runtime dependencies and then start the same Docker-based PsyMAS services used by the installer. Requirements are Python 3.11+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
 uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.7"
 psymas install
 ```
 
-`psymas install` checks Docker Desktop, offers to install it when it is missing, optionally installs Ollama and the default `llama3.1:8b` model, creates the local PsyMAS data directory, pulls the versioned image, and starts the UI and backend. On Windows, dependency installation uses `winget`; on macOS it can use Homebrew. Linux users should install Docker and Ollama using their distribution's documented installers, then run `psymas install`.
+`psymas install` checks Docker, silently installs it when requested and missing, optionally installs Ollama and the default `llama3.1:8b` model, creates the local PsyMAS data directory, pulls the versioned image, and starts the UI and backend. On Windows, dependency installation uses non-interactive `winget`; on macOS it can use quiet Homebrew commands. Linux users should install Docker Engine and Ollama as system services using their distribution's documented installers, then run `psymas install`.
 
-The CLI asks before installing optional software. To request local Ollama setup directly:
+On Windows and macOS, Docker is provided by Docker Desktop. The package installation is silent, but Docker Desktop may require administrator approval, WSL 2 setup, or a restart during its first installation. Docker Desktop remains the local container service; its window can be closed after the service is ready. Ollama is started as a background server and does not require an interactive terminal. A completely headless Docker Engine is supported on Linux, not as a native replacement for Docker Desktop on Windows or macOS.
+
+The CLI asks before installing optional software. To request local Ollama setup directly (installation and model download are non-interactive):
 
 ```bash
 psymas install --ollama --model llama3.1:8b
@@ -43,7 +45,7 @@ psymas restart
 psymas stop
 ```
 
-`psymas start` only starts an already-installed Docker environment; it does not install Docker or Ollama. `psymas doctor` checks the current environment without changing it.
+`psymas start` only starts an already-installed Docker environment; it does not install Docker or Ollama. `psymas doctor` checks the current environment without changing it. Re-running `psymas install` is safe: detected Docker, Ollama, and already-downloaded models are skipped.
 
 ### 3. Docker Compose
 

@@ -136,13 +136,14 @@ def _install_docker() -> bool:
     if sys.platform == "win32" and shutil.which("winget"):
         installed = _install_command(
             ["winget", "install", "--exact", "--id", "Docker.DockerDesktop",
+             "--silent", "--disable-interactivity",
              "--accept-package-agreements", "--accept-source-agreements"],
             "Docker Desktop",
         )
         _refresh_path()
         return installed
     if sys.platform == "darwin" and shutil.which("brew"):
-        return _install_command(["brew", "install", "--cask", "docker"], "Docker Desktop")
+        return _install_command(["brew", "install", "--quiet", "--cask", "docker"], "Docker Desktop")
     print(
         "Docker Desktop is not installed. Install it from "
         "https://www.docker.com/products/docker-desktop/ and run `psymas install` again.",
@@ -163,13 +164,14 @@ def _install_ollama() -> bool:
     if sys.platform == "win32" and shutil.which("winget"):
         installed = _install_command(
             ["winget", "install", "--exact", "--id", "Ollama.Ollama",
+             "--silent", "--disable-interactivity",
              "--accept-package-agreements", "--accept-source-agreements"],
             "Ollama",
         )
         _refresh_path()
         return installed
     if sys.platform == "darwin" and shutil.which("brew"):
-        return _install_command(["brew", "install", "ollama"], "Ollama")
+        return _install_command(["brew", "install", "--quiet", "ollama"], "Ollama")
     print(
         "Ollama is not installed. Follow https://ollama.com/download and run "
         "`psymas install --ollama` again.",

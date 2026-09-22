@@ -52,7 +52,7 @@ function Install-OllamaIfNeeded {
         Write-Warning "Windows Package Manager is unavailable. Install Ollama manually, then configure it later."
         return $false
     }
-    & winget install --exact --id Ollama.Ollama --accept-package-agreements --accept-source-agreements
+    & winget install --exact --id Ollama.Ollama --silent --disable-interactivity --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Ollama installation did not complete. Configure it later from the PsyMAS settings."
         return $false
@@ -123,7 +123,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         Start-Process "https://www.docker.com/products/docker-desktop/"
         throw "Windows Package Manager is unavailable. Complete the Docker Desktop installer, then run PsyMAS Setup again."
     }
-    & winget install --exact --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements
+    & winget install --exact --id Docker.DockerDesktop --silent --disable-interactivity --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { throw "Docker Desktop installation did not complete successfully." }
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
 }

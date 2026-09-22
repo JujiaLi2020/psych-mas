@@ -27,7 +27,7 @@ switch ($choice) {
             $install = Read-Host "Ollama is not installed. Install it with winget? [Y/n]"
             if (-not $install -or $install -match '^[Yy]') {
                 if (Get-Command winget -ErrorAction SilentlyContinue) {
-                    & winget install --exact --id Ollama.Ollama --accept-package-agreements --accept-source-agreements
+                    & winget install --exact --id Ollama.Ollama --silent --disable-interactivity --accept-package-agreements --accept-source-agreements
                     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
                 }
             }
