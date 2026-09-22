@@ -1,0 +1,15 @@
+include README.md
+include LICENSE
+include docker-compose.release.yml
+recursive-include config *.yaml *.csv
+recursive-include data/sample *.csv
+recursive-include data/upload *.csv
+include data/psymas_demo_evaluated_snapshot_v0.7.7.zip
+prune presentation_draft_tmp
+prune PsyMAS_AIME_Presentation_Draft
+prune tutorial_materials
+prune release-build-v0.7.7
+prune .venv
+prune dist
+global-exclude __pycache__
+global-exclude *.py[cod]
