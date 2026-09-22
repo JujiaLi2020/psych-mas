@@ -25,7 +25,7 @@
   },
   "docker_image": {
     "reference": "ghcr.io/jujiali2020/psych-mas:0.7.7",
-    "digest": "sha256:a45ffd759375c4568dc13c53d5e6354c45b47a64b41310d7f589ed262032192c"
+    "digest": "sha256:7adf199047c3d206459f2641466c5b4d70d6f6446bc46e0e13de835d4364472b"
   },
   "regeneration_note": "The evaluated snapshot stores processed session inputs and SQLite outputs. The generation script and source inputs must be archived separately for an independent regeneration of the simulation."
 }
