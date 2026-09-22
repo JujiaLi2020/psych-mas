@@ -23,5 +23,9 @@
     "path": "data/psymas_demo_evaluated_snapshot_v0.7.7.zip",
     "sha256": "6EE598AE3D35D377C15656D207A5D851B3DBB88C84C1306C5137CF885E059140"
   },
+  "docker_image": {
+    "reference": "ghcr.io/jujiali2020/psych-mas:0.7.7",
+    "digest": "sha256:a45ffd759375c4568dc13c53d5e6354c45b47a64b41310d7f589ed262032192c"
+  },
   "regeneration_note": "The evaluated snapshot stores processed session inputs and SQLite outputs. The generation script and source inputs must be archived separately for an independent regeneration of the simulation."
 }
