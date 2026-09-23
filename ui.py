@@ -11774,17 +11774,11 @@ def _validate_llm_case_report(
     ):
         violations.append("correction variants presented as independent evidence")
 
-    # Keep the local report focused: one representative family per domain and
-    # no more than three reviewer actions. Full evidence remains in the trace.
-    family_groups = {
-        "RT": ("rg_ct", "rg_cump", "rg_nt"),
-        "PK": ("pk_l_s", "pk_l_st", "pk_lr_s", "pk_ml_s", "pk_s_s", "pk_w_s"),
-        "MF": ("pm_eci2_s", "pm_eci4_s", "pm_l_st", "pm_l_s", "pm_q_st", "pm_q_rt"),
-    }
-    for domain_code, family_names in family_groups.items():
-        family_hits = {name for name in family_names if re.search(rf"\b{re.escape(name)}\b", lowered)}
-        if len(family_hits) > 1:
-            violations.append(f"multiple {domain_code} index families narrated")
+    # Multiple eligible families within one domain are valid evidence detail.
+    # The hosted prompt may explain several RT, PK, or MF families when they
+    # are present in the governed packet. They are still aggregated within the
+    # domain and do not create extra domains or extra priority weight. Only the
+    # correction-variant check above prevents duplicate family evidence.
     action_section = re.split(
         r"\b(?:4\.\s*)?recommended reviewer action\b",
         report,
