@@ -13,6 +13,13 @@ venv
 .python-version
 *.egg-info
 .eggs
+build/
+dist/
+tmp/
+release-build-v*/
+presentation_draft_tmp/
+PsyMAS_AIME_Presentation_Draft/
+figures/
 
 # IDE and OS
 .idea

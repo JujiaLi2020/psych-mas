@@ -48,4 +48,4 @@ data = ["data/psymas_demo_evaluated_snapshot_v0.7.7.zip"]
 "data/upload" = ["data/upload/*.csv"]
 
 [tool.setuptools.packages.find]
-exclude = ["build*", "config*", "data*", "dist*", "tmp*", "R_Secmin*"]
+exclude = ["build*", "config*", "data*", "dist*", "tmp*", "R_Secmin*", "presentation_draft_tmp*"]
