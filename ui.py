@@ -66,6 +66,8 @@ from psymas_ui.evidence_tree import (
 )
 from psymas_ui.evidence_governance import (
     b3_family_signal_key,
+    build_case_rulebook_resolution,
+    load_b3_rulebook,
     variant_allowed_for_b3,
 )
 from psymas_ui.review import build_final_flag_review
@@ -11092,7 +11094,10 @@ def _build_case_reviewer_context(
         )
     else:
         priority_basis = f"{current_profile} -> {summary_items['Review_Priority'] or 'priority not assigned'}"
-    # Only expose PK item-level cues when PK is an active governed domain.
+    # Only expose domain-specific cues when the corresponding domain is active.
+    # Inactive-domain labels are deliberately omitted from the model packet:
+    # naming them as "not applicable" still encourages hosted models to discuss
+    # them as if they were part of the case.
     # Otherwise the model may carry an exposed-item check into a case whose
     # PK evidence is explicitly ``none``.
     pk_active = any(
@@ -11103,19 +11108,68 @@ def _build_case_reviewer_context(
     raw_input_cues = []
     if pk_active:
         raw_input_cues.append(_case_pk_prompt_cue(selected_id))
-    else:
-        raw_input_cues.append("PK item cue: not applicable; no governed PK evidence is active for this case.")
     tp_active = any(
         str(row.get("Domain", "")).upper() == "TP"
         and str(row.get("Strength", "")).strip().lower() in {"weak", "moderate", "strong"}
         for _, row in case_domains.iterrows()
     ) if isinstance(case_domains, pd.DataFrame) and not case_domains.empty else False
-    raw_input_cues.append(
-        _case_cp_prompt_cue(selected_id, include_answer_changes=tp_active)
+    cp_cue = _case_cp_prompt_cue(selected_id, include_answer_changes=tp_active)
+    if not cp_cue.lower().startswith("cp cue: no"):
+        raw_input_cues.append(cp_cue)
+
+    active_family_names = []
+    if isinstance(selected_trace, pd.DataFrame) and not selected_trace.empty:
+        family_col = next(
+            (column for column in ("Aggregation_Family", "aggregation_family") if column in selected_trace.columns),
+            None,
+        )
+        if family_col:
+            active_family_names = [
+                str(value).strip()
+                for value in selected_trace[family_col].tolist()
+                if str(value).strip()
+            ]
+        else:
+            active_family_names = [
+                str(value).strip()
+                for value in selected_trace.get("Index", pd.Series(dtype=str)).tolist()
+                if str(value).strip()
+            ]
+        active_family_names = list(dict.fromkeys(active_family_names))
+    inactive_domain_codes = [
+        domain for domain in ("MF", "RT", "PK", "TP", "SIM", "CP")
+        if domain not in active_domain_codes and domain != "CP"
+    ]
+    hard_contract = (
+        "CASE-SPECIFIC EVIDENCE CONTRACT\n"
+        f"Allowed active domains: {', '.join(sorted(active_domain_codes)) or 'none'}.\n"
+        f"Allowed governed index families: {', '.join(active_family_names) or 'none'}.\n"
+        f"Inactive domains that must not be discussed as evidence: "
+        f"{', '.join(inactive_domain_codes) or 'none'}.\n"
+        "Do not mention an inactive domain, its behavior label, or its index families anywhere in the note. "
+        "Do not infer a domain from raw or auxiliary data. If a domain is not in the allowed list, omit it entirely. "
+        "CP may be mentioned only as a localization cue when a CP cue is supplied; it never changes priority.\n"
+    )
+
+    # Auxiliary rows are useful for audit, but exposing inactive-domain rows to
+    # the LLM undermines the active-domain contract. Keep only active-domain
+    # rows and optional CP localization context in the narrative packet.
+    prompt_auxiliary = case_auxiliary.copy() if isinstance(case_auxiliary, pd.DataFrame) else pd.DataFrame()
+    if not prompt_auxiliary.empty and "Domain" in prompt_auxiliary.columns:
+        allowed_aux_domains = set(active_domain_codes) | ({"CP"} if cp_cue and not cp_cue.lower().startswith("cp cue: no") else set())
+        prompt_auxiliary = prompt_auxiliary[
+            prompt_auxiliary["Domain"].astype(str).str.upper().isin(allowed_aux_domains)
+        ].copy()
+    rulebook_resolution = build_case_rulebook_resolution(
+        load_b3_rulebook(),
+        active_domains=active_domain_codes,
+        domain_rows=case_domains.to_dict("records") if isinstance(case_domains, pd.DataFrame) else [],
+        trace_rows=selected_trace.to_dict("records") if isinstance(selected_trace, pd.DataFrame) else [],
     )
     return (
         "BEGIN CASE PACKET\n"
         "This packet is evidence for one examinee. It is not a document to summarize.\n"
+        + hard_contract
         + "PACKET_SOURCE: "
         + context_source
         + "\nCASE_SUMMARY\n"
@@ -11124,6 +11178,10 @@ def _build_case_reviewer_context(
         + ("; ".join(active_domains) if active_domains else "No active governed domains.")
         + "\nPRIORITY_BASIS\n"
         + priority_basis
+        + "\nRULEBOOK_RESOLUTION (AUTHORITATIVE CASE-SPECIFIC APPLICATION)\n"
+        + rulebook_resolution
+        + "\nRULEBOOK_INTERPRETATION\n"
+        + "The resolver has already applied family aggregation, domain roles, B3 strength rules, and priority policy. Do not recompute or reinterpret these rules.\n"
         + "\nSUPPORTING_DOMAIN_CONTEXT\n"
         + ("; ".join(f"{d} {s}" for d, s in supporting_domain_strengths.items()) or "none")
         + "\nDOMAIN_EVIDENCE_FOR_THIS_EXAMINEE\n"
@@ -11133,7 +11191,7 @@ def _build_case_reviewer_context(
         + "\nRAW_REVIEW_CUES_FOR_NAVIGATION_ONLY\n"
         + "\n".join(raw_input_cues)
         + "\nNON_COUNTED_CONTEXT_ONLY\n"
-        + _compact_case_table_text(case_auxiliary, aux_cols, max_rows=8)
+        + _compact_case_table_text(prompt_auxiliary, aux_cols, max_rows=8)
         + "\nEND CASE PACKET"
     )
 
@@ -11474,6 +11532,7 @@ Raw inputs and derived review cues to use only for explanation and reviewer navi
 
 Evidence hierarchy:
 - Governed evidence data determines the review-support recommendation.
+- The packet includes RULEBOOK_RESOLUTION, a deterministic, case-specific application of config/b3_index_mapping.yaml. Treat this block as authoritative for family aggregation, domain roles, B3 strength, and priority basis. Do not reconstruct B3 rules or priority from raw values, index counts, or domain names.
 - Priority basis is the controlling interpretation path. First explain the supplied PRIORITY_BASIS; do not recompute priority from raw indices.
 - Active primary domains (RT, PK, TP) determine the case profile and priority. MF is supporting context only. SIM and CP are non-priority context unless the rulebook explicitly marks them as governed.
 - Use only the current case-profile vocabulary: "No governed scenario", "Single-scenario signal", "Supporting evidence only", "Cross-scenario pattern", or "Data-dependent review". Never use legacy labels such as "Convergent", "Isolated", "Limited", "No substantive evidence pattern", "Convergent (Traceable)", "Convergent (Context-Dependent)", or "Highly Verifiable".
@@ -11588,6 +11647,7 @@ Maximum 180 words. Use plain language. The conclusion must describe what to insp
 
 Rules:
 - Copy the supplied priority and governed domain strengths; never recompute or upgrade them.
+- Treat RULEBOOK_RESOLUTION as the authoritative case-specific application of config/b3_index_mapping.yaml. It already resolves family aggregation, domain roles, B3 strength, and priority. Do not rebuild those rules from raw rows or count index variants again.
 - Never print internal field names or packet labels, including PRIORITY_BASIS, DOMAIN_EVIDENCE, GOVERNED_INDEX_FAMILIES, RAW_REVIEW_CUES, NON_COUNTED_CONTEXT, or CASE_PACKET.
 - Before drafting, make a private allowlist from the governed domain rows. Only domains with strength weak, moderate, or strong may be described as active evidence. Do not promote a raw-input cue, localization output, display-only output, or inactive domain into evidence.
 - Apply the allowlist to behavior words as well: "answer changes" and "tampering" are allowed only when TP is active; "exposed-item performance" is a governed concern only when PK is active; "rapid responding" or "low effort" is a governed concern only when RT is active. If a domain is absent from the allowlist, omit its behavior words entirely, even if the packet contains related raw columns.
@@ -11619,7 +11679,7 @@ def _case_reviewer_prompt_template() -> str:
     # Streamlit sessions can retain a prompt edited under an earlier workflow.
     # Reset that stale template once when the evidence-bound prompt contract
     # changes; subsequent edits made through the Prompt panel are preserved.
-    prompt_version = "case-review-evidence-v12-plain-family-mapping"
+    prompt_version = "case-review-evidence-v14-rulebook-resolution"
     if st.session_state.get("_case_reviewer_prompt_version") != prompt_version:
         st.session_state["case_reviewer_prompt_template"] = DEFAULT_CASE_REVIEWER_PROMPT
         st.session_state["_case_reviewer_prompt_version"] = prompt_version

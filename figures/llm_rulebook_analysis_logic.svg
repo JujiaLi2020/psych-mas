@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">Figure. Rulebook-grounded LLM analysis in PsyMAS</title>
+  <desc id="desc">A four-stage diagram showing how package outputs and raw-data summaries are resolved through the PsyMAS YAML rulebook before being passed to a constrained language model and validated for human review.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f5668"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#173042" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .figure-bg { fill: #ffffff; }
+      .figure-label { font-family: Arial, Helvetica, sans-serif; font-size: 26px; font-weight: 700; fill: #111827; }
+      .figure-title { font-family: Arial, Helvetica, sans-serif; font-size: 28px; font-style: italic; fill: #111827; }
+      .stage { font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 1.2px; fill: #1f5668; }
+      .heading { font-family: Arial, Helvetica, sans-serif; font-size: 26px; font-weight: 700; fill: #111827; }
+      .body { font-family: Arial, Helvetica, sans-serif; font-size: 20px; fill: #243746; }
+      .small { font-family: Arial, Helvetica, sans-serif; font-size: 17px; fill: #435563; }
+      .tiny { font-family: Arial, Helvetica, sans-serif; font-size: 16px; fill: #435563; }
+      .box { stroke: #b8c8d1; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .source { fill: #f5f8fa; }
+      .rulebook { fill: #fff7e9; stroke: #c57b0b; }
+      .packet { fill: #edf7f6; stroke: #1f8a83; }
+      .llm { fill: #eef2fb; stroke: #5268a6; }
+      .output { fill: #fdf1f1; stroke: #c93636; }
+      .boundary { fill: #f6f7f8; stroke: #7b8794; stroke-dasharray: 8 7; }
+      .arrow { stroke: #1f5668; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .divider { stroke: #d6dee3; stroke-width: 2; }
+      .rule { fill: #c57b0b; }
+      .accent { fill: #1f8a83; }
+      .danger { fill: #c93636; }
+    </style>
+  </defs>
+
+  <rect class="figure-bg" x="0" y="0" width="1600" height="980"/>
+
+  <text class="figure-label" x="70" y="58">Figure 1</text>
+  <text class="figure-title" x="70" y="98">Rulebook-grounded LLM analysis in PsyMAS</text>
+
+  <!-- Stage 1 -->
+  <rect class="box source" x="70" y="155" width="320" height="370"/>
+  <text class="stage" x="100" y="195">STAGE 1</text>
+  <text class="heading" x="100" y="235">Observed inputs</text>
+  <line class="divider" x1="100" y1="258" x2="360" y2="258"/>
+  <text class="body" x="100" y="300">Package outputs</text>
+  <text class="small" x="100" y="332">Statistics, p-values, flags</text>
+  <text class="small" x="100" y="360">Rapid-response and person-fit</text>
+  <text class="small" x="100" y="388">Preknowledge, similarity,</text>
+  <text class="small" x="100" y="414">tampering, and change-point</text>
+  <text class="body" x="100" y="458">Selected raw summaries</text>
+  <text class="small" x="100" y="490">Accuracy, response time,</text>
+  <text class="small" x="100" y="516">exposed-item performance,</text>
+  <text class="small" x="100" y="542">and item locations</text>
+
+  <!-- Stage 2 -->
+  <rect class="box rulebook" x="470" y="125" width="430" height="430"/>
+  <text class="stage" x="500" y="165">STAGE 2</text>
+  <text class="heading" x="500" y="205">Deterministic rulebook resolver</text>
+  <text class="small" x="500" y="238">b3_index_mapping.yaml + index registry</text>
+  <line class="divider" x1="500" y1="258" x2="870" y2="258"/>
+  <rect class="rule" x="500" y="282" width="12" height="62" rx="3"/>
+  <text class="body" x="530" y="307">Family aggregation</text>
+  <text class="small" x="530" y="333">Correction variants become one family signal</text>
+  <rect class="rule" x="500" y="365" width="12" height="62" rx="3"/>
+  <text class="body" x="530" y="390">Domain assignment</text>
+  <text class="small" x="530" y="416">RT, PK, TP, MF, SIM, and CP roles</text>
+  <rect class="rule" x="500" y="448" width="12" height="62" rx="3"/>
+  <text class="body" x="530" y="473">B3 and priority rules</text>
+  <text class="small" x="530" y="499">Eligible evidence, strength, and priority</text>
+
+  <!-- Stage 3 -->
+  <rect class="box packet" x="980" y="155" width="270" height="370"/>
+  <text class="stage" x="1010" y="195">STAGE 3</text>
+  <text class="heading" x="1010" y="235">Evidence packet</text>
+  <line class="divider" x1="1010" y1="258" x2="1220" y2="258"/>
+  <text class="body" x="1010" y="300">Case-specific contract</text>
+  <text class="small" x="1010" y="332">Active domains</text>
+  <text class="small" x="1010" y="358">Eligible families</text>
+  <text class="small" x="1010" y="384">B3 rule and strength</text>
+  <text class="small" x="1010" y="410">Priority basis</text>
+  <text class="body" x="1010" y="458">Context cues</text>
+  <text class="small" x="1010" y="490">Raw summaries clarify evidence;</text>
+  <text class="small" x="1010" y="516">they cannot create a flag</text>
+
+  <!-- Stage 4 -->
+  <rect class="box llm" x="1330" y="125" width="200" height="430"/>
+  <text class="stage" x="1360" y="165">STAGE 4</text>
+  <text class="heading" x="1360" y="205">Constrained</text>
+  <text class="heading" x="1360" y="238">LLM analysis</text>
+  <line class="divider" x1="1360" y1="258" x2="1500" y2="258"/>
+  <text class="small" x="1360" y="300">Explains only</text>
+  <text class="small" x="1360" y="326">the supplied</text>
+  <text class="small" x="1360" y="352">governed evidence</text>
+  <text class="small" x="1360" y="400">Drafts cautious</text>
+  <text class="small" x="1360" y="426">review language</text>
+  <text class="small" x="1360" y="474">Suggests reviewer</text>
+  <text class="small" x="1360" y="500">actions</text>
+
+  <path class="arrow" d="M 390 335 L 465 335"/>
+  <path class="arrow" d="M 900 335 L 975 335"/>
+  <path class="arrow" d="M 1250 335 L 1325 335"/>
+
+  <!-- Bottom validation and boundary -->
+  <rect class="box output" x="250" y="650" width="1100" height="175"/>
+  <text class="stage" x="285" y="690">VALIDATION AND HUMAN REVIEW</text>
+  <text class="heading" x="285" y="730">Evidence-language audit</text>
+  <text class="body" x="285" y="766">Checks that the draft names only active domains and eligible families, preserves the B3 rule,</text>
+  <text class="body" x="285" y="795">uses raw data as context, and does not state misconduct or replace human adjudication.</text>
+  <path class="arrow" d="M 1430 555 L 1430 620 L 1060 645"/>
+  <path class="arrow" d="M 840 555 L 840 645"/>
+
+  <rect class="boundary" x="250" y="865" width="1100" height="65"/>
+  <text class="body" x="285" y="905">LLM boundary: cannot compute flags, change thresholds, create evidence, infer intent, or determine misconduct.</text>
+
+  <text class="tiny" x="70" y="965">Note. The rulebook is applied deterministically before generation; the LLM interprets a case-specific evidence packet rather than deciding which evidence counts.</text>
+</svg>

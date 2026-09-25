@@ -153,6 +153,30 @@ data/                 Samples, Demo snapshot, and runtime storage
 reproducibility/      Generation script, manifest, and checksums
 ```
 
+## Rulebook and thresholds
+
+The runtime rulebook is versioned in `config/`:
+
+- `config/rulebook_index.csv` registers each index, its function, domain, evidence role, family, and evidence-use policy.
+- `config/b3_index_mapping.yaml` defines family aggregation, domain assignment, and the rules for entering domain evidence.
+- `config/default_thresholds.yaml` provides the default external-threshold profile.
+- `config/index_thresholds.yaml` records threshold parameters and their sources.
+
+Keep these files together when changing the evidence logic. After a rule or threshold change, rerun the forensic review and regenerate the SQLite/Demo snapshot so the displayed results match the current configuration.
+
+## Rulebook-grounded AI review
+
+PsyMAS does not ask the LLM to discover or recalculate forensic rules. For each selected examinee, the deterministic resolver:
+
+1. loads the versioned registry and `config/b3_index_mapping.yaml`;
+2. collapses correction variants into family-level evidence signals;
+3. applies the configured domain roles, B3 strength rules, and priority policy;
+4. creates a case-specific evidence packet containing the applicable rule resolution, governed families, and selected raw-data cues;
+5. sends that packet to the selected hosted or local model; and
+6. audits the generated language before it is shown or exported.
+
+The LLM may explain governed evidence and use raw summaries to guide inspection. It cannot create flags, change thresholds, re-count index variants, infer intent, determine misconduct, or recommend sanctions. Raw response, timing, exposure, and answer-change summaries clarify an already governed result; they cannot create a new evidence signal. See [the rulebook-grounded analysis figure](figures/llm_rulebook_analysis_logic.svg) and [its paper-ready caption](figures/llm_rulebook_analysis_logic_caption.md).
+
 ## Troubleshooting
 
 ```bash
