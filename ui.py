@@ -77,6 +77,7 @@ from psymas_ui.report_audit import evidence_fingerprint, make_audit_record
 from psymas_ui.run_store import get_run_store
 from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot, snapshot_supports_version
 from psymas_ui.deployment import (
+    deployment_profile as _deployment_profile,
     locked_llm_configuration as _locked_llm_configuration,
     managed_llm_message as _managed_llm_message,
     managed_llm_model as _managed_llm_model,
@@ -5313,7 +5314,7 @@ st.set_page_config(
     page_title="PsyMAS",
     page_icon=str(Path(__file__).resolve().parent / "icon" / "desktop" / "app-icon.ico"),
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 # Modern research-workspace shell: app chrome, workflow cards, status chips.
@@ -16687,6 +16688,8 @@ _WORKBENCH_MODES = {
     "_Workbench Configuration",
 }
 if run_mode in _WORKBENCH_MODES:
+    if _deployment_profile() in {"railway", "public"} and _demo_scenario_letter() == "C":
+        st.caption("Demo · simulated data with precomputed results. Select an examinee to explore a case; open Scenario from the menu to use your own data.")
     _render_workbench_page(active_workflow_stage)
     # Workbench pages are complete page views. Stop before the module renderer
     # can append a second page or case-review fragment.
@@ -16822,6 +16825,16 @@ def _render_scenario_page() -> None:
     scenario_link = st.query_params.get("scenario_select", None)
     if isinstance(scenario_link, list):
         scenario_link = scenario_link[0] if scenario_link else None
+    auto_demo = (
+        _deployment_profile() in {"railway", "public"}
+        and not st.session_state.get("_hosted_demo_entry_seen")
+        and not scenario_link
+        and not st.session_state.get("ab_only_scenario_select")
+        and not st.session_state.get("last_uploaded_responses")
+    )
+    st.session_state["_hosted_demo_entry_seen"] = True
+    if auto_demo:
+        scenario_link = "C"
     if scenario_link in SCENARIO_PRESETS_AB:
         _apply_ab_only_scenario(str(scenario_link))
         st.session_state["prep_compromised_items"] = st.session_state.get("ab_only_compromised_items") or []
@@ -16847,9 +16860,9 @@ def _render_scenario_page() -> None:
             st.query_params.clear()
         except Exception:
             pass
-        st.session_state.workflow_stage = "Assessment Data"
-        st.session_state.run_mode = "Preparation"
-        st.session_state["sidebar_nav"] = "Assessment Data"
+        st.session_state.workflow_stage = "AI-Assisted Review" if auto_demo and snap_ok else "Assessment Data"
+        st.session_state.run_mode = _WORKFLOW_TARGETS[st.session_state.workflow_stage]
+        st.session_state["sidebar_nav"] = st.session_state.workflow_stage
         st.rerun()
 
     if st.session_state.get("_demo_load_error"):
@@ -16857,6 +16870,27 @@ def _render_scenario_page() -> None:
     if st.session_state.get("_demo_load_warning"):
         st.warning(st.session_state.pop("_demo_load_warning"))
 
+    SCENARIO_CARD_A = """
+          <a class="scenario-click-card scenario-a" href="?scenario_select=A" target="_self">
+            <div class="scenario-visual">Low-stakes</div>
+            <div class="scenario-title">Scenario A: Low-Stakes</div>
+            <div class="scenario-desc">Identifies non-substantive noise to ensure high-quality data utility.<br><strong>Examples:</strong> Course evaluations; Pilot surveys; Classroom quizzes</div>
+          </a>
+    """
+    SCENARIO_CARD_B = """
+          <a class="scenario-click-card scenario-b" href="?scenario_select=B" target="_self">
+            <div class="scenario-visual">High-stakes</div>
+            <div class="scenario-title">Scenario B: High-Stakes</div>
+            <div class="scenario-desc">Protects high-stakes credentials: response-based, similarity, temporal, tampering, and preknowledge detection.<br><strong>Examples:</strong> Medical licensing; Answer copying; Brain-dump</div>
+          </a>
+    """
+    SCENARIO_CARD_C = """
+          <a class="scenario-click-card scenario-c" href="?scenario_select=C" target="_self">
+            <div class="scenario-visual">Demo</div>
+            <div class="scenario-title">Scenario C: Demo</div>
+            <div class="scenario-desc">Loads Appendix C simulated responses, response times, item parameters, exposure labels, and validation tables.</div>
+          </a>
+    """
     st.markdown(
         """
         <style>
@@ -16908,23 +16942,13 @@ def _render_scenario_page() -> None:
         }
         </style>
         <div class="scenario-grid">
-          <a class="scenario-click-card scenario-a" href="?scenario_select=A" target="_self">
-            <div class="scenario-visual">Low-stakes</div>
-            <div class="scenario-title">Scenario A: Low-Stakes</div>
-            <div class="scenario-desc">Identifies non-substantive noise to ensure high-quality data utility.<br><strong>Examples:</strong> Course evaluations; Pilot surveys; Classroom quizzes</div>
-          </a>
-          <a class="scenario-click-card scenario-b" href="?scenario_select=B" target="_self">
-            <div class="scenario-visual">High-stakes</div>
-            <div class="scenario-title">Scenario B: High-Stakes</div>
-            <div class="scenario-desc">Protects high-stakes credentials: response-based, similarity, temporal, tampering, and preknowledge detection.<br><strong>Examples:</strong> Medical licensing; Answer copying; Brain-dump</div>
-          </a>
-          <a class="scenario-click-card scenario-c" href="?scenario_select=C" target="_self">
-            <div class="scenario-visual">Demo</div>
-            <div class="scenario-title">Scenario C: Demo</div>
-            <div class="scenario-desc">Loads Appendix C simulated responses, response times, item parameters, exposure labels, and validation tables.</div>
-          </a>
+        __SCENARIO_CARDS__
         </div>
-        """,
+        """.replace("__SCENARIO_CARDS__", "\n".join(
+            [SCENARIO_CARD_C, SCENARIO_CARD_A, SCENARIO_CARD_B]
+            if _deployment_profile() in {"railway", "public"}
+            else [SCENARIO_CARD_A, SCENARIO_CARD_B, SCENARIO_CARD_C]
+        )),
         unsafe_allow_html=True,
     )
 
