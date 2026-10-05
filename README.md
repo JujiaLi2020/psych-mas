@@ -6,6 +6,8 @@ PsyMAS helps assessment teams organize and review unusual response behavior in a
 
 ## Install and Start
 
+Watch the [PsyMAS installation walkthrough (MP4)](https://github.com/JujiaLi2020/psych-mas/releases/download/v0.7.8/PsyMAS_installation.mp4).
+
 Choose one method.
 
 ### 1. Windows installer (recommended)
