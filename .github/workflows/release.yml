@@ -1,6 +1,12 @@
 name: Publish PsyMAS release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and verify
+        required: true
+        default: v0.7.8
   push:
     tags:
       - "v*"
@@ -12,6 +18,7 @@ permissions:
   id-token: write
 
 env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -21,6 +28,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -38,7 +47,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
             type=raw,value=latest
           labels: |
             org.opencontainers.image.title=PsyMAS
@@ -70,9 +79,10 @@ jobs:
 
       - name: Verify published container runtime
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          docker run --rm ghcr.io/${{ github.repository }}:$version python -m psymas_cli --version
-          docker run --rm ghcr.io/${{ github.repository }}:$version python -c "import zipfile; from psymas_ui.app_config import APP_VERSION, DEMO_EVALUATED_SNAPSHOT_PATH; assert APP_VERSION == '$version'; assert zipfile.ZipFile(DEMO_EVALUATED_SNAPSHOT_PATH).testzip() is None"
+          version="${RELEASE_TAG#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$version"
+          docker run --rm "$image" python -m psymas_cli --version
+          docker run --rm "$image" python -c "import zipfile; from psymas_ui.app_config import APP_VERSION, DEMO_EVALUATED_SNAPSHOT_PATH; assert APP_VERSION == '$version'; assert zipfile.ZipFile(DEMO_EVALUATED_SNAPSHOT_PATH).testzip() is None"
 
   windows-installer:
     needs: container
@@ -80,6 +90,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -92,7 +104,7 @@ jobs:
           python scripts/verify_release.py
           python -m pip install --upgrade build
           python -m build
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $version = "${{ env.RELEASE_TAG }}".TrimStart('v')
           python scripts/verify_release.py --wheel "dist/psych_mas-$version-py3-none-any.whl"
           Get-ChildItem dist/psych_mas-*.whl,dist/psych_mas-*.tar.gz | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -109,7 +121,7 @@ jobs:
       - name: Generate SHA-256 checksum
         shell: pwsh
         run: |
-          $name = "PsyMAS-Setup-Windows-${{ github.ref_name }}.exe"
+          $name = "PsyMAS-Setup-Windows-${{ env.RELEASE_TAG }}.exe"
           $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Set-Content "dist/$name.sha256" -Encoding ascii
 
@@ -118,17 +130,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "${{ github.ref_name }}" 2>$null
+          gh release view "${{ env.RELEASE_TAG }}" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "${{ github.ref_name }}" --title "PsyMAS ${{ github.ref_name }}" --generate-notes
+            gh release create "${{ env.RELEASE_TAG }}" --title "PsyMAS ${{ env.RELEASE_TAG }}" --generate-notes
           }
-          $version = "${{ github.ref_name }}".TrimStart('v')
-          gh release upload "${{ github.ref_name }}" "dist/psych_mas-$version-py3-none-any.whl" "dist/psych_mas-$version-py3-none-any.whl.sha256" "dist/psych_mas-$version.tar.gz" "dist/psych_mas-$version.tar.gz.sha256" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe.sha256" --clobber
+          $version = "${{ env.RELEASE_TAG }}".TrimStart('v')
+          gh release upload "${{ env.RELEASE_TAG }}" "dist/psych_mas-$version-py3-none-any.whl" "dist/psych_mas-$version-py3-none-any.whl.sha256" "dist/psych_mas-$version.tar.gz" "dist/psych_mas-$version.tar.gz.sha256" "dist/PsyMAS-Setup-Windows-${{ env.RELEASE_TAG }}.exe" "dist/PsyMAS-Setup-Windows-${{ env.RELEASE_TAG }}.exe.sha256" --clobber
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
         with:
-          name: PsyMAS-Setup-Windows-${{ github.ref_name }}
+          name: PsyMAS-Setup-Windows-${{ env.RELEASE_TAG }}
           path: |
-            dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe
-            dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe.sha256
+            dist/PsyMAS-Setup-Windows-${{ env.RELEASE_TAG }}.exe
+            dist/PsyMAS-Setup-Windows-${{ env.RELEASE_TAG }}.exe.sha256
