@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import math
 import zipfile
@@ -14,6 +15,22 @@ SNAPSHOT_SCHEMA = "1.0"
 SQLITE_ENTRY = "psymas_run.sqlite"
 MANIFEST_ENTRY = "manifest.json"
 INPUTS_ENTRY = "session_inputs.json"
+
+# This evaluated Demo predates the packaging-only 0.7.8 release. Accept only
+# the exact verified archive; unrelated snapshots still require their own version.
+VERIFIED_DEMO_COMPATIBILITY = {
+    "0.7.8": {
+        "eabdc3573b4dcfaa49aaad4efb7b4541add26a1571f46b85f692e14db5c23710": "0.7.7",
+    },
+}
+
+
+def snapshot_supports_version(data: bytes, manifest: dict, version: str) -> bool:
+    generated = str(manifest.get("generation_software_version") or manifest.get("software_version") or "").strip()
+    if generated == version:
+        return True
+    approved = VERIFIED_DEMO_COMPATIBILITY.get(version, {})
+    return bool(generated) and approved.get(hashlib.sha256(data).hexdigest()) == generated
 
 
 def _json_safe(value: Any) -> Any:

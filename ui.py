@@ -75,7 +75,7 @@ from psymas_ui.review import build_final_flag_review
 from psymas_ui.report_validation import validate_evidence_links, case_citation_contract
 from psymas_ui.report_audit import evidence_fingerprint, make_audit_record
 from psymas_ui.run_store import get_run_store
-from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot
+from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot, snapshot_supports_version
 from psymas_ui.deployment import (
     locked_llm_configuration as _locked_llm_configuration,
     managed_llm_message as _managed_llm_message,
@@ -10401,7 +10401,7 @@ def _restore_evaluated_snapshot(data: bytes, *, preserve_review_decisions: bool 
             or snapshot_manifest.get("software_version")
             or ""
         ).strip()
-        if snapshot_version != APP_VERSION:
+        if not snapshot_supports_version(data, snapshot_manifest, APP_VERSION):
             return (
                 False,
                 f"Snapshot was generated with PsyMAS v{snapshot_version or 'unknown'}; "

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tomllib
 import zipfile
+import sys
 
 
 def constant(path, name):
@@ -20,6 +21,8 @@ def main():
     parser.add_argument("--wheel", type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root))
+    from psymas_ui.run_snapshot import snapshot_supports_version
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     assert constant(root / "psymas_cli.py", "VERSION") == version
     assert constant(root / "psymas_ui/app_config.py", "APP_VERSION") == version
@@ -32,6 +35,8 @@ def main():
     with zipfile.ZipFile(snapshot) as archive:
         assert archive.testzip() is None
         assert any(n.endswith(".sqlite") for n in archive.namelist())
+        embedded_manifest = json.loads(archive.read("manifest.json"))
+        assert snapshot_supports_version(snapshot.read_bytes(), embedded_manifest, version), "Demo would be rejected by the application version guard"
     if args.wheel:
         with zipfile.ZipFile(args.wheel) as wheel:
             names = wheel.namelist()
