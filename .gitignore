@@ -71,3 +71,6 @@ PsyMAS_AIME_Presentation_Draft/
 .env.*
 !.env.example
 !.env.*.example
+
+# Previous bundled Demo kept locally after release rename
+/data/psymas_demo_evaluated_snapshot_v0.7.7.zip
