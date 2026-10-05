@@ -1,7 +1,7 @@
 {
   "schema_version": "1.2",
   "generation_software_version": "0.7.7",
-  "package_software_version": "0.7.7",
+  "package_software_version": "0.7.8",
   "snapshot_status": "current evaluated run; refreshed 2026-10-01 from the fixed-seed 80% copying simulation",
   "run_id": "cd631d35-0973-4c90-a799-5af72573ae09",
   "scenario": "C",
@@ -20,7 +20,7 @@
     "person_parameters": "stored in the snapshot; no independent re-estimation provenance was recorded for this saved run"
   },
   "snapshot": {
-    "path": "data/psymas_demo_evaluated_snapshot_v0.7.7.zip",
+    "path": "data/psymas_demo_evaluated_snapshot_v0.7.8.zip",
     "sha256": "EABDC3573B4DCFAA49AAAD4EFB7B4541ADD26A1571F46B85F692E14DB5C23710"
   },
   "source_archive": {
@@ -50,8 +50,8 @@
     }
   },
   "docker_image": {
-    "reference": "psych-mas:latest",
-    "digest": "sha256:22254613a0913310d6dc6aa089747d6f7f8a886ef44798b938f9a16f2a17db0a"
+    "reference": "ghcr.io/jujiali2020/psych-mas:0.7.8",
+    "digest": null
   },
   "regeneration_note": "Run tools/generate_demo_snapshot.py inside the PsyMAS Docker image against the archived source directory, then rerun both validation scripts."
 }

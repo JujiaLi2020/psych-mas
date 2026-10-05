@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psych-mas"
-version = "0.7.7"
+version = "0.7.8"
 description = "Human-in-the-loop evidence governance for psychometric forensics"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,9 +43,12 @@ config = [
     "config/index_thresholds.yaml",
     "config/rulebook_index.csv",
 ]
-data = ["data/psymas_demo_evaluated_snapshot_v0.7.7.zip"]
+data = ["data/psymas_demo_evaluated_snapshot_v0.7.8.zip"]
 "data/sample" = ["data/sample/*.csv"]
 "data/upload" = ["data/upload/*.csv"]
 
 [tool.setuptools.packages.find]
-exclude = ["build*", "config*", "data*", "dist*", "tmp*", "R_Secmin*", "presentation_draft_tmp*"]
+include = ["psymas_ui*", "psymas_graph*"]
+
+[tool.setuptools.package-data]
+psymas_ui = ["prompt_versions/*.json"]

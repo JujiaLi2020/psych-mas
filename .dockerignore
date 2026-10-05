@@ -44,3 +44,9 @@ data/psymas_snapshot_*.zip
 test.py
 test_openrouter.py
 uv.lock
+
+validation/
+tests/
+tools/
+output/
+reproducibility/demo_validation/

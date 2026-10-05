@@ -1,4 +1,4 @@
-# PsyMAS Workbench (v0.7.7)
+# PsyMAS Workbench (v0.7.8)
 
 PsyMAS is a human-in-the-loop psychometric forensics workbench. It combines deterministic forensic indices, rule-based evidence governance, AI-assisted explanation, and human review. Statistical flags are review triggers; PsyMAS does not determine misconduct.
 
@@ -11,7 +11,7 @@ Choose one method.
 ### 1. Windows installer (recommended)
 
 1. Install and start [Docker Desktop](https://www.docker.com/products/docker-desktop/).
-2. Download `PsyMAS-Setup-Windows-v0.7.7.exe` from the [v0.7.7 release](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.7).
+2. Download `PsyMAS-Setup-Windows-v0.7.8.exe` from the [v0.7.8 release](https://github.com/JujiaLi2020/psych-mas/releases/tag/v0.7.8).
 3. Run the installer. When prompted, choose OpenRouter, No AI, or Local Ollama.
 4. Open `http://localhost:8501`.
 
@@ -22,7 +22,7 @@ Windows 10/11, Docker Desktop, 8 GB RAM, and 5-10 GB free disk space are recomme
 The CLI can silently install or check the runtime dependencies and then start the same Docker-based PsyMAS services used by the installer. Requirements are Python 3.11+ and [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
-uv tool install "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.7"
+uv tool install --force "psych-mas @ git+https://github.com/JujiaLi2020/psych-mas.git@v0.7.8"
 psymas install
 ```
 
@@ -52,7 +52,7 @@ psymas stop
 ```bash
 git clone https://github.com/JujiaLi2020/psych-mas.git
 cd psych-mas
-git switch --detach v0.7.7
+git switch --detach v0.7.8
 ```
 
 Create `.env` from `.env.example`, then start the published image:
@@ -66,7 +66,7 @@ Open `http://localhost:8501`. Stop with `docker compose -f docker-compose.releas
 
 ### 4. Railway deployment (managed API profile)
 
-Railway uses the same v0.7.7 application image with a deployment profile; it is not a second software version. Create a backend service from this repository using the default Dockerfile command, and a UI service using:
+Railway uses the same v0.7.8 application image with a deployment profile; it is not a second software version. Create a backend service from this repository using the default Dockerfile command, and a UI service using:
 
 ```bash
 sh scripts/run_ui_railway.sh
@@ -134,7 +134,7 @@ The capsule in `reproducibility/` contains the generation script, manifest, and 
 Docker image:
 
 ```text
-ghcr.io/jujiali2020/psych-mas:0.7.7
+ghcr.io/jujiali2020/psych-mas:0.7.8
 sha256:47ab7587b64ba4792fd13beb8f6e00a9a53e432fbc7c553dea5392b7d581fc4f
 ```
 

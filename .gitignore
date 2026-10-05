@@ -44,9 +44,30 @@ validation/
 reproducibility/demo_validation/
 tests/
 tools/
-figures/case239/
+figures/
 output/
 presentation_draft_tmp/
 Rplots.pdf
 data/psymas_snapshot_*.zip
 .pytest_cache/
+
+# Local dependencies and build staging
+node_modules/
+release-build-*/
+PsyMAS_AIME_Presentation_Draft/
+
+# Local service logs and runtime databases
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+
+# Private environment overrides (keep distributable examples)
+.env.*
+!.env.example
+!.env.*.example

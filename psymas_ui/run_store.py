@@ -7,6 +7,7 @@ import math
 import sqlite3
 from collections.abc import Mapping
 from functools import lru_cache
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -62,10 +63,15 @@ class RunStore:
         self._table_cache.clear()
         self._review_decisions_cache.clear()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def init_schema(self) -> None:
         with self._connect() as conn:

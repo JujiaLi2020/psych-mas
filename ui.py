@@ -10723,7 +10723,7 @@ def _render_demo_evaluated_snapshot_panel() -> None:
             st.download_button(
                 "Download evaluated snapshot",
                 data=snapshot_bytes or b"",
-                file_name="psymas_demo_evaluated_snapshot_v0.7.7.zip",
+                file_name="psymas_demo_evaluated_snapshot_v0.7.8.zip",
                 mime="application/zip",
                 disabled=not snapshot_bytes,
                 use_container_width=True,

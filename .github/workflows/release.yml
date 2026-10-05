@@ -68,12 +68,36 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
+      - name: Verify published container runtime
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          docker run --rm ghcr.io/${{ github.repository }}:$version python -m psymas_cli --version
+          docker run --rm ghcr.io/${{ github.repository }}:$version python -c "import zipfile; from psymas_ui.app_config import APP_VERSION, DEMO_EVALUATED_SNAPSHOT_PATH; assert APP_VERSION == '$version'; assert zipfile.ZipFile(DEMO_EVALUATED_SNAPSHOT_PATH).testzip() is None"
+
   windows-installer:
     needs: container
     runs-on: windows-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verify release and build CLI packages
+        shell: pwsh
+        run: |
+          python scripts/verify_release.py
+          python -m pip install --upgrade build
+          python -m build
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          python scripts/verify_release.py --wheel "dist/psych_mas-$version-py3-none-any.whl"
+          Get-ChildItem dist/psych_mas-*.whl,dist/psych_mas-*.tar.gz | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Set-Content "$($_.FullName).sha256" -Encoding ascii
+          }
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -98,7 +122,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             gh release create "${{ github.ref_name }}" --title "PsyMAS ${{ github.ref_name }}" --generate-notes
           }
-          gh release upload "${{ github.ref_name }}" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe.sha256" --clobber
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          gh release upload "${{ github.ref_name }}" "dist/psych_mas-$version-py3-none-any.whl" "dist/psych_mas-$version-py3-none-any.whl.sha256" "dist/psych_mas-$version.tar.gz" "dist/psych_mas-$version.tar.gz.sha256" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe" "dist/PsyMAS-Setup-Windows-${{ github.ref_name }}.exe.sha256" --clobber
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6

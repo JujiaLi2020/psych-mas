@@ -13,7 +13,7 @@ import webbrowser
 from pathlib import Path
 
 
-VERSION = "0.7.7"
+VERSION = "0.7.8"
 COMPOSE_PROJECT = "psymas-cli"
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
 
