@@ -6777,7 +6777,7 @@ def _check_llm_connection(*, model_id: str | None = None, provider: str | None =
     if provider == "openrouter":
         api_key = _configured_openrouter_api_key()
         if not api_key:
-            result = (False, "OpenRouter API key is not configured.")
+            result = (False, "Set OPENROUTER_API_KEY in the Railway UI service Variables, then redeploy." if _locked_llm_configuration() else "OpenRouter API key is not configured.")
         else:
             ok, error, elapsed = _test_openrouter_model(api_key, model_id, timeout=timeout)
             result = (ok, f"Model responded in {elapsed:.2f}s." if ok else f"Model test failed: {error}")
@@ -6800,13 +6800,22 @@ def _check_llm_connection(*, model_id: str | None = None, provider: str | None =
     return result
 
 
-# A single short health check makes the configured provider available immediately
-# after startup. It is cached by provider/model, so normal Streamlit reruns do not
-# repeatedly call a remote API or Ollama.
-_auto_llm_signature = _llm_connection_signature()
-if st.session_state.get("llm_auto_checked_signature") != _auto_llm_signature:
-    _check_llm_connection(timeout=3)
-    st.session_state["llm_auto_checked_signature"] = _auto_llm_signature
+def _ensure_llm_connection() -> None:
+    """Connect automatically; reuse success and throttle retries after failure."""
+    signature = _llm_connection_signature()
+    credential = _configured_openrouter_api_key() if _llm_provider() == "openrouter" else _configured_ollama_chat_url()
+    identity = signature + "|" + hashlib.sha256(credential.encode()).hexdigest()
+    same_identity = st.session_state.get("llm_auto_checked_identity") == identity
+    if same_identity and _llm_connection_is_current():
+        return
+    if same_identity and time.monotonic() - st.session_state.get("llm_auto_checked_at", 0) < 60:
+        return
+    _check_llm_connection(timeout=10)
+    st.session_state["llm_auto_checked_identity"] = identity
+    st.session_state["llm_auto_checked_at"] = time.monotonic()
+
+
+_ensure_llm_connection()
 run_mode = st.session_state.get("run_mode", "Scenario")
 active_workflow_stage = _STAGE_ALIASES.get(st.session_state.get("workflow_stage", "Assessment Data"), st.session_state.get("workflow_stage", "Assessment Data"))
 
@@ -7121,7 +7130,7 @@ with st.sidebar:
         ))
     if not llm_connected_sb:
         if provider_sb == "openrouter" and not or_key_sb.strip():
-            llm_setup_message = "Add an OpenRouter API key in Configuration."
+            llm_setup_message = "Set OPENROUTER_API_KEY in Railway service Variables." if _locked_llm_configuration() else "Add an OpenRouter API key in Configuration."
         elif provider_sb == "local_ollama":
             llm_setup_message = "Start Ollama and connect the selected local model."
         else:
@@ -14539,7 +14548,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
             st.caption(f"{case_provider_labels[selected_case_provider]} · shared Configuration settings · prompt remains editable")
         if not _llm_connection_is_current(model_id=selected_case_model, provider=selected_case_provider):
             st.warning("The selected model is not connected.")
-            if st.button("Connect selected model", key=f"connect_case_llm_{selected_id}"):
+            if not _locked_llm_configuration() and st.button("Connect selected model", key=f"connect_case_llm_{selected_id}"):
                 with st.spinner("Connecting to the selected model…"):
                     _check_llm_connection(provider=selected_case_provider, model_id=selected_case_model, timeout=10)
                 st.rerun()
