@@ -6635,6 +6635,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Narrow-screen overflow is scoped to the individual lineage container.
+# Desktop chart dimensions, fonts, and figure data remain unchanged.
+st.markdown("""
+<style>
+.psymas-mobile-lineage-hint, [class*="st-key-case_lineage_mobile_"] { display: none; }
+@media (max-width: 760px) {
+    .psymas-mobile-lineage-hint {
+        display: block; margin: 0 0 0.5rem;
+        color: #64748b; font-size: 0.85rem;
+    }
+    [class*="st-key-case_lineage_scroll_"] { display: none; }
+    [class*="st-key-case_lineage_mobile_"] { display: block; }
+
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ----- Sidebar: navigation -----
 # Use a separate key for the radio so we can set run_mode from Main-page buttons (Confirm / Go to).
 WORKFLOW_NAV = [
@@ -14425,20 +14442,35 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 else:
                     lineage_col, legend_col = st.columns([5.6, 1.15], gap="small")
                 with lineage_col:
-                    st.plotly_chart(
-                        lineage_fig,
-                        use_container_width=True,
-                        key=f"case_lineage_{selected_id}",
-                        config={"toImageButtonOptions": {
-                            "format": "png",
-                            "filename": f"case_{selected_id}_evidence_lineage_highres",
-                            # None preserves the currently rendered dimensions,
-                            # so PNG typography matches the user's view controls.
-                            "width": None,
-                            "height": None,
-                            "scale": 3.125,
-                        }},
+                    st.markdown(
+                        '<div class="psymas-mobile-lineage-hint">Swipe horizontally to view the full evidence lineage.</div>',
+                        unsafe_allow_html=True,
                     )
+                    with st.container(key=f"case_lineage_scroll_{selected_id}"):
+                        st.plotly_chart(
+                            lineage_fig,
+                            use_container_width=True,
+                            key=f"case_lineage_{selected_id}",
+                            config={"toImageButtonOptions": {
+                                "format": "png",
+                                "filename": f"case_{selected_id}_evidence_lineage_highres",
+                                # None preserves the currently rendered dimensions,
+                                # so PNG typography matches the user's view controls.
+                                "width": None,
+                                "height": None,
+                                "scale": 3.125,
+                            }},
+                        )
+                    with st.container(key=f"case_lineage_mobile_{selected_id}"):
+                        # A separate phone canvas retains tier spacing; CSS hides
+                        # it on desktop without changing the existing Plotly figure.
+                        mobile_lineage = type(lineage_fig)(lineage_fig.to_dict())
+                        mobile_lineage.update_layout(width=960, autosize=False)
+                        mobile_html = mobile_lineage.to_html(
+                            include_plotlyjs="cdn", full_html=True,
+                            config={"responsive": False, "displayModeBar": False},
+                        ).replace("<head>", '<head><style>body{margin:0;overflow-x:auto;-webkit-overflow-scrolling:touch;}</style>')
+                        components.html(mobile_html, height=int(mobile_lineage.layout.height) + 24, scrolling=True)
                 with legend_col:
                     st.markdown(lineage_dual_legend_html(), unsafe_allow_html=True)
                 st.caption(
