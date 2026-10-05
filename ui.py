@@ -6817,6 +6817,20 @@ def _ensure_llm_connection() -> None:
 
 
 _ensure_llm_connection()
+# A bare hosted URL is the home entry, even when Streamlit reuses a session.
+# Internal pages carry a view marker so widget reruns do not reset navigation.
+if (
+    _deployment_profile() in {"railway", "public"}
+    and not st.query_params.get("view")
+    and not st.query_params.get("scenario_select")
+):
+    st.session_state["_hosted_home_requested"] = True
+    st.session_state["run_mode"] = "Scenario"
+    st.session_state["sidebar_nav"] = "Scenario"
+    st.session_state.pop("_nav_request", None)
+    st.session_state.pop("_case_review_modal_id", None)
+    st.query_params["view"] = "demo"
+
 run_mode = st.session_state.get("run_mode", "Scenario")
 active_workflow_stage = _STAGE_ALIASES.get(st.session_state.get("workflow_stage", "Assessment Data"), st.session_state.get("workflow_stage", "Assessment Data"))
 
@@ -16679,6 +16693,13 @@ def _render_workbench_page(stage: str) -> None:
         _render_configuration_page()
 
 
+if _deployment_profile() in {"railway", "public"}:
+    st.query_params["view"] = (
+        "scenario" if run_mode == "Scenario"
+        else "configuration" if active_workflow_stage == "Configuration"
+        else str(active_workflow_stage).lower().replace(" ", "-")
+    )
+
 if run_mode != "Scenario":
     _render_flow_nav(active_workflow_stage)
 _render_workflow_shell(active_workflow_stage)
@@ -16827,10 +16848,15 @@ def _render_scenario_page() -> None:
         scenario_link = scenario_link[0] if scenario_link else None
     auto_demo = (
         _deployment_profile() in {"railway", "public"}
-        and not st.session_state.get("_hosted_demo_entry_seen")
         and not scenario_link
-        and not st.session_state.get("ab_only_scenario_select")
-        and not st.session_state.get("last_uploaded_responses")
+        and (
+            st.session_state.pop("_hosted_home_requested", False)
+            or (
+                not st.session_state.get("_hosted_demo_entry_seen")
+                and not st.session_state.get("ab_only_scenario_select")
+                and not st.session_state.get("last_uploaded_responses")
+            )
+        )
     )
     st.session_state["_hosted_demo_entry_seen"] = True
     if auto_demo:
@@ -16851,6 +16877,8 @@ def _render_scenario_page() -> None:
                     st.session_state["_demo_load_error"] = f"{snap_msg} {msg}"
                 try:
                     st.query_params.clear()
+                    if _deployment_profile() in {"railway", "public"}:
+                        st.query_params["view"] = "scenario"
                 except Exception:
                     pass
                 st.rerun()
@@ -16863,6 +16891,8 @@ def _render_scenario_page() -> None:
         st.session_state.workflow_stage = "AI-Assisted Review" if auto_demo and snap_ok else "Assessment Data"
         st.session_state.run_mode = _WORKFLOW_TARGETS[st.session_state.workflow_stage]
         st.session_state["sidebar_nav"] = st.session_state.workflow_stage
+        if _deployment_profile() in {"railway", "public"}:
+            st.query_params["view"] = "demo" if str(scenario_link) == "C" else "data"
         st.rerun()
 
     if st.session_state.get("_demo_load_error"):
