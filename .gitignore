@@ -38,3 +38,15 @@ document/
 Funding/
 .positai
 api/
+
+# Local research, tests, and presentation assets
+validation/
+reproducibility/demo_validation/
+tests/
+tools/
+figures/case239/
+output/
+presentation_draft_tmp/
+Rplots.pdf
+data/psymas_snapshot_*.zip
+.pytest_cache/

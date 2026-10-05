@@ -27,7 +27,9 @@
 #
 # ============================================================
 
-set.seed(2026)
+simulation_args <- commandArgs(trailingOnly = TRUE)
+simulation_seed <- if (length(simulation_args) >= 1) as.integer(simulation_args[1]) else 2026L
+set.seed(simulation_seed)
 
 # -----------------------------
 # 1. Basic settings
@@ -199,13 +201,16 @@ for (k in seq_along(copy_sources)) {
   source <- copy_sources[k]
   copier <- copy_copiers[k]
   
-  copied_items <- sample(1:J, size = round(J * 0.45))
+  # Use a strong demonstration signal so planted pairs remain distinguishable
+  # after correction across all candidate pairs. This is validation data, not
+  # an operational detection threshold.
+  copied_items <- sample(1:J, size = round(J * 0.80))
   
   final_scores[copier, copied_items] <- final_scores[source, copied_items]
   
   # Timing similarity is added to create a stronger demonstration case.
   response_times[copier, copied_items] <- 
-    response_times[source, copied_items] * runif(length(copied_items), 0.85, 1.15)
+    response_times[source, copied_items] * runif(length(copied_items), 0.95, 1.05)
 }
 
 # -----------------------------
@@ -432,8 +437,8 @@ answer_change_summary <- merge(
 # 19. Save simulation input files
 # -----------------------------
 
-output_dir <- "psymas_tutorial_data"
-dir.create(output_dir, showWarnings = FALSE)
+output_dir <- if (length(simulation_args) >= 2) simulation_args[2] else "psymas_tutorial_data"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Core input files
 write.csv(final_scores, file.path(output_dir, "final_scores_matrix.csv"), row.names = TRUE)

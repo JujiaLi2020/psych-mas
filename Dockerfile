@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy app files needed for R and Python install
 COPY packages.txt install_r_packages.R r_packages.txt ./
+RUN Rscript install_r_packages.R
+
 COPY pyproject.toml README.md docker-compose.release.yml ./
 COPY graph.py ui.py main.py mmls.py backend_service.py ./
 COPY psymas_ui psymas_ui
@@ -36,9 +38,6 @@ COPY psymas_graph psymas_graph
 COPY config config
 COPY data data
 COPY icon icon
-
-# Install R packages (mirt, WrightMap, psych) - can take several minutes
-RUN Rscript install_r_packages.R
 
 # Python dependencies
 RUN pip install --no-cache-dir . gunicorn uvicorn

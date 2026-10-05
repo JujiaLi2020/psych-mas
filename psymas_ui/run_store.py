@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
+from collections.abc import Mapping
 from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,25 @@ DATA_TABLES = (
 )
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+    return value
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(_json_safe(value), ensure_ascii=False, default=str, allow_nan=False)
+
+
 class RunStore:
     def __init__(self, db_path: Path | str = DEFAULT_DB_PATH) -> None:
         self.db_path = Path(db_path)
@@ -37,6 +58,7 @@ class RunStore:
 
     def clear_cache(self) -> None:
         """Invalidate materialized tables after an external database update."""
+        self.init_schema()
         self._table_cache.clear()
         self._review_decisions_cache.clear()
 
@@ -67,9 +89,39 @@ class RunStore:
                     updated_at TEXT,
                     PRIMARY KEY (run_id, examinee_id)
                 );
+                CREATE TABLE IF NOT EXISTS llm_report_audits (
+                    audit_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    examinee_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS llm_audit_case
+                    ON llm_report_audits(run_id, examinee_id, created_at);
                 """
             )
             conn.commit()
+
+    def save_llm_audit(self, record: dict) -> None:
+        """Append an immutable generation record, never overwrite a prior draft."""
+        self.init_schema()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO llm_report_audits VALUES (?, ?, ?, ?, ?)",
+                (record['audit_id'], record['run_id'], record['case_id'], record['created_at'], _json_text(record)),
+            )
+
+    def load_llm_audits(self, examinee_id: str, run_id: str | None = None) -> list[dict]:
+        # A frozen snapshot may replace the file behind a cached RunStore.
+        # Apply additive migrations before querying the replacement database.
+        self.init_schema()
+        run_id = str(run_id or self.active_run_id() or '')
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT record_json FROM llm_report_audits WHERE run_id=? AND examinee_id=? ORDER BY created_at DESC",
+                (run_id, str(examinee_id)),
+            ).fetchall()
+        return [json.loads(row['record_json']) for row in rows]
 
     def active_run_id(self) -> str | None:
         with self._connect() as conn:
@@ -162,9 +214,8 @@ class RunStore:
                 if table_name not in DATA_TABLES or not isinstance(df, pd.DataFrame):
                     continue
                 if df.empty:
-                    pd.DataFrame().to_sql(table_name, conn, if_exists="replace", index=False)
-                else:
-                    df.copy().to_sql(table_name, conn, if_exists="replace", index=False)
+                    continue
+                df.copy().to_sql(table_name, conn, if_exists="replace", index=False)
             conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
             conn.execute(
                 """
@@ -177,9 +228,9 @@ class RunStore:
                     run_id,
                     created_at,
                     SCHEMA_VERSION,
-                    json.dumps(metadata or {}, ensure_ascii=False, default=str),
-                    json.dumps(forensic_result or {}, ensure_ascii=False, default=str),
-                    json.dumps(pair_visual_index or {}, ensure_ascii=False, default=str),
+                    _json_text(metadata or {}),
+                    _json_text(forensic_result or {}),
+                    _json_text(pair_visual_index or {}),
                 ),
             )
             conn.execute("DELETE FROM review_decisions WHERE run_id = ?", (run_id,))

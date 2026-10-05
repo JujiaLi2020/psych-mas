@@ -155,7 +155,7 @@ reproducibility/      Generation script, manifest, and checksums
 
 ## Rulebook and thresholds
 
-The runtime rulebook is versioned in `config/`:
+The runtime rulebook is versioned in `config/`. See **[RULEBOOK.md](RULEBOOK.md)** for the human-readable policy, domain roles, Rapid Guessing calibration, copying-pair limitations, AI-report evidence boundary, and change-control procedure.
 
 - `config/rulebook_index.csv` registers each index, its function, domain, evidence role, family, and evidence-use policy.
 - `config/b3_index_mapping.yaml` defines family aggregation, domain assignment, and the rules for entering domain evidence.
@@ -163,6 +163,12 @@ The runtime rulebook is versioned in `config/`:
 - `config/index_thresholds.yaml` records threshold parameters and their sources.
 
 Keep these files together when changing the evidence logic. After a rule or threshold change, rerun the forensic review and regenerate the SQLite/Demo snapshot so the displayed results match the current configuration.
+
+Current high-impact rules:
+
+- Rapid Guessing uses the person-level `NT_2 RTE <= 0.90` rule and requires at least 90% valid RT observations; CT/CUMP remain display/audit outputs.
+- Similarity and copying pairs are context-only. They do not enter B3 or priority, and source/copier direction requires external context.
+- AI evidence claims and priority statements must pass case-specific citation validation; failed drafts are replaced with a deterministic summary.
 
 ## Rulebook-grounded AI review
 

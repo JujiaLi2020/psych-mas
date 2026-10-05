@@ -36,6 +36,10 @@ R_Secmin/
 *.RData
 *.Rhistory
 
+# Runtime exports and manually downloaded snapshots
+data/output/
+data/psymas_snapshot_*.zip
+
 # Tests and docs (optional: exclude to shrink image)
 test.py
 test_openrouter.py

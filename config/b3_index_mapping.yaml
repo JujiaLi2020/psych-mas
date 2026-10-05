@@ -19,11 +19,12 @@ domain_policy:
     label: Response-Time Evidence
     priority_role: primary_scenario
     eligible_functions: [detect_rg]
-    eligible_methods: [CT, CUMP, NT]
-    excluded_methods: [RTE, RTF, VI, VITP, unmotivated]
+    eligible_methods: [NT]
+    excluded_methods: [CT, CUMP, RTE, RTF, VI, VITP, unmotivated]
     rationale: >-
-      These methods directly operationalize rapid or atypical response-time
-      behavior. Detect_pm timing statistics remain MF because they test
+      The calibrated NT person-level RTE rule directly operationalizes rapid
+      or atypical response-time behavior while requiring adequate RT coverage.
+      CT and CUMP package item flags remain display/audit outputs. Detect_pm timing statistics remain MF because they test
       parametric person fit, not an independent rapid-guessing scenario.
   PK:
     label: Preknowledge Evidence
@@ -54,9 +55,12 @@ domain_policy:
     priority_role: context_only
     eligible_functions: [detect_ac, detect_as]
     rationale: >-
-      Similarity and copying outputs remain visible for pair-level review.
-      They do not enter B3 or priority until a prespecified pairwise rule and
-      calibration study are supplied.
+      Reviewer candidates require a package pair flag and at least 0.875
+      exact-response agreement. Reviewer context is limited to pairs
+      independently confirmed by detect_ac and detect_as. A stricter
+      Simes-then-BH tier is retained for sensitivity analysis.
+      Confirmed pairs do not enter B3 or priority until multi-seed and
+      operational calibration targets are met.
   CP:
     label: Change-Pattern Evidence
     priority_role: context_only
@@ -84,6 +88,7 @@ family_policy:
     domain: RT
     role: primary
     aggregation: one_signal_per_method_family
+    person_flag_rule: NT_2_RTE_lte_0.90_with_90pct_valid_RT
 
 evidence_use:
   Evidence Flag:

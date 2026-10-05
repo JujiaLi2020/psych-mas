@@ -34,25 +34,25 @@ DOMAIN_TIER = {
 }
 
 STRENGTH_LEGEND = (
-    ("Strong", "#DC2626"),
-    ("Moderate", "#C87512"),
+    ("Strong", "#315A91"),
+    ("Moderate", "#91AED3"),
     ("Weak", "#94A3B8"),
     ("None", "#64748B"),
     ("Unavailable", "#475569"),
 )
 
 PRIORITY_LEGEND = (
-    ("Critical / Expedited", "#DC2626"),
-    ("High · Context review", "#FB923C"),
-    ("High", "#C87512"),
-    ("Medium", "#C87512"),
-    ("Low", "#94A3B8"),
+    ("Critical / Expedited", "#B42318"),
+    ("High · Context review", "#E58A2B"),
+    ("High", "#E58A2B"),
+    ("Medium", "#E8C547"),
+    ("Low", "#8295AB"),
 )
 
-# Layer colors — dark tech palette
+# Evidence colors are distinct from review urgency.
 _LAYER_COLORS = {
-    "index": "#2F9BB3",  # selected/input blue-green
-    "domain": "#2DD4BF",  # teal
+    "index": "#4F7EB6",  # flagged detector input
+    "domain": "#315A91",  # evidence blue
     "conclusion": "#A78BFA",  # violet
     "other": "#64748B",
 }
@@ -67,7 +67,7 @@ _LINEAGE_COLUMN_X = {
 
 # Typography for Sankey node labels, titles, and column guides.
 _LINEAGE_FONT_FAMILY = "Segoe UI, Roboto, Helvetica, Arial, sans-serif"
-_LINEAGE_FONT_BASE = 12
+_LINEAGE_FONT_BASE = 15
 _LINEAGE_FONT_TITLE = 16
 _LINEAGE_FONT_SUBTITLE = 11
 _LINEAGE_FONT_COLUMN = 13
@@ -361,7 +361,7 @@ def build_lineage_sankey(
         sources.append(index_pos[index_key])
         targets.append(domain_pos[domain_key])
         values.append(int(count))
-        link_colors.append("rgba(56, 189, 248, 0.30)")
+        link_colors.append("rgba(79, 126, 182, 0.30)")
 
     for (domain_key, conclusion_key), count in sorted(domain_to_conclusion.items(), key=lambda item: -item[1]):
         if count <= 0:
@@ -369,7 +369,7 @@ def build_lineage_sankey(
         sources.append(domain_pos[domain_key])
         targets.append(conclusion_pos[conclusion_key])
         values.append(int(count))
-        link_colors.append("rgba(45, 212, 191, 0.32)")
+        link_colors.append("rgba(49, 90, 145, 0.30)")
 
     if not values:
         return None
@@ -384,6 +384,8 @@ def build_lineage_sankey(
         data=[
             go.Sankey(
                 arrangement="snap",
+                textfont=dict(family=_LINEAGE_FONT_FAMILY, size=_LINEAGE_FONT_BASE,
+                              color="#17324D", shadow="none", weight=600),
                 node=dict(
                     pad=_LINEAGE_NODE_PAD,
                     thickness=_LINEAGE_NODE_THICKNESS,
@@ -404,10 +406,10 @@ def build_lineage_sankey(
         ]
     )
     fig.update_layout(
-        title=dict(text=f"{title}<br><sup style='color:#94A3B8'>{subtitle}</sup>", x=0.01, font=dict(size=_LINEAGE_FONT_TITLE)),
-        font=dict(family=_LINEAGE_FONT_FAMILY, size=_LINEAGE_FONT_BASE, color="#CBD5E1"),
-        paper_bgcolor="#070B14",
-        plot_bgcolor="#070B14",
+        title=dict(text=f"{title}<br><sup style='color:#52677D'>{subtitle}</sup>", x=0.01, font=dict(size=_LINEAGE_FONT_TITLE)),
+        font=dict(family=_LINEAGE_FONT_FAMILY, size=_LINEAGE_FONT_BASE, color="#17324D"),
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
         margin=dict(l=16, r=16, t=64, b=16),
         height=height,
     )
@@ -417,9 +419,9 @@ def build_lineage_sankey(
 def _strength_color(strength: str) -> str:
     text = strength.lower()
     if text in {"strong", "critical"}:
-        return "#DC2626"
+        return "#315A91"
     if text in {"moderate", "medium"}:
-        return "#C87512"
+        return "#91AED3"
     if text in {"weak", "low"}:
         return "#94A3B8"
     if text in {"unavailable", "missing"}:
@@ -444,21 +446,21 @@ def priority_level_key(priority: object) -> str:
 
 def priority_color(priority: object) -> str:
     return {
-        "critical": "#DC2626",
-        "high": "#C87512",
-        "medium": "#C87512",
-        "low": "#94A3B8",
+        "critical": "#B42318",
+        "high": "#E58A2B",
+        "medium": "#E8C547",
+        "low": "#8295AB",
         "unknown": "#64748B",
     }.get(priority_level_key(priority), "#64748B")
 
 
 def priority_style(priority: object) -> dict[str, str]:
-    """Light-theme cell/chip styling aligned with domain strength tiers."""
+    """Review urgency colors, distinct from evidence strength."""
     return {
-        "critical": {"bg": "#FEF2F2", "text": "#991B1B", "border": "#DC2626"},
-        "high": {"bg": "#FFF7ED", "text": "#9A3412", "border": "#C87512"},
-        "medium": {"bg": "#FFF7ED", "text": "#9A3412", "border": "#C87512"},
-        "low": {"bg": "#F8FAFC", "text": "#475569", "border": "#94A3B8"},
+        "critical": {"bg": "#FEF2F2", "text": "#991B1B", "border": "#B42318"},
+        "high": {"bg": "#FFF7ED", "text": "#9A3412", "border": "#E58A2B"},
+        "medium": {"bg": "#FFFBEB", "text": "#715C12", "border": "#E8C547"},
+        "low": {"bg": "#F1F5F9", "text": "#475569", "border": "#8295AB"},
         "unknown": {"bg": "#FFFFFF", "text": "#64748B", "border": "#CBD5E1"},
     }.get(priority_level_key(priority), {"bg": "#FFFFFF", "text": "#64748B", "border": "#CBD5E1"})
 
@@ -466,9 +468,9 @@ def priority_style(priority: object) -> dict[str, str]:
 def strength_style(strength: object) -> dict[str, str]:
     text = _clean_text(strength).lower()
     if text == "strong":
-        return {"bg": "#FEF2F2", "text": "#991B1B", "border": "#DC2626"}
+        return {"bg": "#EDF2FA", "text": "#315A91", "border": "#315A91"}
     if text == "moderate":
-        return {"bg": "#FFF7ED", "text": "#9A3412", "border": "#C87512"}
+        return {"bg": "#F3F6FC", "text": "#315A91", "border": "#91AED3"}
     if text == "weak":
         return {"bg": "#F8FAFC", "text": "#475569", "border": "#94A3B8"}
     if text == "unavailable":
@@ -552,11 +554,11 @@ def _legend_layout(*, title: str, y: float, x: float = 0.0, xanchor: str = "left
         y=y,
         xanchor=xanchor,
         x=x,
-        font=dict(size=_LINEAGE_FONT_BASE, color="#CBD5E1"),
-        bgcolor="rgba(7, 11, 20, 0.85)",
+        font=dict(size=_LINEAGE_FONT_BASE, color="#17324D"),
+        bgcolor="#F8FAFC",
         bordercolor="rgba(148, 163, 184, 0.35)",
         borderwidth=1,
-        title=dict(text=title, font=dict(size=_LINEAGE_FONT_SUBTITLE, color="#94A3B8")),
+        title=dict(text=title, font=dict(size=_LINEAGE_FONT_SUBTITLE, color="#52677D")),
     )
 
 
@@ -573,20 +575,29 @@ def _legend_row_html(title: str, items: tuple[tuple[str, str], ...]) -> str:
 
 
 def lineage_dual_legend_html() -> str:
-    """Two-row legend for individual lineage Sankey (render below chart in Streamlit)."""
+    """Evidence roles and a separate, explicit four-level review-priority key."""
+    priority_items = ''.join(
+        '<div style="display:flex;align-items:flex-start;gap:0.45rem;margin-top:0.4rem;">'
+        f'<span class="dot" style="background:{priority_color(label)};"></span>'
+        f'<span style="font-size:0.76rem;font-weight:700;color:#17324D;">{label}</span></div>'
+        for label in ('Critical / Expedited','High','Medium','Low')
+    )
     return (
         '<div class="psymas-lineage-legend">'
         '<div class="psymas-lineage-legend-heading">Color key</div>'
-        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#DC2626;"></span>'
-        '<span><b>Strong evidence</b><em>priority-driving path</em></span></div>'
-        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#C87512;"></span>'
-        '<span><b>Moderate</b><em>priority-driving domain signal</em></span></div>'
-        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#2F9BB3;"></span>'
-        '<span><b>Evidence input</b><em>flagged detector output</em></span></div>'
-        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#64748B;"></span>'
+        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#315A91;"></span>'
+        '<span><b>Strong evidence</b><em>domain evidence strength</em></span></div>'
+        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#91AED3;"></span>'
+        '<span><b>Moderate evidence</b><em>domain evidence strength</em></span></div>'
+        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#4F7EB6;"></span>'
+        '<span><b>Flagged input</b><em>detector flag is active</em></span></div>'
+        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#8295AB;"></span>'
         '<span><b>Supporting only</b><em>context for interpretation</em></span></div>'
-        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#243041;"></span>'
+        '<div class="psymas-lineage-legend-row"><span class="dot" style="background:#D8E2EC;"></span>'
         '<span><b>Inactive/context</b><em>shown but not counted toward priority</em></span></div>'
+        + '<div class="psymas-lineage-legend-row"><span style="width:100%;">'
+        '<b>Review priority</b><em>human-review urgency</em>'
+        + priority_items + '</span></div>'
         + "</div>"
     )
 
@@ -615,22 +626,25 @@ def _add_strength_legend(fig: go.Figure, *, include_priority: bool = False) -> N
 
 
 def _add_tier_guides(fig: go.Figure) -> None:
-    column_guides: tuple[tuple[float, str, str], ...] = (
-        (_LINEAGE_COLUMN_X["index"], "Evidence input", "center"),
-        (_LINEAGE_COLUMN_X["domain"], "Domain", "center"),
-        (_LINEAGE_COLUMN_X["rule"], "Rule", "center"),
-        (_LINEAGE_COLUMN_X["final"], "Review priority", "right"),
+    column_guides: tuple[tuple[float, str, int], ...] = (
+        (_LINEAGE_COLUMN_X["index"], "Flagged index", _LINEAGE_NODE_THICKNESS // 2 + 3),
+        (_LINEAGE_COLUMN_X["domain"], "Domain", _LINEAGE_NODE_THICKNESS // 2 + 3),
+        (_LINEAGE_COLUMN_X["rule"], "Rule", _LINEAGE_NODE_THICKNESS // 2 + 3),
+        (_LINEAGE_COLUMN_X["final"], "Review priority", 20),
     )
-    for x_pos, label, xanchor in column_guides:
+    for x_pos, label, xshift in column_guides:
         fig.add_annotation(
             x=x_pos,
-            y=1.04,
+            y=1,
+            yshift=30,
+            yanchor="bottom",
             xref="paper",
             yref="paper",
             text=f"<b>{label}</b>",
             showarrow=False,
-            font=dict(size=_LINEAGE_FONT_COLUMN, color="#CBD5E1"),
-            xanchor=xanchor,
+            font=dict(size=_LINEAGE_FONT_COLUMN, color="#17324D"),
+            xanchor="left",
+            xshift=xshift,
         )
 
 
@@ -680,8 +694,9 @@ def individual_lineage_domain_rows(row: pd.Series) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-_INACTIVE_DOMAIN_COLOR = "#243041"
-_INACTIVE_RULE_COLOR = "#334155"
+_INACTIVE_DOMAIN_COLOR = "#D8E2EC"
+_INACTIVE_RULE_COLOR = "#D8E2EC"
+_SUPPORTING_NODE_COLOR = "#8295AB"
 _INACTIVE_LINK_COLOR = "rgba(100, 116, 139, 0.08)"
 _SUPPORTING_LINK_COLOR = "rgba(100, 116, 139, 0.16)"
 _INACTIVE_LINK_VALUE = 0.12
@@ -711,6 +726,7 @@ def build_individual_lineage_sankey(
     examinee_id: str | None = None,
     title: str = "Evidence lineage",
     included_domains: tuple[str, ...] | list[str] | None = None,
+    domain_status: dict[str, dict] | None = None,
     height: int = 600,
 ) -> go.Figure | None:
     """
@@ -728,6 +744,9 @@ def build_individual_lineage_sankey(
         keep_domains = {str(domain) for domain in included_domains}
         domains = [domain for domain in domains if str(domain.get("code")) in keep_domains]
 
+    if not domains:
+        return None
+
     index_entries: list[tuple[str, str]] = []
     active_domains: list[dict[str, object]] = []
     for domain in domains:
@@ -737,9 +756,6 @@ def build_individual_lineage_sankey(
         active_domains.append(domain)
         for index_token in domain["indices"]:
             index_entries.append((str(index_token), code))
-
-    if not index_entries:
-        return None
 
     indices_by_domain: dict[str, list[str]] = {str(d["code"]): [] for d in active_domains}
     for index_token, domain_code in index_entries:
@@ -754,27 +770,31 @@ def build_individual_lineage_sankey(
     rule_pos: dict[str, int] = {}
 
     for domain_code, tokens in indices_by_domain.items():
-        center_y = _domain_y_position(domain_code)
         n = max(len(tokens), 1)
         for rank, index_token in enumerate(tokens):
             index_pos[index_token] = len(node_labels)
             node_labels.append(short_index_label(index_token, truncate=True))
-            node_colors.append(_LAYER_COLORS["index"])
+            node_colors.append(_LAYER_COLORS["index"] if DOMAIN_TIER.get(domain_code) == "scenario" else _SUPPORTING_NODE_COLOR)
             node_x.append(_LINEAGE_COLUMN_X["index"])
-            spread = min(0.06, 0.02 * max(n - 1, 0))
-            offset = (rank - (n - 1) / 2) * (spread / max(n - 1, 1)) if n > 1 else 0.0
-            node_y.append(min(0.94, max(0.06, center_y + offset)))
+            # Distribute the full input column inside the plot, rather than
+            # clustering around domain centers and pushing later labels outside.
+            input_rank = len(index_pos) - 1
+            node_y.append(0.06 + 0.84 * input_rank / max(len(index_entries) - 1, 1))
 
     for domain in domains:
         code = str(domain["code"])
         has_indices = _domain_has_index_evidence(domain)
         domain_pos[code] = len(node_labels)
         label = _domain_compact_label(code)
+        if has_indices:
+            label += f" · {domain['strength']}"
         if not has_indices:
-            label = f"{label} · no index"
+            status=(domain_status or {}).get(code,{})
+            missing=str(status.get('Available','')).lower() in {'0','0.0','false'} or str(domain['strength']).lower() in {'unavailable','missing'}
+            label = f"{label} · unavailable" if missing else f"{label} · no index"
         node_labels.append(label)
         node_colors.append(
-            _strength_color(str(domain["strength"])) if has_indices else _INACTIVE_DOMAIN_COLOR
+            (_strength_color(str(domain["strength"])) if _domain_drives_priority(domain) else _SUPPORTING_NODE_COLOR) if has_indices else _INACTIVE_DOMAIN_COLOR
         )
         node_x.append(_LINEAGE_COLUMN_X["domain"])
         node_y.append(_domain_y_position(code))
@@ -785,7 +805,7 @@ def build_individual_lineage_sankey(
         rule = str(domain["rule"])
         rule_pos[code] = len(node_labels)
         node_labels.append(_rule_compact_label(code, rule))
-        node_colors.append(_strength_color(str(domain["strength"])) if has_indices else _INACTIVE_RULE_COLOR)
+        node_colors.append((_strength_color(str(domain["strength"])) if _domain_drives_priority(domain) else _SUPPORTING_NODE_COLOR) if has_indices else _INACTIVE_DOMAIN_COLOR)
         node_x.append(_LINEAGE_COLUMN_X["rule"])
         node_y.append(_domain_y_position(code))
 
@@ -807,7 +827,7 @@ def build_individual_lineage_sankey(
         sources.append(index_pos[index_token])
         targets.append(domain_pos[domain_code])
         values.append(1 if drives_priority else 0.35)
-        link_colors.append("rgba(47, 155, 179, 0.42)" if drives_priority else "rgba(100, 116, 139, 0.24)")
+        link_colors.append("rgba(79, 126, 182, 0.32)" if drives_priority else "rgba(100, 116, 139, 0.24)")
 
     for domain in domains:
         code = str(domain["code"])
@@ -821,12 +841,14 @@ def build_individual_lineage_sankey(
             link_colors.append(_INACTIVE_LINK_COLOR)
         elif drives_priority:
             values.append(max(1, n_idx))
-            link_colors.append("rgba(15, 107, 124, 0.42)")
+            link_colors.append("rgba(49, 90, 145, 0.30)")
         else:
             values.append(_supporting_link_value(n_idx))
             link_colors.append(_SUPPORTING_LINK_COLOR)
 
-    for domain in active_domains:
+    for domain in domains:
+        if not _domain_has_index_evidence(domain):
+            continue
         code = str(domain["code"])
         n_idx = len(domain["indices"])
         sources.append(rule_pos[code])
@@ -842,18 +864,21 @@ def build_individual_lineage_sankey(
         return None
 
     n_indices = len(index_entries)
+    n_flagged_indices = sum(len(d["indices"]) for d in active_domains)
     n_active_domains = len(active_domains)
     n_priority_domains = sum(1 for d in active_domains if _domain_drives_priority(d))
     n_supporting_domains = max(0, n_active_domains - n_priority_domains)
     n_inactive_domains = len(domains) - n_active_domains
     eid = examinee_id or _clean_text(row.get("Examinee_ID")) or "—"
     final_short = short_conclusion_label(review.get("priority"), review.get("status"))
-    dynamic_height = max(int(height), min(980, 300 + n_indices * 19 + len(domains) * 26))
+    dynamic_height = max(int(height), 240 + n_indices * 34 + len(domains) * 26)
 
     fig = go.Figure(
         data=[
             go.Sankey(
                 arrangement="snap",
+                textfont=dict(family=_LINEAGE_FONT_FAMILY, size=16,
+                              color="#17324D", shadow="none", weight=600),
                 node=dict(
                     pad=_LINEAGE_NODE_PAD,
                     thickness=_LINEAGE_NODE_THICKNESS,
@@ -876,20 +901,64 @@ def build_individual_lineage_sankey(
     fig.update_layout(
         title=dict(
             text=(
-                f"{title}<br><sup style='color:#94A3B8'>Examinee {eid} · "
-                f"{n_indices} eligible evidence inputs · {n_priority_domains} priority domains · "
+                f"{title}<br><sup style='color:#52677D'>Examinee {eid} · "
+                f"{n_indices} displayed index families · {n_flagged_indices} flagged · {n_priority_domains} priority domains · "
                 f"final: {final_short}</sup>"
             ),
             x=0.01,
+            y=1,
+            yref="container",
+            yanchor="top",
+            pad=dict(t=12),
             font=dict(size=_LINEAGE_FONT_TITLE),
         ),
-        font=dict(family=_LINEAGE_FONT_FAMILY, size=_LINEAGE_FONT_BASE, color="#CBD5E1"),
-        paper_bgcolor="#070B14",
-        plot_bgcolor="#070B14",
-        margin=dict(l=20, r=52, t=64, b=36),
+        font=dict(family=_LINEAGE_FONT_FAMILY, size=_LINEAGE_FONT_BASE, color="#17324D"),
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        margin=dict(l=24, r=210, t=148, b=72),
         height=dynamic_height,
         showlegend=False,
     )
+    # Sankey places terminal labels to the left. Use an explicit right-side
+    # annotation so priority text cannot be confused with upstream rule labels.
+    if index_entries:
+        hover_labels = list(node_labels)
+        fig.data[0].node.customdata = hover_labels
+        fig.data[0].node.hovertemplate = '%{customdata}<extra></extra>'
+        # Strength remains in hover and color; keep displayed domain labels concise.
+        for domain in domains:
+            if _domain_has_index_evidence(domain):
+                code = str(domain['code'])
+                node_labels[domain_pos[code]] = _domain_compact_label(code)
+        node_labels[final_pos] = ''
+        fig.data[0].node.label = node_labels
+        fig.add_annotation(name='review_priority_label',x=_LINEAGE_COLUMN_X['final'],y=0.5,
+            xref='paper',yref='paper',xshift=20,text='<b>' + final_label.replace(' · ','<br>') + '</b>',
+            showarrow=False,xanchor='left',align='left',font=dict(size=16,color='#17324D'))
+    if not index_entries:
+        fig.data = ()
+        for row_index, domain in enumerate(domains):
+            code = str(domain['code'])
+            y = 1 - (row_index + 1) / (len(domains) + 1)
+            status = (domain_status or {}).get(code, {})
+            missing = str(status.get('Available','')).lower() in {'0','0.0','false'} or str(domain['strength']).lower() in {'unavailable','missing'}
+            label = _domain_compact_label(code) + (' · unavailable' if missing else ' · no index')
+            display_label = label.replace(' · supporting only · ', '<br>supporting only · ')
+            fig.add_shape(type='rect',xref='paper',yref='paper',x0=_LINEAGE_COLUMN_X['domain'],
+                x1=_LINEAGE_COLUMN_X['rule'],y0=y-0.006,y1=y+0.006,
+                fillcolor=_INACTIVE_LINK_COLOR,line=dict(width=0))
+            for layer,text in [('domain',display_label),('rule',_rule_compact_label(code,str(domain['rule'])))]:
+                x = _LINEAGE_COLUMN_X[layer]
+                fig.add_shape(type='rect',xref='paper',yref='paper',x0=x-0.01,x1=x+0.01,
+                    y0=y-0.006,y1=y+0.006,fillcolor=_INACTIVE_DOMAIN_COLOR,line=dict(width=0))
+                fig.add_annotation(x=x+0.013,y=y,xref='paper',yref='paper',text=text,
+                    showarrow=False,xanchor='left',yanchor='middle',font=dict(size=16,color='#17324D'))
+        fig.add_shape(type='rect',xref='paper',yref='paper',x0=_LINEAGE_COLUMN_X['final']-0.01,
+            x1=_LINEAGE_COLUMN_X['final']+0.01,y0=0.49,y1=0.51,
+            fillcolor=priority_color(review['priority']),line=dict(width=0))
+        fig.add_annotation(name='review_priority_label',x=_LINEAGE_COLUMN_X['final'],y=0.5,xref='paper',yref='paper',xshift=20,
+            text='<b>' + final_label.replace(' · ','<br>') + '</b>',showarrow=False,xanchor='left',align='left',font=dict(size=16,color='#17324D'))
+        fig.update_xaxes(visible=False,range=[0,1]);fig.update_yaxes(visible=False,range=[0,1])
     _add_tier_guides(fig)
     return fig
 

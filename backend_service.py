@@ -362,7 +362,7 @@ def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
             pass
 
         selected_functions = req.aberrance_functions or ["detect_nm"]
-        psi_required = any(fn in selected_functions for fn in ("detect_pm", "detect_pk", "detect_ac", "detect_as"))
+        psi_required = any(fn in selected_functions for fn in ("detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_cp"))
         psi_data = req.psi_data or []
         if psi_required and not psi_data:
             sink.patch(
@@ -371,7 +371,7 @@ def _run_detect_job(job_id: str, req: DetectRequest, sink: Any) -> None:
                     "status": "error",
                     "error": (
                         "Missing psi_data. Generate or upload item parameters (ψ) on the Preparation "
-                        "page for detect_pm, detect_pk, detect_ac, or detect_as, then retry."
+                        "page for detect_pm, detect_pk, detect_ac, detect_as, or detect_cp, then retry."
                     ),
                     "progress": 0,
                 }

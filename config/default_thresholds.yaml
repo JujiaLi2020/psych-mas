@@ -76,6 +76,10 @@ governance:
       rule_id: RP-05
       case_status: Data-dependent review
       review_priority: Low
+    B6-06:
+      rule_id: RP-06
+      case_status: Supporting evidence only
+      review_priority: Low
   index_activation:
     primary_flag_columns:
       enabled: true
@@ -118,15 +122,37 @@ rules:
   detect_ac:
     alpha: 0.05
     source: R aberrance pair-level flag output
+    pair_rule:
+      q_alpha: 0.05
+      minimum_method_families: 2
+      minimum_agreement_rate: 0.875
+      candidate_source: package_pair_flag
+      retain_fdr_audit_tier: true
+      require_cross_detector_confirmation: true
+      feeds_B3: false
   detect_as:
     alpha: 0.05
     source: R aberrance pair-level flag output
+    pair_rule:
+      q_alpha: 0.05
+      minimum_method_families: 2
+      minimum_agreement_rate: 0.875
+      candidate_source: package_pair_flag
+      retain_fdr_audit_tier: true
+      require_cross_detector_confirmation: true
+      feeds_B3: false
   detect_pk:
     alpha: 0.05
     source: R aberrance model-based null distribution
   detect_rg:
     flag_methods:
     - NT
+    person_flag:
+      rte_method: NT_2
+      rte_max: 0.90
+      min_valid_proportion: 0.90
+      threshold_source: demo_validation_and_literature_screening_starting_point
+      note: Person-level screening requires at least 90% valid RT values and RTE at or below 0.90; recalibrate for the operational assessment.
     CT:
       enabled: true
       thr: 3
@@ -142,8 +168,8 @@ rules:
       - 25
       - 30
       - 35
-      feeds_B3: false
-      requires_calibration: true
+      feeds_B3: true
+      requires_calibration: false
     CUMP:
       enabled: true
       outlier: 90

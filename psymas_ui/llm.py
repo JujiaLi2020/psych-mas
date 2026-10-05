@@ -166,7 +166,7 @@ def save_llm_preferences(
 _load_persisted_llm_config()
 
 
-def call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: int = 90) -> tuple[str | None, str | None]:
+def call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: int = 90, report_schema: dict | None = None) -> tuple[str | None, str | None]:
     """Call OpenRouter chat completions. Return (text, None) or (None, error_message)."""
     if not model_id or not messages:
         return None, "No model or messages."
@@ -175,6 +175,9 @@ def call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: 
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     try:
         body = {"model": model_id, "messages": messages}
+        if report_schema is not None:
+            body['response_format'] = {'type':'json_schema','json_schema':{
+                'name':'psymas_case_report','strict':True,'schema':report_schema}}
         resp = requests.post(OPENROUTER_API_URL, headers=headers, json=body, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
@@ -196,7 +199,7 @@ def call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: 
         return None, f"{type(e).__name__}: {e}"
 
 
-def call_ollama(model_id: str, messages: list[dict], timeout: int = 120) -> tuple[str | None, str | None]:
+def call_ollama(model_id: str, messages: list[dict], timeout: int = 120, report_schema: dict | None = None) -> tuple[str | None, str | None]:
     """Call local Ollama chat API. Return (text, None) or (None, error_message)."""
     if not model_id or not messages:
         return None, "No local model or messages."
@@ -213,6 +216,8 @@ def call_ollama(model_id: str, messages: list[dict], timeout: int = 120) -> tupl
             },
         }
         endpoint = configured_ollama_chat_url()
+        if report_schema is not None:
+            body['format'] = report_schema
         resp = requests.post(endpoint, json=body, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
@@ -461,6 +466,7 @@ def call_selected_llm_text(
     timeout: int = 90,
     model_id: str | None = None,
     provider: str | None = None,
+    report_schema: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """Call the selected provider model, optionally overriding it for one case."""
     if locked_llm_configuration():
@@ -471,7 +477,8 @@ def call_selected_llm_text(
     if provider == "local_ollama":
         last_error = None
         for candidate in candidates:
-            text, err = call_ollama(candidate, [{"role": "user", "content": prompt}], timeout=timeout)
+            schema_options = {'report_schema':report_schema} if report_schema is not None else {}
+            text, err = call_ollama(candidate, [{"role": "user", "content": prompt}], timeout=timeout, **schema_options)
             if text and not err:
                 return text, None
             last_error = err
@@ -480,7 +487,8 @@ def call_selected_llm_text(
     api_key = os.getenv("OPENROUTER_API_KEY", "")
     last_error = None
     for candidate in candidates:
-        text, err = call_openrouter(api_key, candidate, [{"role": "user", "content": prompt}], timeout=timeout)
+        schema_options = {'report_schema':report_schema} if report_schema is not None else {}
+        text, err = call_openrouter(api_key, candidate, [{"role": "user", "content": prompt}], timeout=timeout, **schema_options)
         if text and not err:
             return text, None
         last_error = err

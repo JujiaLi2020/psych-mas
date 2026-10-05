@@ -3,7 +3,15 @@ import json
 import os
 import re
 import tempfile
+import threading
 import pandas as pd
+from psymas_graph.rapid_guessing import calibrated_rte_flags, summarize_package_flags
+from psymas_graph.pairs import (
+    calibrated_pair_candidates,
+    canonical_pair,
+    confirmed_similarity_pairs,
+    directional_pair_orders,
+)
 import numpy as np
 import requests
 from dotenv import load_dotenv
@@ -34,6 +42,22 @@ from psymas_graph.workflows import (
 
 
 _GRAPH_DIR = Path(__file__).resolve().parent
+_FORENSIC_R_LOCK = threading.RLock()
+
+
+def _serialized_forensic_agent(agent):
+    def run(state: State) -> dict:
+        with _FORENSIC_R_LOCK:
+            import rpy2.robjects as ro
+            from rpy2.robjects import conversion
+
+            token = conversion.converter_ctx.set(ro.default_converter)
+            try:
+                return agent(state)
+            finally:
+                conversion.converter_ctx.reset(token)
+
+    return run
 
 # To run an R package from a node (rt_agent, analyze_agent, etc.):
 #   import rpy2.robjects as ro
@@ -820,10 +844,11 @@ def aberrance_agent(state: State):
             except Exception:
                 pass
         # Preknowledge (detect_pk): needs ci (compromised item indices, 1-based), psi, x; returns stat per person
-        # R requires at least one secure item (not in ci), so we cannot default to "all items"
         compromised_items = state.get("compromised_items") or []
-        if not compromised_items and run_pk and psi_ready and len(keep_cols) > 1:
-            compromised_items = list(range(1, len(keep_cols)))  # default: items 1..n-1, leave last as secure
+        if run_pk and not compromised_items:
+            result["preknowledge_error"] = (
+                "Preknowledge unavailable: no compromised/exposed item list was provided."
+            )
         if run_pk and psi_ready and len(compromised_items) > 0:
             try:
                 ci_1based = [int(i) for i in compromised_items if isinstance(i, (int, float))]
@@ -890,10 +915,9 @@ def aberrance_agent(state: State):
                             if hasattr(flag_py, "__array__"):
                                 arr = np.asarray(flag_py)
                                 if arr.size > 0:
-                                    if arr.ndim == 1:
-                                        rg_flagged = np.where(arr)[0].tolist()
-                                    else:
-                                        rg_flagged = np.where(np.any(arr, axis=tuple(range(1, arr.ndim))))[0].tolist()
+                                    status = summarize_package_flags(arr)
+                                    rg_flagged = status["flagged"]
+                                    result["rapid_guessing_flag_status"] = status
                                     result["flagged_persons_rg"] = rg_flagged
                                     result["flagged_persons"] = sorted(set(result.get("flagged_persons", flagged_persons) + rg_flagged))
                                     result["n_flagged"] = len(result["flagged_persons"])
@@ -1216,14 +1240,19 @@ def ac_agent(state: State) -> dict:
                 return {"flags": {"ac_agent": {"error": "Could not build psi matrix."}}}
             ro.r("r <- x")
             N = len(resp_df)
-            pairs_0based = [(i, j) for i in range(N) for j in range(i + 1, N)]
-            pair_records: dict[int, dict] = {}
+            forward_pairs, reverse_pairs = directional_pair_orders(N)
+            ro.r("x_rev <- x[nrow(x):1, , drop=FALSE]; r_rev <- r[nrow(r):1, , drop=FALSE]")
+            pair_records: dict[tuple[int, int], dict] = {}
             flagged_copiers = set()
             methods_run: list[str] = []
             method_errors: list[str] = []
-            alpha_ac = _pairwise_alpha(state, "detect_ac", len(pairs_0based))
+            alpha_ac = _pairwise_alpha(state, "detect_ac", len(forward_pairs) + len(reverse_pairs))
+            ac_rules = (_threshold_rules(state).get("detect_ac") or {}).get("pair_rule") or {}
+            q_alpha = float(ac_rules.get("q_alpha", 0.05))
+            minimum_families = int(ac_rules.get("minimum_method_families", 2))
+            minimum_agreement = float(ac_rules.get("minimum_agreement_rate", 0.875))
 
-            def _run_ac_group(methods: list[str], call_args: str) -> None:
+            def _run_ac_group(methods: list[str], call_args: str, pair_order: list[tuple[int, int]], direction: str) -> None:
                 nonlocal pair_records, flagged_copiers, methods_run, method_errors
                 ro.globalenv["ac_methods_req"] = ro.StrVector(methods)
                 ro.r(f"""
@@ -1239,7 +1268,7 @@ def ac_agent(state: State) -> dict:
                             err = str(ro.r("as.character(ac_err)")[0])
                     except Exception:
                         pass
-                    method_errors.append(f"{', '.join(methods)}: {err}")
+                    method_errors.append(f"{', '.join(methods)} ({direction}): {err}")
                     return
                 ac_stat_py = ro.conversion.rpy2py(ro.r("as.data.frame(ac_out$stat)"))
                 ac_records = ac_stat_py.to_dict(orient="records") if hasattr(ac_stat_py, "to_dict") else []
@@ -1268,8 +1297,8 @@ def ac_agent(state: State) -> dict:
                         )
                     except Exception:
                         ac_flag_arr = None
-                for idx, (i, j) in enumerate(pairs_0based[:len(ac_records)]):
-                    row = pair_records.setdefault(idx, {"Source": i + 1, "Copier": j + 1})
+                for idx, (i, j) in enumerate(pair_order[:len(ac_records)]):
+                    row = pair_records.setdefault((i, j), {"Source": i + 1, "Copier": j + 1})
                     row.update(ac_records[idx])
                     if idx < len(pval_records):
                         for pk, pv in pval_records[idx].items():
@@ -1294,8 +1323,10 @@ def ac_agent(state: State) -> dict:
                         flagged_copiers.add(j)
                 methods_run.extend(methods)
 
-            _run_ac_group(["OMG_S", "GBT_S"], "x = x")
-            _run_ac_group(["OMG_R", "GBT_R"], "r = r")
+            _run_ac_group(["OMG_S", "GBT_S"], "x = x", forward_pairs, "forward")
+            _run_ac_group(["OMG_S", "GBT_S"], "x = x_rev", reverse_pairs, "reverse")
+            _run_ac_group(["OMG_R", "GBT_R"], "r = r", forward_pairs, "forward")
+            _run_ac_group(["OMG_R", "GBT_R"], "r = r_rev", reverse_pairs, "reverse")
             if not methods_run:
                 return {"flags": {"ac_agent": {"error": "detect_ac failed for all method groups: " + "; ".join(method_errors)}}}
 
@@ -1303,7 +1334,19 @@ def ac_agent(state: State) -> dict:
             flagged_pair_set: set[tuple[int, int]] = set()
             # Keep pairs with p < 0.10 (generous storage cutoff; UI slider does final filtering)
             _STORAGE_P_CUTOFF = 0.10
-            for row in pair_records.values():
+            all_pair_rows = list(pair_records.values())
+            all_pair_keys = list(pair_records.keys())
+            response_values = resp_df[keep_cols].to_numpy().tolist()
+            candidate_pairs, candidate_evidence = calibrated_pair_candidates(
+                all_pair_rows,
+                all_pair_keys,
+                response_values,
+                q_alpha=q_alpha,
+                minimum_method_families=minimum_families,
+                minimum_agreement_rate=minimum_agreement,
+            )
+            fdr_candidate_pairs = set(candidate_pairs)
+            for pair_key, row in zip(all_pair_keys, all_pair_rows):
                 row["flagged"] = bool(row.get("flagged", False))
                 if row["flagged"]:
                     try:
@@ -1315,11 +1358,37 @@ def ac_agent(state: State) -> dict:
                 for pk, pv in row.items():
                     if pk.endswith("_pval") and isinstance(pv, (int, float)):
                         min_p = min(min_p, pv)
-                if row["flagged"] or min_p < _STORAGE_P_CUTOFF:
+                pair_evidence = candidate_evidence.get(canonical_pair(pair_key), {})
+                row["agreement_rate"] = pair_evidence.get("agreement_rate")
+                row["adjusted_method_families"] = pair_evidence.get("method_families", [])
+                row["candidate"] = canonical_pair(pair_key) in candidate_pairs
+                if row["flagged"] or row["candidate"] or min_p < _STORAGE_P_CUTOFF:
                     pair_rows.append(row)
+            raw_flagged_pairs = {canonical_pair(pair) for pair in flagged_pair_set}
+            candidate_pairs = {
+                pair
+                for pair in raw_flagged_pairs
+                if (candidate_evidence.get(pair, {}).get("agreement_rate") or 0.0) >= minimum_agreement
+            }
+            flagged_participants = sorted({person for pair in candidate_pairs for person in pair})
             return {"flags": {"ac_agent": {
-                "pairs": pair_rows, "flagged_copiers": sorted(flagged_copiers),
-                "flagged_pairs": [list(pair) for pair in sorted(flagged_pair_set)],
+                "pairs": pair_rows,
+                "flagged_copiers": [],
+                "flagged_participants": flagged_participants,
+                "flagged_pairs": [list(pair) for pair in sorted(candidate_pairs)],
+                "candidate_pairs": [list(pair) for pair in sorted(candidate_pairs)],
+                "fdr_candidate_pairs": [list(pair) for pair in sorted(fdr_candidate_pairs)],
+                "raw_package_flagged_pairs": [list(pair) for pair in sorted(raw_flagged_pairs)],
+                "flagged_directional_pairs": [list(pair) for pair in sorted(flagged_pair_set)],
+                "direction_status": "unresolved_without_external_source_copier_context",
+                "pair_rule": {
+                    "candidate_rule": "package_pair_flag_and_agreement_gate",
+                    "fdr_audit_rule": "Simes_within_pair_then_BH_across_pairs",
+                    "q_alpha": q_alpha,
+                    "minimum_method_families": minimum_families,
+                    "minimum_agreement_rate": minimum_agreement,
+                    "cross_detector_confirmation": "pending",
+                },
                 "methods": list(dict.fromkeys(methods_run)), "method_errors": method_errors,
             }}}
     except Exception as e:
@@ -1376,6 +1445,10 @@ def as_agent(state: State) -> dict:
             method_errors: list[str] = []
             _STORAGE_P_CUTOFF = 0.10
             alpha_as = _pairwise_alpha(state, "detect_as", len(pairs))
+            as_rules = (_threshold_rules(state).get("detect_as") or {}).get("pair_rule") or {}
+            q_alpha = float(as_rules.get("q_alpha", 0.05))
+            minimum_families = int(as_rules.get("minimum_method_families", 2))
+            minimum_agreement = float(as_rules.get("minimum_agreement_rate", 0.875))
 
             def _run_as_group(methods: list[str], call_args: str) -> None:
                 nonlocal flagged, methods_run, method_errors
@@ -1461,7 +1534,25 @@ def as_agent(state: State) -> dict:
                 _run_as_group(["OMG_ST", "GBT_ST"], "x = x, y = y")
                 _run_as_group(["OMG_RT", "GBT_RT"], "r = r, y = y")
 
-            flagged_set = set(flagged)
+            all_records = [records_by_idx[idx] for idx in sorted(records_by_idx)]
+            all_pairs = [pairs[idx] for idx in sorted(records_by_idx)]
+            response_values = resp_df[keep_cols].to_numpy().tolist()
+            candidate_pairs, candidate_evidence = calibrated_pair_candidates(
+                all_records,
+                all_pairs,
+                response_values,
+                q_alpha=q_alpha,
+                minimum_method_families=minimum_families,
+                minimum_agreement_rate=minimum_agreement,
+            )
+            fdr_candidate_pairs = set(candidate_pairs)
+            raw_flagged_pairs = {canonical_pair(pair) for pair in flagged_pair_set}
+            candidate_pairs = {
+                pair
+                for pair in raw_flagged_pairs
+                if (candidate_evidence.get(pair, {}).get("agreement_rate") or 0.0) >= minimum_agreement
+            }
+            flagged_set = {person for pair in candidate_pairs for person in pair}
             records = []
             for idx, rec in records_by_idx.items():
                 min_p = 1.0
@@ -1469,15 +1560,30 @@ def as_agent(state: State) -> dict:
                     if pk.endswith("_pval") and isinstance(pv, (int, float)):
                         min_p = min(min_p, pv)
                 pair = pairs[idx]
-                if pair[0] in flagged_set or pair[1] in flagged_set or min_p < _STORAGE_P_CUTOFF:
+                pair_evidence = candidate_evidence.get(canonical_pair(pair), {})
+                rec["agreement_rate"] = pair_evidence.get("agreement_rate")
+                rec["adjusted_method_families"] = pair_evidence.get("method_families", [])
+                rec["candidate"] = canonical_pair(pair) in candidate_pairs
+                if rec["candidate"] or min_p < _STORAGE_P_CUTOFF:
                     records.append(rec)
             if not methods_run:
                 return {"flags": {"as_agent": {"error": "detect_as failed for all method groups: " + "; ".join(method_errors)}}}
             return {"flags": {"as_agent": {
                 "stat": records,
                 "methods": list(dict.fromkeys(methods_run)),
-                "flagged_pairs": [list(pair) for pair in sorted(flagged_pair_set)],
-                "flagged_participants": sorted(set(flagged)),
+                "flagged_pairs": [list(pair) for pair in sorted(candidate_pairs)],
+                "candidate_pairs": [list(pair) for pair in sorted(candidate_pairs)],
+                "fdr_candidate_pairs": [list(pair) for pair in sorted(fdr_candidate_pairs)],
+                "raw_package_flagged_pairs": [list(pair) for pair in sorted(raw_flagged_pairs)],
+                "flagged_participants": sorted(flagged_set),
+                "pair_rule": {
+                    "candidate_rule": "package_pair_flag_and_agreement_gate",
+                    "fdr_audit_rule": "Simes_within_pair_then_BH_across_pairs",
+                    "q_alpha": q_alpha,
+                    "minimum_method_families": minimum_families,
+                    "minimum_agreement_rate": minimum_agreement,
+                    "cross_detector_confirmation": "pending",
+                },
                 "method_errors": method_errors,
             }}}
     except Exception as e:
@@ -1504,7 +1610,11 @@ def rg_agent(state: State) -> dict:
         rt_df = pd.DataFrame(rt_data)
         if rt_df.shape[1] < n_items:
             return {"flags": {"rg_agent": {"error": f"RT has {rt_df.shape[1]} cols, need {n_items}."}}}
-        t_block = rt_df.iloc[:, :n_items].apply(pd.to_numeric, errors="coerce").fillna(0.01).astype(np.float64)
+        t_numeric = rt_df.iloc[:, :n_items].apply(pd.to_numeric, errors="coerce")
+        valid_proportions = t_numeric.notna().mean(axis=1).astype(float).tolist()
+        item_medians = t_numeric.median(axis=0, skipna=True)
+        overall_median = float(t_numeric.stack().median()) if t_numeric.notna().any().any() else 1.0
+        t_block = t_numeric.fillna(item_medians).fillna(overall_median).astype(np.float64)
         with (ro.default_converter + pandas2ri.converter).context():
             flat = t_block.values.flatten().tolist()
             ro.globalenv["t_vec"] = ro.FloatVector(flat)
@@ -1514,6 +1624,7 @@ def rg_agent(state: State) -> dict:
             rte_cols: dict[str, list] = {}
             flagged_set: set[int] = set()
             flagged_by_method: dict[str, list[int]] = {}
+            package_flag_status_by_method: dict[str, dict] = {}
 
             def _run_rg(method: str, args: str) -> None:
                 nonlocal methods_run, method_errors, rte_cols, flagged_set, flagged_by_method
@@ -1549,10 +1660,10 @@ def rg_agent(state: State) -> dict:
                     if bool(ro.r("'flag' %in% names(rg_out)")[0]):
                         fl_py = ro.conversion.rpy2py(ro.r("rg_out$flag"))
                         arr = np.asarray(fl_py)
-                        if arr.ndim == 1 and len(arr) == n_persons:
-                            method_flagged = set(np.where(arr)[0].tolist())
-                        elif arr.ndim >= 2 and arr.shape[0] == n_persons:
-                            method_flagged = set(np.where(np.any(arr, axis=1))[0].tolist())
+                        if arr.ndim >= 1 and arr.shape[0] == n_persons:
+                            status = summarize_package_flags(arr)
+                            package_flag_status_by_method[method] = status
+                            method_flagged = set(status["flagged"])
                         else:
                             method_flagged = set()
                         flagged_by_method[method] = sorted(method_flagged)
@@ -1580,8 +1691,22 @@ def rg_agent(state: State) -> dict:
                 _run_rg("VITP", f"x = x, outlier = {_r_num(vitp_outlier)}")
             if not methods_run:
                 return {"flags": {"rg_agent": {"error": "detect_rg failed for all methods: " + "; ".join(method_errors)}}}
-            rte_vals = rte_cols.get("NT_2") or rte_cols.get("NT") or (next(iter(rte_cols.values())) if rte_cols else [])
             rg_cfg = _threshold_rules(state).get("detect_rg") or {}
+            person_flag_cfg = rg_cfg.get("person_flag", {}) if isinstance(rg_cfg, dict) else {}
+            if not isinstance(person_flag_cfg, dict):
+                person_flag_cfg = {}
+            person_flag_method = str(person_flag_cfg.get("rte_method", "NT_2") or "NT_2")
+            rte_vals = rte_cols.get(person_flag_method) or rte_cols.get("NT_2") or rte_cols.get("NT") or (next(iter(rte_cols.values())) if rte_cols else [])
+            rte_max = float(person_flag_cfg.get("rte_max", 0.90))
+            min_valid_proportion = float(person_flag_cfg.get("min_valid_proportion", 0.90))
+            package_flagged_by_method = {key: list(value) for key, value in flagged_by_method.items()}
+            calibrated_nt = calibrated_rte_flags(
+                rte_vals,
+                valid_proportions,
+                rte_max=rte_max,
+                min_valid_proportion=min_valid_proportion,
+            )
+            flagged_by_method["NT"] = calibrated_nt
             flag_methods = rg_cfg.get("flag_methods", ["NT"]) if isinstance(rg_cfg, dict) else ["NT"]
             if isinstance(flag_methods, str):
                 flag_methods = [flag_methods]
@@ -1595,7 +1720,16 @@ def rg_agent(state: State) -> dict:
                 "rte": rte_vals, "rte_by_method": rte_cols, "flagged": flagged,
                 "flag_methods": [str(method) for method in flag_methods],
                 "flagged_by_method": flagged_by_method,
+                "package_flagged_by_method": package_flagged_by_method,
+                "package_flag_status_by_method": package_flag_status_by_method,
                 "flagged_any_method": sorted(flagged_set),
+                "person_flag_calibration": {
+                    "rule": f"{person_flag_method} RTE <= {rte_max:.2f}",
+                    "rte_method": person_flag_method,
+                    "rte_max": rte_max,
+                    "min_valid_proportion": min_valid_proportion,
+                    "valid_proportions": valid_proportions,
+                },
                 "methods": methods_run, "method_errors": method_errors,
             }}}
     except Exception as e:
@@ -1607,8 +1741,7 @@ def cp_agent(state: State) -> dict:
     """detect_cp: all supported score/time change-point method families."""
     print("--- FORENSIC cp_agent: detect_cp ---")
     selected = state.get("aberrance_functions") or []
-    # Only run CP when rapid-guessing / low-effort analysis is selected.
-    if selected and "detect_rg" not in selected:
+    if selected and "detect_cp" not in selected:
         return {"flags": {}}
     resp_df = pd.DataFrame(state["responses"])
     keep_cols = _forensic_keep_cols(resp_df)
@@ -1883,11 +2016,17 @@ def pk_agent(state: State) -> dict:
     ci = state.get("compromised_items") or []
     if not keep_cols or not psi_src or len(psi_src) != len(keep_cols):
         return {"flags": {"pk_agent": {"error": "Missing response columns or item parameters."}}}
-    # R requires at least one secure item (not in ci); cannot use "all items" as compromised
     if not ci:
-        if len(keep_cols) < 2:
-            return {"flags": {"pk_agent": {"error": "Preknowledge requires at least 2 items (one compromised, one secure)."}}}
-        ci = list(range(1, len(keep_cols)))  # default: items 1..n-1, leave last as secure
+        return {
+            "flags": {
+                "pk_agent": {
+                    "error": "Preknowledge unavailable: no compromised/exposed item list was provided.",
+                    "unavailable": True,
+                    "flagged": [],
+                    "methods": [],
+                }
+            }
+        }
     ci_clean = sorted({int(i) for i in ci if 1 <= int(i) <= len(keep_cols)})
     if not ci_clean:
         return {"flags": {"pk_agent": {"error": f"No valid compromised item IDs within 1..{len(keep_cols)}."}}}
@@ -2030,6 +2169,29 @@ def pk_agent(state: State) -> dict:
 # MANAGER NODE  (LLM Synthesizer)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _confirm_similarity_outputs(flags: dict) -> dict:
+    reconciled = dict(flags or {})
+    ac_data = dict(reconciled.get("ac_agent") or {})
+    as_data = dict(reconciled.get("as_agent") or {})
+    if not ac_data or not as_data or ac_data.get("error") or as_data.get("error"):
+        return reconciled
+    confirmed = confirmed_similarity_pairs(
+        ac_data.get("candidate_pairs", []),
+        as_data.get("candidate_pairs", []),
+    )
+    participants = sorted({person for pair in confirmed for person in pair})
+    confirmed_rows = [list(pair) for pair in sorted(confirmed)]
+    for agent_data in (ac_data, as_data):
+        agent_data["confirmed_pairs"] = confirmed_rows
+        agent_data["flagged_pairs"] = confirmed_rows
+        agent_data["flagged_participants"] = participants
+        pair_rule = dict(agent_data.get("pair_rule") or {})
+        pair_rule["cross_detector_confirmation"] = "AC_AND_AS"
+        agent_data["pair_rule"] = pair_rule
+    reconciled["ac_agent"] = ac_data
+    reconciled["as_agent"] = as_data
+    return reconciled
+
 def manager_router(state: State) -> dict:
     """Initialize flags dict and broadcast to all specialists."""
     print("--- FORENSIC Manager Router: dispatching to 8 specialists ---")
@@ -2039,7 +2201,7 @@ def manager_router(state: State) -> dict:
 def manager_synthesizer(state: State) -> dict:
     """Synthesize forensic verdict from all specialist flags via LLM."""
     print("--- FORENSIC Manager Synthesizer: generating final report ---")
-    flags = state.get("flags", {})
+    flags = _confirm_similarity_outputs(state.get("flags", {}))
     model_settings = state.get("model_settings") or {}
     load_dotenv()
     # Resolve LLM provider and API key — prefer OpenRouter, fall back to Google
@@ -2072,6 +2234,7 @@ def manager_synthesizer(state: State) -> dict:
         "detect_ac": "ac_agent",
         "detect_as": "as_agent",
         "detect_rg": "rg_agent",
+        "detect_cp": "cp_agent",
         "detect_tt": "tt_agent",
         "detect_pk": "pk_agent",
     }
@@ -2084,6 +2247,8 @@ def manager_synthesizer(state: State) -> dict:
             err = data.get("error")
             info = data.get("info")
             flagged = data.get("flagged", [])
+            if agent_name in {"ac_agent", "as_agent"}:
+                flagged = data.get("flagged_participants", [])
             flagged_copiers = data.get("flagged_copiers", [])
             methods = data.get("methods", [])
             rte = data.get("rte", [])
@@ -2258,6 +2423,8 @@ STYLE REQUIREMENTS:
                     cat_errors.append(f"{ag}: {ag_data['error']}")
                 cat_flagged.update(ag_data.get("flagged", []))
                 cat_flagged.update(ag_data.get("flagged_copiers", []))
+                if ag in {"ac_agent", "as_agent"}:
+                    cat_flagged.update(ag_data.get("flagged_participants", []))
             severity = "Critical" if len(cat_flagged) > 5 else ("Warning" if cat_flagged else "Clear")
             report_parts.append(f"## {cat_name} — {severity}")
             if cat_flagged:
@@ -2277,6 +2444,11 @@ STYLE REQUIREMENTS:
         report = "\n".join(report_parts)
 
     return {
+        "flags": {
+            key: flags[key]
+            for key in ("ac_agent", "as_agent")
+            if key in flags
+        },
         "final_report": report,
     }
 
@@ -2304,14 +2476,14 @@ def forensic_reporter(state: State) -> dict:
 forensic_workflow = build_forensic_workflow(
     router=manager_router,
     specialists={
-        "nm_agent": nm_agent,
-        "pm_agent": pm_agent,
-        "ac_agent": ac_agent,
-        "as_agent": as_agent,
-        "pk_agent": pk_agent,
-        "rg_agent": rg_agent,
-        "cp_agent": cp_agent,
-        "tt_agent": tt_agent,
+        "nm_agent": _serialized_forensic_agent(nm_agent),
+        "pm_agent": _serialized_forensic_agent(pm_agent),
+        "ac_agent": _serialized_forensic_agent(ac_agent),
+        "as_agent": _serialized_forensic_agent(as_agent),
+        "pk_agent": _serialized_forensic_agent(pk_agent),
+        "rg_agent": _serialized_forensic_agent(rg_agent),
+        "cp_agent": _serialized_forensic_agent(cp_agent),
+        "tt_agent": _serialized_forensic_agent(tt_agent),
     },
     synthesizer=manager_synthesizer,
     reporter=forensic_reporter,

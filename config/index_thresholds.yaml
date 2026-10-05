@@ -47,16 +47,38 @@ alpha_based_package_flags:
     - OMG_R
     - GBT_R
     source: package_alpha
+    directional_evaluation:
+      enabled: true
+      rule: evaluate_each_unordered_pair_in_both_source_copier_directions
+      note: Examinee ID order must not determine source and copier roles.
+    multiple_comparison_adjustment:
+      method: BH
+      within_pair_combination: Simes
+      scope: combined_pair_p_values_across_all_directional_pairs
+    confirmation_rule:
+      candidate_source: package_pair_flag
+      minimum_agreement_rate: 0.875
+      require_detect_as_confirmation: true
+      output: canonical_undirected_pair
+    fdr_audit_tier:
+      minimum_method_families: 2
+      reporting_role: sensitivity_analysis
   detect_as:
     enabled: true
     alpha: 0.05
     multiple_comparison_adjustment:
-      method: none
-      recommended: BH_FDR_or_pair_level_review
-      note: 'Pairwise similarity/copying tests can over-flag examinees if min p-value over all pairs is mapped directly to
-        person-level evidence.
-
-        '
+      method: BH
+      within_pair_combination: Simes
+      scope: combined_pair_p_values_across_all_pairs
+      note: Method p-values are combined within pair before pairwise false-discovery adjustment.
+    confirmation_rule:
+      candidate_source: package_pair_flag
+      minimum_agreement_rate: 0.875
+      require_detect_ac_confirmation: true
+      output: canonical_undirected_pair
+    fdr_audit_tier:
+      minimum_method_families: 2
+      reporting_role: sensitivity_analysis
     applies_to:
     - OMG_S
     - WOMG_S
@@ -272,6 +294,16 @@ external_thresholds:
     W_S_MIN1: *id002
     W_T_MIN1: *id002
   detect_rg:
+    person_flag:
+      enabled: true
+      rte_method: NT_2
+      rte_max: 0.90
+      min_valid_proportion: 0.90
+      operator: RTE <= rte_max and valid_RT_proportion >= min_valid_proportion
+      threshold_source: demo_validation_and_literature_screening_starting_point
+      feeds_B3: true
+      B3_eligible: true
+      note: Calibrated person-level rule; package item flags remain available for audit but are not aggregated with any-item logic.
     CT:
       enabled: true
       method_flag_source: package_threshold
@@ -294,14 +326,14 @@ external_thresholds:
       - 10
       operator: response_time < normative_threshold
       threshold_source: literature_or_assessment_calibration_required
-      feeds_B3: false
+      feeds_B3: true
       note: Computed for display/audit only until the response-time threshold is justified by literature, assessment design,
         or calibration.
       evidence_tier: literature_supported_screening_default
       citation_note: NT10 is a common normative threshold starting point; adjust by assessment context.
-      B3_eligible: false
-      evidence_use: display_only_until_threshold_calibrated
-      requires_calibration: true
+      B3_eligible: true
+      evidence_use: calibrated_person_level_rule
+      requires_calibration: false
     CUMP:
       enabled: true
       method_flag_source: package_threshold

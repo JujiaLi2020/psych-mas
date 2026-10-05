@@ -60,6 +60,7 @@ from psymas_ui.evidence_tree import (
     build_lineage_sankey,
     lineage_dual_legend_html,
     lineage_summary_rows,
+    parse_domain_indices,
     priority_level_key,
     priority_style,
     strength_style,
@@ -71,6 +72,8 @@ from psymas_ui.evidence_governance import (
     variant_allowed_for_b3,
 )
 from psymas_ui.review import build_final_flag_review
+from psymas_ui.report_validation import validate_evidence_links, case_citation_contract
+from psymas_ui.report_audit import evidence_fingerprint, make_audit_record
 from psymas_ui.run_store import get_run_store
 from psymas_ui.run_snapshot import pack_snapshot, unpack_snapshot
 from psymas_ui.deployment import (
@@ -343,7 +346,15 @@ def _load_demo_simulated_data() -> tuple[bool, str]:
 
 def _clear_demo_loaded_state() -> None:
     """Remove bundled demo inputs/results when switching back to a non-demo scenario."""
-    if not st.session_state.get("demo_data_loaded"):
+    if not any(
+        st.session_state.get(key)
+        for key in (
+            "demo_data_loaded",
+            "demo_evaluated_snapshot_loaded",
+            "demo_data_source",
+            "demo_evaluated_snapshot_source",
+        )
+    ):
         return
     for key in [
         "demo_data_loaded",
@@ -418,7 +429,7 @@ def _ensure_demo_scenario_ready() -> bool:
 def _prep_detect_requirements(prep_ab_fns: list[str]) -> dict:
     """Return readiness flags for the Detect button and status pills."""
     need_rt = "detect_rg" in prep_ab_fns
-    need_model = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"])
+    need_model = any(fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_cp"])
     need_tt = "detect_tt" in prep_ab_fns
     resp_ok = bool(st.session_state.get("last_uploaded_responses"))
     rt_ok = bool(st.session_state.get("last_uploaded_rt_data")) if need_rt else True
@@ -530,6 +541,7 @@ def _load_psi_upload(uploaded_file) -> list[dict]:
 def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[str]]:
     """Load multiple Preparation files into the same session keys used by individual uploaders."""
     loaded: list[str] = []
+    loaded_kinds: set[str] = set()
     errors: list[str] = []
     pending_rt: tuple[str, tuple, pd.DataFrame] | None = None
     pending_comp: tuple[str, tuple, pd.DataFrame] | None = None
@@ -550,6 +562,7 @@ def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[st
                 resp = _validate_binary_responses(df)
                 st.session_state.last_uploaded_responses = resp.to_dict(orient="records")
                 st.session_state["prep_last_resp_sig"] = sig
+                loaded_kinds.add("response")
                 loaded.append(f"Response: {name}")
             elif kind == "rt":
                 if df is None:
@@ -567,6 +580,7 @@ def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[st
                 st.session_state["prep_answer_changes"] = changes.to_dict(orient="records")
                 st.session_state["prep_last_answer_changes_sig"] = sig
                 st.session_state["prep_answer_changes_file_name"] = name
+                loaded_kinds.add("answer_changes")
                 loaded.append(f"Answer changes: {name}")
             elif kind in {"examinee_metadata", "item_metadata"}:
                 if df is None:
@@ -582,6 +596,7 @@ def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[st
                 st.session_state["last_irt_item_params"] = psi
                 st.session_state["item_params"] = psi
                 st.session_state["prep_last_psi_sig"] = sig
+                loaded_kinds.add("psi")
                 loaded.append(f"Item parameters: {name}")
             else:
                 errors.append(f"{name}: could not infer data type from file name or columns.")
@@ -596,6 +611,7 @@ def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[st
                 rt = _align_rt_columns_to_response(rt, resp_df)
             st.session_state.last_uploaded_rt_data = rt.to_dict(orient="records")
             st.session_state["prep_last_rt_sig"] = sig
+            loaded_kinds.add("rt")
             loaded.append(f"RT: {name}")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
@@ -610,9 +626,55 @@ def _process_prep_bulk_uploads(uploaded_files: list) -> tuple[list[str], list[st
             st.session_state["prep_compromised_items"] = comp_items
             st.session_state["prep_last_comp_sig"] = sig
             st.session_state["prep_compromised_file_name"] = name
+            loaded_kinds.add("compromised")
             loaded.append(f"Compromised items: {name}")
         except Exception as exc:
             errors.append(f"{name}: {exc}")
+
+    if "response" in loaded_kinds:
+        stale_optional_keys = {
+            "rt": ["last_uploaded_rt_data", "forensic_rt_data", "prep_last_rt_sig"],
+            "compromised": [
+                "prep_compromised_items",
+                "ab_only_compromised_items",
+                "prep_last_comp_sig",
+                "prep_compromised_file_name",
+            ],
+            "answer_changes": [
+                "prep_answer_changes",
+                "prep_last_answer_changes_sig",
+                "prep_answer_changes_file_name",
+            ],
+            "psi": [
+                "last_irt_item_params",
+                "item_params",
+                "forensic_psi_data",
+                "last_irt_itemtype",
+                "prep_last_psi_sig",
+                "prep_irt_job_id",
+                "prep_auto_irt_sig",
+            ],
+        }
+        for kind, keys in stale_optional_keys.items():
+            if kind not in loaded_kinds:
+                for key in keys:
+                    st.session_state.pop(key, None)
+        for key in (
+            "forensic_result",
+            "detect_run_id",
+            "detect_job_status",
+            "detect_job_error",
+            "psymas_active_run_id",
+            "psymas_run_store_ready",
+            "master_results_path",
+        ):
+            st.session_state.pop(key, None)
+        for key in list(st.session_state.keys()):
+            if str(key).startswith("demo_"):
+                st.session_state.pop(key, None)
+        if st.session_state.get("ab_only_scenario_select") == "C":
+            st.session_state["ab_only_scenario_select"] = ""
+            st.session_state["ab_only_scenario_select_previous"] = ""
 
     if loaded:
         st.session_state["_nav_request"] = "Preparation"
@@ -1954,7 +2016,7 @@ def _agent_flagged_indices(agent_data: dict, agent_key: str = "") -> set[int]:
 
     # Pair-based similarity/copying: person-level review uses role-specific lists only.
     if agent_key == "ac_agent":
-        _add(agent_data.get("flagged_copiers"))
+        _add(agent_data.get("flagged_participants") or agent_data.get("flagged_copiers"))
         return out
 
     if agent_key == "as_agent":
@@ -1999,7 +2061,7 @@ def _infer_n_examinees(flags: dict, responses: list | None) -> int:
 
 
 def _export_agents(flags: dict, visible_agents: set[str] | None) -> list[tuple[str, str]]:
-    """Agents to include: selected in this run, plus cp_agent when rg ran and cp data exists."""
+    """Agents to include from the current run, with legacy RG-linked CP compatibility."""
     out: list[tuple[str, str]] = []
     for agent_key, fn_label in _EXAMINEE_FLAG_AGENT_COLUMNS:
         if agent_key not in flags or not isinstance(flags.get(agent_key), dict):
@@ -3832,13 +3894,15 @@ def _build_governed_evidence_profile(
         examinee_id = row.get("Examinee_ID", "")
         if use_b3_input:
             ex_rows = b3_by_examinee.get(str(examinee_id), pd.DataFrame())
-            profiles = {
-                code: _b3_domain_profile_from_input(
+            profiles = {}
+            for code in b2_domains:
+                profile = _b3_domain_profile_from_input(
                     ex_rows[ex_rows["Domain"].astype(str) == code] if not ex_rows.empty else ex_rows,
                     code,
                 )
-                for code in b2_domains
-            }
+                if not profile.get("available") and source_plan.get(code):
+                    profile = _b2_domain_profile(row, source_plan.get(code, []), code)
+                profiles[code] = profile
         else:
             profiles = {
                 code: _b2_domain_profile(row, source_plan.get(code, []), code)
@@ -5783,6 +5847,11 @@ st.markdown("""
         color: #0F172A !important;
         font-size: 0.82rem;
         line-height: 1.18rem;
+        box-sizing: border-box;
+        height: 22rem;
+        min-height: 12rem;
+        resize: vertical;
+        overflow: auto;
     }
     .psymas-ai-suggestion .label {
         color: #0F6B7C !important;
@@ -5817,21 +5886,25 @@ st.markdown("""
     }
     .psymas-ai-suggestion .text {
         min-height: 0;
-        max-height: 18rem;
-        overflow: auto;
-        white-space: pre-wrap;
+        max-height: none;
+        overflow: visible;
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
     .psymas-ai-suggestion .section-title {
         display: block;
         font-weight: 900;
         color: #0F172A !important;
-        margin: 0.16rem 0 0 0;
-        line-height: 1.05rem;
+        margin: 0.45rem 0 0.15rem 0;
+        line-height: 1.3;
     }
     .psymas-ai-suggestion .section-body {
         display: block;
-        margin: 0.02rem 0 0.08rem 0.45rem;
-        line-height: 1.12rem;
+        margin: 0 0 0.3rem 0;
+        line-height: 1.35;
+    }
+    .psymas-ai-suggestion .section-title:first-child {
+        margin-top: 0;
     }
     .psymas-decision-guide {
         display: grid;
@@ -5923,14 +5996,14 @@ st.markdown("""
         font-size: 0.82rem;
     }
     .psymas-lineage-legend {
-        background: #070B14;
+        background: #F8FAFC;
         border: 1px solid rgba(148, 163, 184, 0.35);
         border-radius: 8px;
         padding: 0.62rem 0.7rem;
         margin: 0.05rem 0 0.65rem 0;
     }
     .psymas-lineage-legend-heading {
-        color: #F8FAFC !important;
+        color: #17324D !important;
         font-size: 0.72rem;
         font-weight: 900;
         text-transform: uppercase;
@@ -5942,7 +6015,7 @@ st.markdown("""
         align-items: flex-start;
         gap: 0.45rem;
         font-size: 0.78rem;
-        color: #CBD5E1;
+        color: #17324D;
     }
     .psymas-lineage-legend-row + .psymas-lineage-legend-row {
         margin-top: 0.5rem;
@@ -5950,13 +6023,13 @@ st.markdown("""
         border-top: 1px solid rgba(148, 163, 184, 0.2);
     }
     .psymas-lineage-legend-row b {
-        color: #F8FAFC !important;
+        color: #17324D !important;
         display: block;
         font-size: 0.78rem;
         line-height: 1rem;
     }
     .psymas-lineage-legend-row em {
-        color: #94A3B8 !important;
+        color: #52677D !important;
         display: block;
         font-size: 0.68rem;
         font-style: normal;
@@ -6660,7 +6733,31 @@ def _llm_connection_signature(provider: str | None = None, model_id: str | None 
     return f"{provider}|{model_id}"
 
 
-def _llm_connection_is_current(model_id: str | None = None) -> bool:
+def _sync_config_llm_provider() -> None:
+    """Keep provider selection outside widget cleanup when navigating pages."""
+    provider = st.session_state.get("llm_provider_editor")
+    if provider in {"openrouter", "local_ollama"}:
+        st.session_state["llm_provider"] = provider
+
+
+def _sync_case_llm_provider(widget_key: str) -> None:
+    provider = st.session_state.get(widget_key)
+    if provider in {"openrouter", "local_ollama"}:
+        st.session_state["llm_provider"] = provider
+
+
+def _sync_case_llm_model(widget_key: str) -> None:
+    model = st.session_state.get(widget_key)
+    if model:
+        key = "openrouter_selected_model" if _llm_provider() == "openrouter" else "ollama_selected_model"
+        st.session_state[key] = model
+        # Let Configuration rebuild its editor from the shared selection.
+        for editor in ("openrouter_curated_model", "openrouter_custom_model", "openrouter_model_source",
+                       "ollama_model_picker", "ollama_custom_model", "ollama_model_source"):
+            st.session_state.pop(editor, None)
+
+
+def _llm_connection_is_current(model_id: str | None = None, provider: str | None = None) -> bool:
     """Use only a successful test for the currently selected provider and model."""
     result = st.session_state.get("llm_connection_result")
     return bool(
@@ -6668,7 +6765,7 @@ def _llm_connection_is_current(model_id: str | None = None) -> bool:
         and len(result) >= 1
         and bool(result[0])
         and st.session_state.get("llm_connection_signature")
-        == _llm_connection_signature(model_id=model_id)
+        == _llm_connection_signature(provider=provider, model_id=model_id)
     )
 
 
@@ -6950,7 +7047,7 @@ with st.sidebar:
     if not selected_fns:
         selected_fns = ["detect_nm"]  # default backend fallback (no extra inputs)
     need_rt = "detect_rg" in selected_fns
-    need_psi = any(fn in selected_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"])
+    need_psi = any(fn in selected_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_cp"])
     need_comp = "detect_pk" in selected_fns
     need_tt = "detect_tt" in selected_fns
 
@@ -7062,10 +7159,10 @@ st.markdown(
         color: #0F172A !important;
         border: 1px solid #CBD5E1 !important;
         border-radius: 14px !important;
-        box-shadow:
-            0 24px 70px rgba(15, 23, 42, 0.28),
-            0 2px 8px rgba(15, 23, 42, 0.10),
-            inset 0 1px 0 rgba(255, 255, 255, 0.90) !important;
+        /* Transparent layout wrappers preserve rounded corners without clipping
+           the long report during full-page screenshot capture. */
+        overflow: visible !important;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28) !important;
     }
     div[role="dialog"] *,
     div[role="dialog"] p,
@@ -7085,7 +7182,8 @@ st.markdown(
     div[role="dialog"] > div,
     div[role="dialog"] section,
     div[role="dialog"] [data-testid="stVerticalBlock"] {
-        background: #FFFFFF !important;
+        /* Layout wrappers share the outer surface instead of painting square edges. */
+        background: transparent !important;
     }
     div[role="dialog"] [data-testid="stContainer"] {
         background: #FFFFFF !important;
@@ -7140,15 +7238,27 @@ st.markdown(
         font-weight: 900 !important;
         color: #0F172A !important;
     }
+    .st-key-case_performance_context [data-testid="stMetricLabel"],
+    .st-key-case_performance_context [data-testid="stMetricLabel"] * {
+        font-size: 0.875rem !important;
+        line-height: 1.3 !important;
+        font-weight: 600 !important;
+    }
+    .st-key-case_performance_context [data-testid="stMetricValue"],
+    .st-key-case_performance_context [data-testid="stMetricValue"] * {
+        font-size: 1.75rem !important;
+        line-height: 1.25 !important;
+        font-weight: 800 !important;
+    }
     div[role="dialog"] .psymas-lineage-legend,
     div[role="dialog"] .psymas-lineage-legend-row,
     div[role="dialog"] .psymas-lineage-legend-row span.item {
-        color: #CBD5E1 !important;
-        -webkit-text-fill-color: #CBD5E1 !important;
+        color: #17324D !important;
+        -webkit-text-fill-color: #17324D !important;
     }
     div[role="dialog"] .psymas-lineage-legend-title {
-        color: #94A3B8 !important;
-        -webkit-text-fill-color: #94A3B8 !important;
+        color: #52677D !important;
+        -webkit-text-fill-color: #52677D !important;
     }
     div[role="dialog"] div[data-baseweb="segmented-control"] label,
     div[role="dialog"] div[data-baseweb="segmented-control"] label * {
@@ -8367,7 +8477,7 @@ def _rulebook_rows() -> list[dict]:
             fn = str(row.get("function", ""))
             if not fn.startswith("detect_"):
                 continue
-            is_selected = fn in selected or (fn == "detect_cp" and "detect_rg" in selected)
+            is_selected = fn in selected
             rows.append(
                 {
                     "function": fn,
@@ -8391,7 +8501,7 @@ def _rulebook_rows() -> list[dict]:
     rows = []
     for row in APPENDIX_B2_RULEBOOK:
         fn = row["function"]
-        is_selected = fn in selected or (fn == "detect_cp" and "detect_rg" in selected)
+        is_selected = fn in selected
         rows.append(
             {
                 "function": fn,
@@ -9576,7 +9686,7 @@ def _psychometrics_status_pills_html() -> str:
     n_persons = len(responses)
     n_items = len(responses[0]) if responses else 0
     need_rt = "detect_rg" in selected
-    need_psi = any(fn in selected for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"])
+    need_psi = any(fn in selected for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_cp"])
     need_tt = "detect_tt" in selected
     status = st.session_state.get("detect_job_status", "pending")
     provider = _llm_provider()
@@ -11142,6 +11252,8 @@ def _build_case_reviewer_context(
     ]
     hard_contract = (
         "CASE-SPECIFIC EVIDENCE CONTRACT\n"
+        + case_citation_contract(case_row, case_domains, selected_trace)
+        +
         f"Allowed active domains: {', '.join(sorted(active_domain_codes)) or 'none'}.\n"
         f"Allowed governed index families: {', '.join(active_family_names) or 'none'}.\n"
         f"Inactive domains that must not be discussed as evidence: "
@@ -11454,15 +11566,19 @@ def _generate_case_reviewer_explanation(
 ) -> str:
     context = _build_case_reviewer_context(selected_id, case_row, case_domains, case_trace, case_auxiliary)
     prompt = _case_reviewer_prompt(context)
+    prompt += structured_report_instruction(case_row, case_domains, case_trace)
+    schema = report_schema(case_row, case_domains, case_trace)
     load_dotenv()
     # Local models can need substantially longer for the evidence-bound case note
     # than for the short connection test used in Configuration.
     provider = provider or _llm_provider()
     llm_timeout = 180 if provider == "local_ollama" else 90
-    text, err = _call_selected_llm_text(prompt, model_id=model_id, provider=provider, timeout=llm_timeout)
+    text, err = _call_selected_llm_text(prompt, model_id=model_id, provider=provider, timeout=llm_timeout, report_schema=schema)
     if text and not err:
-        validated, violations = _validate_llm_case_report(
-            text, case_row, case_domains, case_trace, case_auxiliary
+        validated, violations = _audit_case_model_draft(
+            text, selected_id, case_row, case_domains, case_trace, case_auxiliary,
+            provider=provider, model_id=model_id or _effective_llm_model(), prompt=prompt, packet=context,
+            require_structured=True,
         )
         if violations:
             # Do not make a second slow model request. The deterministic
@@ -11473,7 +11589,7 @@ def _generate_case_reviewer_explanation(
             st.session_state[f"case_llm_validation_{selected_id}"] = (
                 "The model draft did not pass the evidence-language audit; a deterministic evidence preview is shown. "
                 + "Reasons: "
-                + "; ".join(violations[:3])
+                + "; ".join(violations)
             )
             return validated
         st.session_state[f"case_llm_fallback_{selected_id}"] = False
@@ -11509,179 +11625,21 @@ def _generate_case_reviewer_explanation(
     return _format_llm_error(last_err)
 
 
-DEFAULT_CASE_REVIEWER_PROMPT = """You are a senior psychometric forensic reviewer writing a concise case-review support note for PsyMAS.
-
-This is an individual examinee case review, not a description of the software, a dataset, a machine-learning system, or detector performance. Never write phrases such as "This appears to be a report from a machine learning system", "system performance", "the system is functioning correctly", or "the report shows how the dataset can be used". Begin with the examinee's review concern and use the supplied governed evidence for that case only.
-
-Use only the supplied case evidence packet. The packet may contain two kinds of information: governed evidence data and raw-input-derived review cues. Keep these roles separate.
-
-Evidence data to use for the review conclusion:
-- Case summary: examinee ID, system review priority, domains for review, highest domain strength, rules triggered, draft statement, and any existing human-review fields.
-- Domain evidence: domain, strength, strength rule, evidence pattern, primary hits, supporting hits, calibration-required hits, display-only hits, and missing/unavailable evidence.
-- Selected key index evidence: function, index, domain, evidence use, role, flag type, flag column, observed value, threshold rule, and threshold source.
-- Auxiliary/display-only index data: use only for localization, interpretation, or audit; do not let it increase evidence strength unless the rulebook says it is governed evidence.
-
-Raw inputs and derived review cues to use only for explanation and reviewer navigation:
-- responses.csv: score, percentile, item-level selected responses, selected accuracy, and comparison with item/cohort means.
-- response_times.csv: person response-time profile, item mean response time, rapid/low-effort timing patterns, and timing around flagged or localized items.
-- item_params.csv or estimated item parameters: IRT model support for model-based indices; do not report parameters unless they are included in the packet.
-- compromised_items.csv: exposed/compromised item list; use to explain PK item-level checks such as exposed-item accuracy and response time.
-- answer_changes.csv: initial/final response or changed-item records; use to explain TP/tampering checks and whether changes cluster by item range.
-- CP localization outputs: item or item range where a shift is estimated; use as an inspection guide, not as counted evidence unless CP has a calibrated governed rule.
-- CP is a localization/display-only cue in the current rulebook. It may identify an item or range to inspect, but it must not be described as an active priority domain or as evidence strength.
-
-Evidence hierarchy:
-- Governed evidence data determines the review-support recommendation.
-- The packet includes RULEBOOK_RESOLUTION, a deterministic, case-specific application of config/b3_index_mapping.yaml. Treat this block as authoritative for family aggregation, domain roles, B3 strength, and priority basis. Do not reconstruct B3 rules or priority from raw values, index counts, or domain names.
-- Priority basis is the controlling interpretation path. First explain the supplied PRIORITY_BASIS; do not recompute priority from raw indices.
-- Active primary domains (RT, PK, TP) determine the case profile and priority. MF is supporting context only. SIM and CP are non-priority context unless the rulebook explicitly marks them as governed.
-- Use only the current case-profile vocabulary: "No governed scenario", "Single-scenario signal", "Supporting evidence only", "Cross-scenario pattern", or "Data-dependent review". Never use legacy labels such as "Convergent", "Isolated", "Limited", "No substantive evidence pattern", "Convergent (Traceable)", "Convergent (Context-Dependent)", or "Highly Verifiable".
-- When two or more primary domains among RT, PK, and TP are active at moderate or strong level, describe the profile as "Cross-scenario pattern". MF does not create a second scenario domain.
-- Use index families only to explain the active domains named in PRIORITY_BASIS. Do not elevate an inactive domain because an auxiliary or raw cue is present.
-- Raw inputs explain what the reviewer should inspect and why.
-- Simulation truth labels, if present, are validation-only and must not be used for an individual case interpretation.
-- Missing raw inputs should be explicitly noted as a limitation, not silently ignored.
-
-Do not use raw performance scores as misconduct evidence unless they are explicitly linked to governed forensic indices.
-
-Required terminology:
-- MF = Misfit Evidence.
-- RT = Response-Time Evidence.
-- PK = Preknowledge Evidence.
-- TP = Tampering / Answer-Change Evidence.
-- SIM = Similarity Evidence.
-- CP = Change-Point Evidence.
-
-Decision boundary:
-- A flag is a review trigger, not a misconduct conclusion.
-- Do not infer intent, cheating, fraud, or misconduct.
-- Do not imply the examinee misused exposed items, had access to exposed content, or changed answers improperly. Describe only what the evidence pattern asks the reviewer to inspect.
-- Do not say "high likelihood of aberrance" or "potential misconduct" unless quoting the human-selected B9 outcome.
-- Do not use a human-selected B9 label in the narrative. B9 is displayed separately as a human adjudication field.
-- Never describe a binary flag value such as 1.0 as a probability, magnitude, or proof of unusually fast behavior.
-- Do not say the examinee "had prior familiarity", "used a strategy", "obtained answers without understanding", or "compromised integrity".
-- When TP is none or unavailable, do not present tampering or answer-change evidence as governed, flagged, or active. You may still tell the reviewer to inspect supplied answer-change or initial/final-response records as a raw-data check, clearly stating that those records do not contribute to TP strength.
-- When PK is none or unavailable, do not present preknowledge evidence as governed, flagged, or active. You may still mention supplied exposed/compromised-item data as a descriptive check, clearly stating that the data do not establish a PK signal.
-- Preferred wording: "is consistent with", "may reflect", "requires review", "should be checked against context".
-- The human analyst selects the final B9 adjudication outcome.
-
-Index and threshold rules:
-- If an index has a package-returned flag, call it a package-returned flag.
-- A binary package flag value such as 1.0 is only a flag indicator. In the narrative, write "package-returned flag" and omit the numeric value; never describe 1.0 as a magnitude, probability, severity, or unusually fast response.
-- Treat aggregation families as the unit of evidence. Correction variants such as EDI_SD_NO, EDI_SD_CO, and EDI_SD_TS are one EDI_SD family, not independent evidence. Mention the selected family-level signal in the narrative and leave variant detail to the audit table.
-- Do not describe p-value thresholds as probabilities of misconduct.
-- Do not report "p-value threshold = 1.0" as evidence strength.
-- Calibration-required, display-only, auxiliary, SIM support-only, and CP localization-only outputs may be mentioned for context but must not be treated as counted evidence.
-
-Index interpretation guide:
-- RT CUMP: rapid-response timing evidence based on cumulative probability; explain whether timing is unusually fast or concentrated.
-- RT NT/RTE: response-time effort evidence; lower effort values or package flags suggest rapid/low-effort responding.
-- PK L_S or L_ST: model-based exposed-item/preknowledge evidence; explain whether exposed-item performance is unusually high or otherwise statistically flagged, and check exposed-item timing.
-- PK LR_S, ML_S, S_S, W_S: supporting exposed-item evidence; explain as supporting checks, not standalone conclusions.
-- TP EDI_*: answer-change/tampering evidence; explain that the answer-change record should be checked for direction and concentration of changes.
-- MF ECI/L/Q/ZU3/HT: response-pattern fit evidence; explain as an atypical response pattern, not a specific behavior by itself.
-- CP cp_location: localization only; explain which item range to inspect before/after.
-
-Pattern interpretation guide:
-- RT only: may reflect rapid responding, low effort, speededness, or timing irregularity.
-- PK only: may reflect unusual performance on exposed/compromised items; check exposed-item accuracy and timing.
-- TP only: may reflect unusual answer-change behavior; check initial/final response records and change direction.
-- MF only: may reflect atypical response-pattern fit; do not interpret it as a specific behavior without other domains.
-- RT + low score: review for disengagement or rapid guessing.
-- RT + high score + PK: review for a possible exposed-item advantage or preknowledge-like pattern.
-- RT + TP: review whether timing anomalies and answer changes cluster in the same item range.
-- PK + TP: review whether answer changes involve exposed/compromised items.
-- TP + CP: use CP to localize whether answer-change behavior concentrates around a shift point.
-- MF + RT + TP: review for a broader atypical response process involving response pattern, timing, and answer changes.
-- SIM + PK: review for possible shared content source or exposure context, but require external/contextual support.
-- CP only: localization only; do not treat as independent evidence.
-- SIM without calibrated rule: contextual or pair-review cue only; do not count as governed evidence.
-
-Auxiliary cue use:
-- Use PK item cues to identify exposed/compromised items that deserve inspection.
-- Use CP cues to name the item or item range the reviewer should inspect before and after.
-- Use SIM and CP cues only as navigation/context, not as independent misconduct evidence.
-
-Numeric interpretation requirements:
-- Section 3 must interpret concrete numbers when they are present in the case packet.
-- For each important domain, use this logic: observed index flag/value -> relevant raw-input comparison -> what the direction means -> what the reviewer should inspect.
-- Do not write generic phrases such as "significant", "notable", or "strong evidence" without explaining the observed value or package flag that led to it.
-- If a raw-input cue contradicts the usual behavioral interpretation, state that clearly. Example: lower accuracy on exposed/compromised items does not by itself support a preknowledge advantage; write that the governed PK flag is present but the descriptive exposed-item accuracy cue is not directionally supportive, then ask the reviewer to inspect the underlying PK index and timing.
-- For PK, never write "misuse of exposed items", "prior knowledge", "prior familiarity", or "exposed-item advantage" unless the raw-input cue shows exposed-item accuracy above the cohort/reference or the selected key index evidence provides a clear value supporting that interpretation. Otherwise write "PK package flag is present, but descriptive exposed-item accuracy does not by itself support an advantage interpretation."
-- If the package flag is present but the numeric statistic is missing from the selected key evidence, say "package flag present; numeric value not shown here" and do not invent a value.
-- If a cue gives a comparison, include both sides, such as "selected exposed-item accuracy 25.0% vs cohort 46.4%" or "selected exposed-item RT 82.35 vs cohort 28.84".
-- A lower descriptive response time than the item or cohort mean is not, by itself, a rapid-guessing flag. Report the comparison as descriptive context and rely on governed RT families and package-returned flags for the response-time interpretation.
-- Do not equate a lower descriptive response time with low effort unless the governed RT evidence explicitly supports that interpretation. Prefer "descriptively faster than the reference" or "requires timing review".
-- When a PK cue lists exposed or compromised items, preserve the complete item set in the interpretation: report the total number, list correct exposed items and incorrect exposed items separately when supplied, and do not report only the correct items. The item-level cue is for review navigation; it does not replace the governed PK flag.
-
-Write under 320 words with four short sections:
-1. Direct review conclusion
-2. Evidence pattern
-3. Main index support
-4. Recommended reviewer action
-
-Section 1 must be written for a nontechnical reviewer. It must give one direct system interpretation and one next-step review recommendation. It must not include domain codes or index names, and must state the practical review concern without naming a behavior as fact. Use wording such as "This record should be reviewed for unusually timed responses and concentrated answer changes; first check whether these patterns occur in the same item range." Do not mention exposed-item misuse in Section 1 unless the PK raw-input cue is directionally supportive.
-
-The example wording above is not a template to copy. Rewrite Section 1 from the supplied PRIORITY_BASIS and active governed domains only. If TP is none, unavailable, supporting-only, or display-only, do not mention concentrated answer changes, tampering, or answer-change behavior as a case concern. If PK is inactive, do not present exposed-item performance as a governed concern.
-
-        Avoid repeating the same reason across sections. Section 2 should synthesize the active domains into one review hypothesis. Section 3 must be concrete and use short bullets. For every active governed domain, name at least one eligible family supplied in the packet, prioritizing the primary or strongest family when several supporting families are present. The full family list remains available in the evidence record and lineage view; do not turn the narrative into a long index inventory. Treat correction variants as part of their family, never as separate evidence. Include the observed Value or package flag when present, but never interpret a binary flag value of 1.0 as a p-value, probability, effect size, or threshold magnitude. For each named family, explain in plain language what it measures, whether the available raw-input cue supports or qualifies the interpretation, and what specific behavior it asks the reviewer to inspect. Section 4 should give concrete checks the reviewer should perform. When exposed-item details are supplied, tell the reviewer to inspect all listed items and identify correct and incorrect exposed items separately. Use cautious, evidence-bound language.
-
-FINAL TASK: Write the review note for this one examinee. Do not explain, classify, or summarize the packet itself. Do not describe PsyMAS, an LLM, a dataset, software performance, or detector performance. Do not use “Topic 1”, “Topic 2”, “Topic 3”, or “Topic 4”. Start with “Direct review conclusion”. Every sentence must refer to this examinee, a supplied evidence pattern, or a concrete reviewer action.
-The first sentence of Section 2 must explain the supplied PRIORITY_BASIS in plain language. Do not introduce a domain or behavior that is absent from the priority basis. If a domain is marked none, unavailable, supporting-only, or display-only, describe it only as a limitation or context cue.
-
-BEGIN CASE PACKET
-{case_context}
-END CASE PACKET
-"""
-
-
-LOCAL_CASE_REVIEWER_PROMPT = """You write a short reviewer note for one examinee. Use only the supplied case packet.
-
-Output exactly four labeled sections and no preface:
-Direct review conclusion
-Evidence pattern
-Main index support
-Recommended reviewer action
-
-Maximum 180 words. Use plain language. The conclusion must describe what to inspect, never intent, cheating, fraud, misconduct, sanctions, or guilt. Do not discuss the software, prompt, packet, dataset, or model.
-
-Rules:
-- Copy the supplied priority and governed domain strengths; never recompute or upgrade them.
-- Treat RULEBOOK_RESOLUTION as the authoritative case-specific application of config/b3_index_mapping.yaml. It already resolves family aggregation, domain roles, B3 strength, and priority. Do not rebuild those rules from raw rows or count index variants again.
-- Never print internal field names or packet labels, including PRIORITY_BASIS, DOMAIN_EVIDENCE, GOVERNED_INDEX_FAMILIES, RAW_REVIEW_CUES, NON_COUNTED_CONTEXT, or CASE_PACKET.
-- Before drafting, make a private allowlist from the governed domain rows. Only domains with strength weak, moderate, or strong may be described as active evidence. Do not promote a raw-input cue, localization output, display-only output, or inactive domain into evidence.
-- Apply the allowlist to behavior words as well: "answer changes" and "tampering" are allowed only when TP is active; "exposed-item performance" is a governed concern only when PK is active; "rapid responding" or "low effort" is a governed concern only when RT is active. If a domain is absent from the allowlist, omit its behavior words entirely, even if the packet contains related raw columns.
-- Explain the priority basis first. Use only active governed domains. MF is supporting context unless the packet says otherwise. SIM and CP are context/localization unless explicitly governed.
-- If TP is none, unavailable, or not governed, do not mention answer changes or tampering anywhere in the note, including reviewer actions. If PK or RT is inactive, do not describe it as active evidence.
-- CP is never an active evidence domain in this local note unless the packet explicitly marks it governed. When CP is display-only or localization-only, call it a "CP localization cue" and limit the action to checking accuracy and response time around the indicated item; never recommend checking answer changes through CP alone.
-- Treat each index family as one evidence unit. Name at most one strongest family per active domain; do not enumerate correction variants.
-- In Main index support, never write only a generic statement such as "the main support comes from". For every active governed domain, name one supplied aggregation family exactly as it appears in the packet, state what that family measures in plain language, and report its supplied package flag or numeric value when available. If no numeric value is supplied, write "package-returned flag present; numeric value not shown here".
-- Use these plain-language family descriptions when applicable: rg_CT, rg_CUMP, and rg_NT = response-time or effort indicators; pk_L_S and pk_L_ST = exposed-item performance indicators; pk_LR_S, pk_ML_S, pk_S_S, and pk_W_S = supporting exposed-item indicators; pm_ECI2_S, pm_ECI4_S, pm_L_ST, and pm_L_S = response-pattern fit indicators. Never describe an index as "threshold arguments", "p-values" alone, or another implementation detail without explaining the behavior it evaluates.
-- If MF is active, name one MF family as supporting response-pattern-fit evidence even when RT or PK are the primary domains. Do not silently omit an active governed domain.
-- A binary flag is only a package-returned review indicator. Never describe flag 1.0 as a p-value, probability, magnitude, or severity.
-- Use raw-data values only when supplied, especially exposed-item accuracy, reference accuracy, response time, and change-point location. Separate correct and incorrect exposed items only when supplied.
-- A descriptive response-time comparison is not a separate flag. Say "faster/slower than the reference" and do not call it rapid responding, low effort, or speededness unless the governed RT evidence explicitly supports that wording.
-- Describe PK as performance on exposed/compromised items that is directionally consistent with an advantage cue; do not state that prior access occurred.
-- State that CP is localization only when applicable.
-- Give exactly three concise reviewer checks, combining related checks when needed. Do not add a fifth action or a separate closing paragraph.
-- Make the three checks non-redundant: one for the main active-domain pattern, one for the supplied item or reference comparison, and one for contextual confirmation. A CP localization cue may refine a check, but must not create a new behavior claim or repeat the same exposed-item check.
-- Mention a CP localization cue at most once. If RT and PK are active, Section 1 should focus on their joint pattern; CP belongs only in one concise reviewer check about inspecting the indicated item range.
-
-Do not add facts. Start immediately with "Direct review conclusion".
-
-BEGIN CASE PACKET
-{case_context}
-END CASE PACKET
-"""
+from psymas_ui.case_prompts import (
+    DEFAULT_CASE_REVIEWER_PROMPT, LOCAL_CASE_REVIEWER_PROMPT, LEGACY_DEFAULT_PROMPT_HASHES, CASE_PROMPT_VERSION, case_prompt_provenance,
+)
+from psymas_ui.report_citations import report_schema, structured_report_instruction, prepare_report_text, is_structured_report
 
 
 def _case_reviewer_prompt_template() -> str:
-    # Streamlit sessions can retain a prompt edited under an earlier workflow.
-    # Reset that stale template once when the evidence-bound prompt contract
-    # changes; subsequent edits made through the Prompt panel are preserved.
-    prompt_version = "case-review-evidence-v14-rulebook-resolution"
+    # Migrate known defaults while preserving user edits across versions.
+    prompt_version = CASE_PROMPT_VERSION
     if st.session_state.get("_case_reviewer_prompt_version") != prompt_version:
-        st.session_state["case_reviewer_prompt_template"] = DEFAULT_CASE_REVIEWER_PROMPT
+        current = str(st.session_state.get("case_reviewer_prompt_template") or "").strip()
+        if not current or hashlib.sha256(current.encode()).hexdigest() in LEGACY_DEFAULT_PROMPT_HASHES:
+            st.session_state["case_reviewer_prompt_template"] = _model_default_case_prompt(
+                _effective_llm_model(), _llm_provider()
+            )
         st.session_state["_case_reviewer_prompt_version"] = prompt_version
     template = str(st.session_state.get("case_reviewer_prompt_template") or "").strip()
     if not template:
@@ -11697,12 +11655,7 @@ def _model_default_case_prompt(model_id: str, provider: str | None = None) -> st
     provider = str(provider or _llm_provider()).lower()
     if provider == "local_ollama" or any(token in model for token in ("llama", "qwen", "mistral", "gemma")):
         return LOCAL_CASE_REVIEWER_PROMPT
-    else:
-        profile = (
-            "Model profile: hosted report model. Use concise evidence-bound prose, exactly four numbered sections, "
-            "and include concrete values when the case packet supplies them. Never copy the prompt examples."
-        )
-    return f"{DEFAULT_CASE_REVIEWER_PROMPT.rstrip()}\n\n{profile}\n"
+    return DEFAULT_CASE_REVIEWER_PROMPT
 
 
 def _sync_case_prompt_for_model(selected_id: str, model_id: str, provider: str | None = None) -> None:
@@ -11719,16 +11672,8 @@ def _sync_case_prompt_for_model(selected_id: str, model_id: str, provider: str |
         st.session_state.get(model_key) != str(model_id)
         or st.session_state.get(provider_key) != str(provider)
     )
-    stale_local_prompt = provider == "local_ollama" and any(
-        marker in current
-        for marker in (
-            "PRIORITY_BASIS",
-            "DOMAIN_EVIDENCE_FOR_THIS_EXAMINEE",
-            "RAW_REVIEW_CUES_FOR_NAVIGATION_ONLY",
-            "under 220 words",
-        )
-    )
-    if (model_changed and (not current.strip() or current.strip() == previous_default.strip())) or stale_local_prompt:
+    default_changed = previous_default and previous_default.strip() != new_default.strip()
+    if (model_changed or default_changed) and (not current.strip() or current.strip() == previous_default.strip()):
         st.session_state[prompt_key] = new_default
     st.session_state[default_key] = new_default
     st.session_state[model_key] = str(model_id)
@@ -11736,7 +11681,17 @@ def _sync_case_prompt_for_model(selected_id: str, model_id: str, provider: str |
 
 
 def _case_reviewer_prompt(case_context: str) -> str:
-    return _case_reviewer_prompt_template().replace("{case_context}", str(case_context)[:9000])
+    # Never silently cut the governed rows or raw review cues out of the
+    # evidence packet. The audit must refer to the evidence actually sent.
+    prompt = _case_reviewer_prompt_template().replace("{case_context}", str(case_context))
+    return prompt + (
+        "\n\nFINAL CITATION CHECK: Each individual evidence sentence needs its own "
+        "allowed citation before its final punctuation. A citation after the last "
+        "sentence of a multi-sentence bullet does not cite earlier sentences. "
+        "Put a family citation on the same sentence that names that family. "
+        "Use the supplied raw review cues; do not say a comparison or item list "
+        "is missing when it is present in the packet.\n"
+    )
 
 
 def _llm_report_fallback(
@@ -11907,9 +11862,77 @@ def _validate_llm_case_report(
         ):
             violations.append("CP localization presented as governed evidence")
 
+    context_facts = {}
+    examinee_id = str(case_row.get("Examinee_ID", "") or "").strip()
+    if examinee_id:
+        pk_cue = _case_pk_prompt_cue(examinee_id)
+        exposed_count = re.search(r"\b(\d+) exposed/compromised items\b", pk_cue, flags=re.IGNORECASE)
+        if exposed_count:
+            context_facts["exposed_item_count"] = int(exposed_count.group(1))
+    report, link_violations = validate_evidence_links(
+        report,
+        case_row,
+        case_domains,
+        case_trace,
+        context_facts,
+    )
+    violations.extend(link_violations)
+
     if violations:
         return _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary), sorted(set(violations))
     return report, []
+
+
+def _case_report_id(case_row: pd.Series) -> str:
+    value = str(case_row.get("Examinee_ID", "") or "").strip()
+    try:
+        return str(int(float(value)))
+    except ValueError:
+        return value
+
+
+def _case_report_evidence_hash(case_row, case_domains, case_trace, case_auxiliary, packet=None) -> str:
+    if packet is None:
+        packet = _build_case_reviewer_context(_case_report_id(case_row), case_row, case_domains, case_trace, case_auxiliary)
+    return evidence_fingerprint(case_row, case_domains, case_trace, case_auxiliary, packet)
+
+
+def _case_llm_audit_records(case_id: str) -> list[dict]:
+    run_id = _active_run_id()
+    records = list(st.session_state.get(f"case_llm_audits_{run_id}_{case_id}", []))
+    if _run_store_ready():
+        saved = get_run_store().load_llm_audits(case_id, run_id)
+        known = {record['audit_id'] for record in records}
+        records.extend(record for record in saved if record['audit_id'] not in known)
+    return sorted(records, key=lambda record: record['created_at'], reverse=True)
+
+
+def _audit_case_model_draft(text, selected_id, case_row, case_domains, case_trace, case_auxiliary,
+                          *, provider, model_id, prompt, packet, kind='interpretation', source_audit=None, require_structured=False):
+    audit_text, format_violations, repairs = prepare_report_text(text, case_row, case_domains, case_trace)
+    if require_structured and not is_structured_report(text):
+        format_violations.append('model did not return structured report JSON')
+    display, violations = _validate_llm_case_report(audit_text, case_row, case_domains, case_trace, case_auxiliary)
+    violations = sorted(set(violations + format_violations))
+    if violations:
+        display = _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary)
+    case_id = _case_report_id(case_row) or str(selected_id)
+    run_id = _active_run_id()
+    record = make_audit_record(run_id=run_id, case_id=case_id, provider=provider, model=model_id,
+        prompt=prompt, packet=packet,
+        evidence_hash=_case_report_evidence_hash(case_row, case_domains, case_trace, case_auxiliary, packet),
+        raw_text=text, display_text=display, violations=violations, kind=kind)
+    record.update(audit_text=audit_text, citation_repairs=repairs, format_violations=format_violations,
+                  require_structured=require_structured,
+                  citation_schema=report_schema(case_row,case_domains,case_trace) if require_structured else None,
+                  output_format='structured' if is_structured_report(text) else 'legacy_text')
+    if source_audit:
+        record.update(source_audit_id=source_audit['audit_id'],original_violations=source_audit['violations'])
+    key = f"case_llm_audits_{run_id}_{case_id}"
+    st.session_state[key] = [record] + list(st.session_state.get(key, []))
+    if _run_store_ready():
+        get_run_store().save_llm_audit(record)
+    return display, violations
 
 
 def _validated_case_report(
@@ -11919,14 +11942,58 @@ def _validated_case_report(
     case_trace: pd.DataFrame,
     case_auxiliary: pd.DataFrame,
 ) -> str:
-    """Normalize LLM output at the single boundary shared by UI and PDF export."""
-    validated, _ = _validate_llm_case_report(text, case_row, case_domains, case_trace, case_auxiliary)
+    """Replay the cited original against current evidence for UI and PDF."""
+    case_id = _case_report_id(case_row)
+    records = _case_llm_audit_records(case_id)
+    record = next((item for item in records if text in {item['display_text'], item['raw_text']}), None)
+    if record:
+        current_hash = _case_report_evidence_hash(case_row, case_domains, case_trace, case_auxiliary)
+        if current_hash != record['evidence_hash']:
+            violations = ['Evidence packet changed since generation; regenerate the interpretation.']
+            validated = _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary)
+        else:
+            audit_text, format_violations, repairs = prepare_report_text(record['raw_text'], case_row, case_domains, case_trace)
+            if record.get('require_structured') and not is_structured_report(record['raw_text']):
+                format_violations.append('model did not return structured report JSON')
+            validated, violations = _validate_llm_case_report(audit_text, case_row, case_domains, case_trace, case_auxiliary)
+            violations = sorted(set(violations + format_violations))
+            if violations:
+                validated = _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary)
+            elif ((repairs and not record.get('citation_repairs')) or not record.get('passed')) and not any(
+                item.get('source_audit_id') == record['audit_id'] for item in records
+            ):
+                validated, violations = _audit_case_model_draft(
+                    record['raw_text'],case_id,case_row,case_domains,case_trace,case_auxiliary,
+                    provider=record['provider'],model_id=record['model'],prompt=record['prompt_text'],
+                    packet=_build_case_reviewer_context(case_id,case_row,case_domains,case_trace,case_auxiliary),
+                    kind='citation_repair_replay' if repairs else 'validator_revalidation',source_audit=record,
+                    require_structured=record.get('require_structured',False),
+                )
+    else:
+        deterministic = _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary)
+        if text == deterministic:
+            st.session_state[f"case_llm_fallback_{case_id}"] = True
+            return deterministic
+        audit_text, format_violations, repairs = prepare_report_text(text, case_row, case_domains, case_trace)
+        validated, violations = _validate_llm_case_report(audit_text, case_row, case_domains, case_trace, case_auxiliary)
+        violations = sorted(set(violations + format_violations))
+        if violations:
+            validated = _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary)
+    st.session_state[f"case_llm_fallback_{case_id}"] = bool(violations)
+    if violations:
+        reason = 'Evidence audit: ' + '; '.join(violations)
+        st.session_state[f"case_llm_validation_{case_id}"] = reason
+        st.session_state[f"case_llm_status_{case_id}"] = ('fallback', reason)
+    else:
+        st.session_state.pop(f"case_llm_validation_{case_id}",None)
+        st.session_state[f"case_llm_status_{case_id}"] = ('success','Saved model draft passed the current evidence audit.')
     return validated
 
 
 def _compact_ai_suggestion_text(text: str) -> str:
     """Make LLM report text compact for the small in-app review panel."""
-    compact = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    from psymas_ui.report_display import clean_report_display
+    compact = clean_report_display(text)
     compact = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", compact)
     compact = compact.replace("**", "")
     compact = "\n".join(line.strip() for line in compact.splitlines())
@@ -11959,7 +12026,7 @@ def _ai_suggestion_html(text: str) -> str:
             parts.append(f'<span class="section-title">{escaped}</span>')
         else:
             parts.append(f'<span class="section-body">{escaped}</span>')
-    return "\n".join(parts)
+    return "".join(parts)
 
 
 def _case_review_decisions_df() -> pd.DataFrame:
@@ -12085,13 +12152,17 @@ def _ask_case_review_llm(
         f"Reviewer question: {reviewer_question or 'Draft a concise evidence-bound clarification.'}\n\n"
         "Answer the reviewer question using only the evidence packet. Do not repeat or infer a human adjudication outcome."
     )
+    prompt += structured_report_instruction(case_row, case_domains, case_trace)
+    schema = report_schema(case_row, case_domains, case_trace)
     load_dotenv()
     provider = provider or _llm_provider()
     llm_timeout = 180 if provider == "local_ollama" else 90
-    text, err = _call_selected_llm_text(prompt, model_id=model_id, provider=provider, timeout=llm_timeout)
+    text, err = _call_selected_llm_text(prompt, model_id=model_id, provider=provider, timeout=llm_timeout, report_schema=schema)
     if text and not err:
-        validated, _ = _validate_llm_case_report(
-            text, case_row, case_domains, case_trace, case_auxiliary
+        validated, _ = _audit_case_model_draft(
+            text, selected_id, case_row, case_domains, case_trace, case_auxiliary,
+            provider=provider, model_id=model_id or _effective_llm_model(), prompt=prompt, packet=context, kind='chat',
+            require_structured=True,
         )
         return validated
     return _format_llm_error(err or "No selected LLM model returned a response.")
@@ -12258,6 +12329,40 @@ def _case_cp_location_output_count() -> int:
         if has_location:
             count += 1
     return count
+
+
+def _case_similarity_context_output_count() -> int:
+    flags = _forensic_result_flags_from_session()
+    if not isinstance(flags, dict):
+        return 0
+    participants: set[int] = set()
+    for agent_key in ("ac_agent", "as_agent"):
+        agent_data = flags.get(agent_key, {})
+        participants.update(_agent_flagged_indices(agent_data, agent_key))
+    return len(participants)
+
+
+def _case_similarity_confirmed_pair_count() -> int:
+    flags = _forensic_result_flags_from_session()
+    if not isinstance(flags, dict):
+        return 0
+    pair_sets: list[set[tuple[int, int]]] = []
+    for agent_key in ("ac_agent", "as_agent"):
+        agent_data = flags.get(agent_key, {})
+        raw_pairs = agent_data.get("confirmed_pairs", []) if isinstance(agent_data, dict) else []
+        pairs: set[tuple[int, int]] = set()
+        for pair in raw_pairs or []:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            try:
+                left, right = int(pair[0]), int(pair[1])
+            except (TypeError, ValueError):
+                continue
+            pairs.add(tuple(sorted((left, right))))
+        pair_sets.append(pairs)
+    if not pair_sets:
+        return 0
+    return len(set.intersection(*pair_sets)) if len(pair_sets) > 1 else len(pair_sets[0])
 
 
 def _case_domain_issue_rows(case_domains: pd.DataFrame, case_trace: pd.DataFrame) -> list[dict]:
@@ -12793,13 +12898,14 @@ def _ability_effort_figure(examinee_id: str):
         margin=dict(l=58, r=24, t=66, b=48),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
-        font=dict(color=PSYMAS_VIZ["ink"], size=11),
-        title_font=dict(color=PSYMAS_VIZ["ink"], size=14),
+        font=dict(color=PSYMAS_VIZ["ink"], size=13),
+        title_font=dict(color=PSYMAS_VIZ["ink"], size=17),
+        hoverlabel=dict(font=dict(size=13)),
         xaxis=dict(
             title="Score percentile",
             color=PSYMAS_VIZ["ink"],
-            title_font=dict(color=PSYMAS_VIZ["ink"], size=10),
-            tickfont=dict(color=PSYMAS_VIZ["ink"], size=10),
+            title_font=dict(color=PSYMAS_VIZ["ink"], size=13),
+            tickfont=dict(color=PSYMAS_VIZ["ink"], size=12),
             gridcolor="#E5E7EB",
             zeroline=False,
             range=[0, 100],
@@ -12807,8 +12913,8 @@ def _ability_effort_figure(examinee_id: str):
         yaxis=dict(
             title=f"Response Time Effort ({effort_source})",
             color=PSYMAS_VIZ["ink"],
-            title_font=dict(color=PSYMAS_VIZ["ink"], size=10),
-            tickfont=dict(color=PSYMAS_VIZ["ink"], size=10),
+            title_font=dict(color=PSYMAS_VIZ["ink"], size=13),
+            tickfont=dict(color=PSYMAS_VIZ["ink"], size=12),
             gridcolor=PSYMAS_VIZ["grid"],
             zeroline=False,
             range=[max(0, float(df["Effort"].min()) - 0.04), min(1.02, float(df["Effort"].max()) + 0.04)],
@@ -12819,7 +12925,7 @@ def _ability_effort_figure(examinee_id: str):
             y=1.03,
             xanchor="right",
             x=1,
-            font=dict(color=PSYMAS_VIZ["ink"], size=10),
+            font=dict(color=PSYMAS_VIZ["ink"], size=12),
             itemwidth=30,
         ),
     )
@@ -13214,27 +13320,28 @@ def _case_pair_visual_rows(flags: dict, examinee_id: str) -> pd.DataFrame:
 
 def _make_plotly_text_readable(fig):
     fig.update_layout(
-        font=dict(color=PSYMAS_VIZ["ink"], size=12),
-        title_font=dict(color=PSYMAS_VIZ["ink"], size=15),
+        font=dict(color=PSYMAS_VIZ["ink"], size=13),
+        title_font=dict(color=PSYMAS_VIZ["ink"], size=17),
         plot_bgcolor="#FFFFFF",
         paper_bgcolor="#FFFFFF",
-        legend=dict(font=dict(color=PSYMAS_VIZ["ink"])),
+        legend=dict(font=dict(color=PSYMAS_VIZ["ink"], size=12)),
+        hoverlabel=dict(font=dict(size=13)),
     )
     fig.update_xaxes(
         color=PSYMAS_VIZ["ink"],
-        title_font=dict(color=PSYMAS_VIZ["ink"]),
-        tickfont=dict(color=PSYMAS_VIZ["ink"]),
+        title_font=dict(color=PSYMAS_VIZ["ink"], size=13),
+        tickfont=dict(color=PSYMAS_VIZ["ink"], size=12),
         gridcolor=PSYMAS_VIZ["grid"],
         zeroline=False,
     )
     fig.update_yaxes(
         color=PSYMAS_VIZ["ink"],
-        title_font=dict(color=PSYMAS_VIZ["ink"]),
-        tickfont=dict(color=PSYMAS_VIZ["ink"]),
+        title_font=dict(color=PSYMAS_VIZ["ink"], size=13),
+        tickfont=dict(color=PSYMAS_VIZ["ink"], size=12),
         gridcolor=PSYMAS_VIZ["grid"],
         zeroline=False,
     )
-    fig.update_annotations(font_color=PSYMAS_VIZ["ink"], font_size=11)
+    fig.update_annotations(font_color=PSYMAS_VIZ["ink"], font_size=12)
     return fig
 
 
@@ -13623,7 +13730,7 @@ def _render_case_rg_visual(flags: dict, examinee_id: str) -> None:
 
 
 def _case_compromised_items(n_items: int | None = None) -> list[int]:
-    """Return 1-based compromised/exposed item IDs from the active run or local demo files."""
+    """Return 1-based compromised/exposed item IDs from the active run."""
     items = st.session_state.get("prep_compromised_items") or st.session_state.get("ab_only_compromised_items") or []
     parsed: list[int] = []
     for item in items:
@@ -13635,22 +13742,6 @@ def _case_compromised_items(n_items: int | None = None) -> list[int]:
             continue
     if parsed:
         return sorted(set(i for i in parsed if n_items is None or i <= n_items))
-
-    candidates = [
-        Path("data/upload/compromised_items.csv"),
-        Path("data/psymas_research_export/dataset_a_inputs/compromised_items.csv"),
-        Path("data/sample/compromised_items.csv"),
-    ]
-    for path in candidates:
-        if not path.exists():
-            continue
-        try:
-            comp_df = pd.read_csv(path)
-            parsed = _parse_compromised_items_csv(comp_df, n_items=n_items)
-        except Exception:
-            parsed = []
-        if parsed:
-            return sorted(set(i for i in parsed if n_items is None or i <= n_items))
     return []
 
 
@@ -14224,7 +14315,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
         unsafe_allow_html=True,
     )
 
-    with st.container(border=True):
+    with st.container(border=True, key="case_performance_context"):
         st.markdown(
             '<div class="psymas-review-step-title"><span class="step-badge">1</span><span class="step-text">Performance context</span></div>',
             unsafe_allow_html=True,
@@ -14275,16 +14366,54 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 str(selected_id),
                 ("MF", "RT", "PK", "TP"),
                 620,
+                case_domains.to_json(orient="records"),
             )
             if lineage_fig is None:
                 st.info("No governed index lineage is available for this examinee.")
             else:
-                lineage_col, legend_col = st.columns([5.6, 1.15], gap="small")
+                view_controls = st.columns([2, 2, 1])
+                with view_controls[0]:
+                    chart_scale = st.slider("Chart scale", 50, 175, 75, 25, format="%d%%", key=f"case_lineage_scale_{selected_id}")
+                with view_controls[1]:
+                    chart_font_size = st.slider(
+                        "Chart font size", 10, 24, 12, 1, format="%d px",
+                        key=f"case_lineage_font_size_{selected_id}",
+                        help="Adjust chart labels independently of chart scale. The downloaded PNG uses the same font size.",
+                    )
+                with view_controls[2]:
+                    wide_view = st.checkbox("Full-width chart", key=f"case_lineage_wide_{selected_id}")
+                # Copy the cached figure so view controls cannot mutate its base.
+                lineage_fig = type(lineage_fig)(lineage_fig.to_dict())
+                lineage_fig.update_layout(height=int(lineage_fig.layout.height * chart_scale / 100))
+                lineage_fig.update_layout(
+                    font=dict(size=chart_font_size),
+                    title=dict(
+                        text=lineage_fig.layout.title.text.replace("priority domains · final:", "priority domains<br>final:"),
+                        font=dict(size=chart_font_size + 4), y=0.98, pad=dict(t=24),
+                    ),
+                    margin=dict(t=max(148, 92 + 4 * chart_font_size)),
+                )
+                lineage_fig.update_traces(textfont=dict(size=chart_font_size), selector=dict(type="sankey"))
+                lineage_fig.update_annotations(font=dict(size=chart_font_size))
+                if wide_view:
+                    lineage_col = st.container()
+                    legend_col = st.expander("Color key")
+                else:
+                    lineage_col, legend_col = st.columns([5.6, 1.15], gap="small")
                 with lineage_col:
                     st.plotly_chart(
                         lineage_fig,
                         use_container_width=True,
                         key=f"case_lineage_{selected_id}",
+                        config={"toImageButtonOptions": {
+                            "format": "png",
+                            "filename": f"case_{selected_id}_evidence_lineage_highres",
+                            # None preserves the currently rendered dimensions,
+                            # so PNG typography matches the user's view controls.
+                            "width": None,
+                            "height": None,
+                            "scale": 3.125,
+                        }},
                     )
                 with legend_col:
                     st.markdown(lineage_dual_legend_html(), unsafe_allow_html=True)
@@ -14295,6 +14424,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     "human-review urgency; the case profile is traceable to domain evidence, inputs, and rules, "
                     "not a misconduct determination."
                 )
+                if not any(parse_domain_indices(master_row.get(f"{d}_Flagged_Indices")) for d in ("MF", "RT", "PK", "TP")):
+                    st.caption("No flagged index inputs are expanded. Each inactive domain retains the same thin gray rule path; unavailable inputs are labeled separately. The supplied review priority is shown independently.")
         _render_case_domain_specific_visuals(selected_id, domain_issue_rows, flags)
 
     decision_meta = {
@@ -14340,13 +14471,11 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 unsafe_allow_html=True,
             )
 
-        # These selectors are scoped to the open case. They allow a reviewer to
-        # choose either provider without changing the application-wide settings.
+        # Case editors update the same shared selection used by Configuration.
         case_provider_key = f"case_llm_provider_{selected_id}"
         case_provider_options = [_managed_llm_provider()] if _locked_llm_configuration() else ["openrouter", "local_ollama"]
         case_provider_labels = {"openrouter": "Hosted API", "local_ollama": "Local Ollama"}
-        if st.session_state.get(case_provider_key) not in case_provider_options:
-            st.session_state[case_provider_key] = _llm_provider()
+        st.session_state[case_provider_key] = _llm_provider()
         with provider_col:
             selected_case_provider = st.selectbox(
                 "Provider",
@@ -14354,31 +14483,23 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 format_func=lambda value: case_provider_labels[value],
                 key=case_provider_key,
                 disabled=_locked_llm_configuration(),
-                help="Choose the connection first, then choose one of its models.",
+                on_change=_sync_case_llm_provider,
+                args=(case_provider_key,),
+                help="Changing provider updates the shared selection across PsyMAS.",
             )
 
         if selected_case_provider == "openrouter":
-            custom_openrouter = st.session_state.get("openrouter_selected_model") or os.getenv("PSYMAS_OPENROUTER_MODEL_ID", "")
-            case_model_ids = list(dict.fromkeys(
-                [str(custom_openrouter)] if str(custom_openrouter).strip() else []
-                + [str(model_id) for _, model_id in OPENROUTER_FREE_MODELS]
-            ))
+            case_model_ids = _current_model_ids()
             case_model_labels = {str(model_id): str(label) for label, model_id in OPENROUTER_FREE_MODELS}
         else:
-            selected_ollama = st.session_state.get("ollama_selected_model") or os.getenv("PSYMAS_OLLAMA_MODEL_ID", "")
-            discovered_ollama = st.session_state.get("ollama_discovered_models") or []
-            case_model_ids = list(dict.fromkeys(
-                [str(selected_ollama)] if str(selected_ollama).strip() else []
-                + [str(model_id) for model_id in discovered_ollama]
-                + [str(model_id) for model_id in LOCAL_OLLAMA_MODEL_IDS]
-            ))
+            case_model_ids = _current_model_ids()
             case_model_labels = {str(model_id): str(label) for label, model_id in LOCAL_OLLAMA_MODELS}
         case_model_ids = [model_id for model_id in case_model_ids if model_id.strip()]
-        if not case_model_ids:
-            case_model_ids = [str(_effective_llm_model())] if str(_effective_llm_model()).strip() else []
+        active_case_model = str(_effective_llm_model()).strip()
+        if active_case_model and active_case_model not in case_model_ids:
+            case_model_ids.insert(0, active_case_model)
         case_model_key = f"case_llm_model_{selected_id}"
-        if case_model_key not in st.session_state or st.session_state.get(case_model_key) not in case_model_ids:
-            st.session_state[case_model_key] = case_model_ids[0] if case_model_ids else ""
+        st.session_state[case_model_key] = active_case_model
         with model_col:
             selected_case_model = st.selectbox(
                 "Model",
@@ -14389,7 +14510,9 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 ),
                 key=case_model_key,
                 disabled=_locked_llm_configuration(),
-                help="Switch among configured models for this case only. Selecting a model loads its default prompt profile.",
+                on_change=_sync_case_llm_model,
+                args=(case_model_key,),
+                help="Changing model updates the shared selection across PsyMAS.",
             ) if case_model_ids else ""
         # Initialize/migrate the persisted prompt state before applying the
         # model-specific default; otherwise the legacy prompt-version reset
@@ -14402,8 +14525,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
         with refresh_col:
             refresh_suggestion = st.button("Generate", key=f"generate_case_explanation_{selected_id}", use_container_width=True, type="primary")
 
-        st.caption(f"{case_provider_labels[selected_case_provider]} · case-only model override · prompt remains editable")
-        if not _llm_connection_is_current(model_id=selected_case_model) or st.session_state.get("llm_connection_signature") != _llm_connection_signature(provider=selected_case_provider, model_id=selected_case_model):
+        st.caption(f"{case_provider_labels[selected_case_provider]} · shared Configuration settings · prompt remains editable")
+        if not _llm_connection_is_current(model_id=selected_case_model, provider=selected_case_provider):
             st.warning("The selected model is not connected.")
             if st.button("Connect selected model", key=f"connect_case_llm_{selected_id}"):
                 with st.spinner("Connecting to the selected model…"):
@@ -14430,6 +14553,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 )
             with st.container(border=True):
                 st.caption("Model default prompt. You can edit it; `{case_context}` is inserted automatically.")
+                prompt_info = case_prompt_provenance(str(st.session_state[prompt_key]), "{case_context}")
+                st.caption(f"Prompt version: {prompt_info['prompt_version']} · {prompt_info['prompt_variant']} · {len(st.session_state[prompt_key])} characters")
                 if st.button("Restore default prompt", key=f"restore_case_prompt_{selected_id}"):
                     default_prompt = _model_default_case_prompt(selected_case_model, selected_case_provider)
                     st.session_state["case_reviewer_prompt_template"] = default_prompt
@@ -14496,7 +14621,7 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 else:
                     st.session_state[llm_status_key] = (
                         "success",
-                        f"Generated with {_llm_provider()} · {selected_case_model}.",
+                        f"Generated with {selected_case_provider} · {selected_case_model}.",
                     )
                 st.session_state[explanation_key] = explanation
                 _persist_case_review_to_store(
@@ -14574,6 +14699,25 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                 st.warning(llm_status[1])
             else:
                 st.caption(llm_status[1])
+        audit_records = _case_llm_audit_records(_case_report_id(case_row))
+        if audit_records:
+            with st.expander("LLM audit record"):
+                audit = audit_records[0]
+                st.caption(f"{audit['provider']} · {audit['model']} · {audit['created_at']}")
+                st.caption(f"Prompt version: {audit.get('prompt_version', 'unversioned')} · {audit.get('prompt_variant', 'unknown')}")
+                st.write("Generation audit: " + ("passed" if audit['passed'] else "rejected"))
+                if audit['violations']:
+                    st.write("Complete generation audit reasons:", audit['violations'])
+                if audit.get('citation_repairs'):
+                    st.write("Citation repair history:", audit['citation_repairs'])
+                    st.caption("The raw draft is unchanged; repaired citations were fully reaudited.")
+                st.caption("Raw model draft for audit only. Rejected claims are not part of the reviewed summary.")
+                st.code(audit['raw_text'], language=None)
+                if audit.get('audit_text') and audit['audit_text'] != audit['raw_text']:
+                    with st.expander("Rendered citation text used for audit"):
+                        st.code(audit['audit_text'], language=None)
+                st.download_button("Download complete audit history", json.dumps(audit_records, ensure_ascii=False, indent=2),
+                    file_name=f"case_{selected_id}_llm_audit.json", mime="application/json", key=f"case_audit_download_{selected_id}")
         if st.session_state.get(llm_support_key):
             chat_support = _validated_case_report(
                 str(st.session_state[llm_support_key]),
@@ -14776,7 +14920,7 @@ def _render_review_kpi_header(review_df: pd.DataFrame, flagged_df: pd.DataFrame,
 }}
 </style>
 <div class="psymas-shared-kpis">
-  <div class="warn"><span>Detector Flags</span><b>{values["detector_flags"]:,}</b><em>out of {values["total"]:,}</em></div>
+  <div class="warn"><span>Flagged Examinees</span><b>{values["detector_flags"]:,}</b><em>out of {values["total"]:,}</em></div>
   <div><span>Governed-Domain Cases</span><b>{values["governed_domain_cases"]:,}</b><em>active governed signal</em></div>
   <div class="warn"><span>High-Priority Queue</span><b>{values["high_priority"]:,}</b><em>rulebook triage</em></div>
   <div><span>Human Reviewed</span><b>{values["human_reviewed"]:,}</b><em>adjudicated</em></div>
@@ -14793,6 +14937,12 @@ def _render_ai_review_overview(review_df: pd.DataFrame, flagged_df: pd.DataFrame
     if source_df.empty or "Examinee_ID" not in source_df.columns:
         st.info("No case-level review profile is available yet.")
         return
+    if "System_Flag" not in source_df.columns and {"Examinee_ID", "System_Flag"}.issubset(review_df.columns):
+        flag_lookup = review_df[["Examinee_ID", "System_Flag"]].copy()
+        flag_lookup["Examinee_ID"] = flag_lookup["Examinee_ID"].astype(str)
+        source_df = source_df.copy()
+        source_df["Examinee_ID"] = source_df["Examinee_ID"].astype(str)
+        source_df = source_df.merge(flag_lookup, on="Examinee_ID", how="left")
 
     domain_cols = [col for col in ["MF_Strength", "RT_Strength", "SIM_Strength", "PK_Strength", "TP_Strength", "CP_Strength"] if col in source_df.columns]
     _render_review_kpi_header(review_df, flagged_df, source_df)
@@ -14825,10 +14975,6 @@ def _render_ai_review_overview(review_df: pd.DataFrame, flagged_df: pd.DataFrame
     }
     issue_strengths = {"weak", "moderate", "strong"}
     matrix_df = source_df.copy()
-    if "System_Flag" in matrix_df.columns:
-        matrix_df = matrix_df[matrix_df["System_Flag"].astype(str).isin(["1", "True", "true"])]
-    if matrix_df.empty:
-        matrix_df = source_df.head(80).copy()
     matrix_df = _case_review_queue_sorted(matrix_df)
 
     domain_cards: list[str] = []
@@ -14842,17 +14988,38 @@ def _render_ai_review_overview(review_df: pd.DataFrame, flagged_df: pd.DataFrame
         strong_count = int(vals.eq("strong").sum())
         moderate_count = int(vals.eq("moderate").sum())
         unavailable_count = int(vals.eq("unavailable").sum())
+        if domain == "SIM":
+            issue_n = _case_similarity_context_output_count()
+            tile_note = "context cases"
+            pair_count = _case_similarity_confirmed_pair_count()
+            tile_mini = (
+                f"<span><b>{pair_count:,}</b> confirmed pairs</span>"
+                f"<span><b>{issue_n:,}</b> participants</span>"
+                "<span>context only</span>"
+            )
+        elif domain == "CP":
+            issue_n = _case_cp_location_output_count()
+            tile_note = "localization cases"
+            tile_mini = (
+                f"<span><b>{issue_n:,}</b> localized profiles</span>"
+                "<span>localization only</span>"
+            )
+        else:
+            tile_note = "active signals"
+            tile_mini = (
+                f"<span><b>{strong_count:,}</b> strong</span>"
+                f"<span><b>{moderate_count:,}</b> moderate</span>"
+                f"<span><b>{unavailable_count:,}</b> unavailable</span>"
+            )
         tone = "danger" if strong_count else ("warn" if moderate_count else ("off" if issue_n == 0 else "info"))
         domain_cards.append(
             f"<div class='psymas-domain-tile {tone}'>"
             f"<div class='tile-code'>{html.escape(domain)}</div>"
             f"<div class='tile-title'>{html.escape(domain_names.get(domain, domain))}</div>"
             f"<div class='tile-value'>{issue_n:,}</div>"
-            "<div class='tile-note'>active signals</div>"
+            f"<div class='tile-note'>{tile_note}</div>"
             "<div class='tile-mini'>"
-            f"<span><b>{strong_count:,}</b> strong</span>"
-            f"<span><b>{moderate_count:,}</b> moderate</span>"
-            f"<span><b>{unavailable_count:,}</b> unavailable</span>"
+            f"{tile_mini}"
             "</div>"
             "</div>"
         )
@@ -14962,14 +15129,99 @@ def _render_ai_review_overview(review_df: pd.DataFrame, flagged_df: pd.DataFrame
     )
     st.markdown("<div class='psymas-domain-tile-grid'>" + "".join(domain_cards) + "</div>", unsafe_allow_html=True)
 
-    icon_df = matrix_df.copy().head(240)
+    total_cases = len(matrix_df)
+    filter_col, domain_col, search_col = st.columns([1.2, 1.15, 1.0], gap="small")
+    with filter_col:
+        case_scope = st.selectbox(
+            "Case view",
+            [
+                "All cases",
+                "Flagged examinees",
+                "Governed-domain cases",
+                "High-priority queue",
+                "Human reviewed",
+                "Not reviewed",
+            ],
+            key="ai_review_case_scope_filter",
+        )
+    domain_options = ["Any domain", *[f"{domain} — {domain_names.get(domain, domain)}" for domain in domain_order if f"{domain}_Strength" in matrix_df.columns]]
+    with domain_col:
+        selected_domain_label = st.selectbox(
+            "Active domain",
+            domain_options,
+            key="ai_review_domain_filter",
+        )
+    with search_col:
+        examinee_query = st.text_input(
+            "Find Examinee ID",
+            placeholder="e.g., 239 or E239",
+            key="ai_review_examinee_filter",
+        ).strip()
+
+    icon_df = matrix_df.copy()
+    detector_flagged = (
+        icon_df["System_Flag"].astype(str).str.lower().isin({"1", "true"})
+        if "System_Flag" in icon_df.columns
+        else pd.Series(False, index=icon_df.index)
+    )
+    governed_active = (
+        icon_df[domain_cols]
+        .astype(str)
+        .apply(lambda col: col.str.lower().isin(issue_strengths))
+        .any(axis=1)
+        if domain_cols
+        else pd.Series(False, index=icon_df.index)
+    )
+    high_priority = (
+        icon_df[priority_col].astype(str).str.contains("High|Critical|Expedited", case=False, regex=True)
+        if priority_col in icon_df.columns
+        else pd.Series(False, index=icon_df.index)
+    )
+    human_decision_col = next(
+        (column for column in ("Human_Decision", "Human_Final_Decision", "Final_Decision") if column in icon_df.columns),
+        "",
+    )
+    human_reviewed = (
+        icon_df[human_decision_col].fillna("").astype(str).str.strip().ne("")
+        if human_decision_col
+        else pd.Series(False, index=icon_df.index)
+    )
+    scope_masks = {
+        "All cases": pd.Series(True, index=icon_df.index),
+        "Flagged examinees": detector_flagged,
+        "Governed-domain cases": governed_active,
+        "High-priority queue": high_priority,
+        "Human reviewed": human_reviewed,
+        "Not reviewed": ~human_reviewed,
+    }
+    icon_df = icon_df[scope_masks[case_scope]].copy()
+    if selected_domain_label != "Any domain":
+        selected_domain = selected_domain_label.split(" — ", 1)[0]
+        selected_strength = icon_df.get(f"{selected_domain}_Strength", pd.Series("", index=icon_df.index))
+        icon_df = icon_df[selected_strength.astype(str).str.lower().isin(issue_strengths)].copy()
+    if examinee_query:
+        query_normalized = examinee_query.lower()
+        query_without_prefix = query_normalized[1:] if query_normalized.startswith("e") else query_normalized
+        examinee_ids = icon_df["Examinee_ID"].astype(str).str.strip().str.lower()
+        examinee_without_prefix = examinee_ids.str[1:].where(examinee_ids.str.startswith("e"), examinee_ids)
+        icon_df = icon_df[
+            examinee_ids.str.contains(query_normalized, regex=False)
+            | examinee_without_prefix.str.contains(query_without_prefix, regex=False)
+        ].copy()
+
+    st.caption(f"Showing {len(icon_df):,} of {total_cases:,} examinees.")
+    if icon_df.empty:
+        st.info("No examinees match the current case filters.")
+        return
+
     priority_col = priority_col if priority_col in icon_df.columns else ""
     n_cols = 40
     priority_styles = {
-        "Critical / Expedited": ("Critical / Expedited", PSYMAS_VIZ["high"], "square"),
-        "High": ("High", PSYMAS_VIZ["moderate"], "square"),
-        "Medium": ("Medium", PSYMAS_VIZ["inactive"], "square"),
-        "Low": ("Low", PSYMAS_VIZ["correct"], "square"),
+        "Critical / Expedited": ("Critical / Expedited", "#B42318", "square"),
+        "High": ("High", "#E58A2B", "square"),
+        "Medium": ("Medium", "#E8C547", "square"),
+        "Low": ("Low", "#8295AB", "square"),
+        "No detector flag": ("No detector flag", "#D8E2EC", "square"),
         "Unspecified": ("Unspecified", PSYMAS_VIZ["reference_fill"], "square"),
     }
 
@@ -14986,6 +15238,9 @@ def _render_ai_review_overview(review_df: pd.DataFrame, flagged_df: pd.DataFrame
         return "Unspecified"
 
     icon_df["_priority_label"] = icon_df[priority_col].map(_priority_bucket) if priority_col else "Unspecified"
+    if "System_Flag" in icon_df.columns:
+        detector_flagged = icon_df["System_Flag"].astype(str).str.lower().isin({"1", "true"})
+        icon_df.loc[~detector_flagged, "_priority_label"] = "No detector flag"
     _human_decision_col = ""
     for candidate_col in ("Human_Decision", "Human_Final_Decision", "Final_Decision"):
         if candidate_col in icon_df.columns:
@@ -15140,7 +15395,7 @@ def _render_ai_review_overview(review_df: pd.DataFrame, flagged_df: pd.DataFrame
             _render_single_case_review_page(selected_override=modal_id)
 
         _ai_case_review_modal()
-    st.caption("Each icon is one examinee. Color shows priority; hover shows the main evidence concerns; click opens the detailed report.")
+    st.caption("Each icon is one examinee. Gray indicates no detector flag; other colors show review priority. Hover shows the main evidence concerns; click opens the detailed report.")
 
 
 
@@ -15260,6 +15515,7 @@ def _cached_individual_lineage(
     examinee_id: str,
     included_domains: tuple[str, ...],
     height: int,
+    domain_status_json: str = "[]",
 ):
     """Cache the pure lineage figure used by the individual review dialog."""
     try:
@@ -15267,13 +15523,25 @@ def _cached_individual_lineage(
         master_row = pd.Series(row_data if isinstance(row_data, dict) else {})
     except Exception:
         return None
-    return build_individual_lineage_sankey(
+    try:
+        domain_status = {str(r.get("Domain", "")): r for r in json.loads(domain_status_json)}
+    except (ValueError, TypeError, AttributeError):
+        domain_status = {}
+    fig = build_individual_lineage_sankey(
         master_row,
         examinee_id=examinee_id,
         title="Priority lineage",
         included_domains=included_domains,
         height=height,
+        domain_status=domain_status,
     )
+    if fig is not None:
+        fig.update_layout(
+            font=dict(size=14),
+            title_font=dict(size=18),
+            hoverlabel=dict(font=dict(size=13)),
+        )
+    return fig
 
 
 @st.cache_data(show_spinner=False)
@@ -15850,11 +16118,13 @@ def _render_flexible_llm_settings() -> None:
     }
     if st.session_state.get("llm_provider") not in {"openrouter", "local_ollama"}:
         st.session_state["llm_provider"] = preferences["provider"]
+    st.session_state["llm_provider_editor"] = _llm_provider()
     provider = st.segmented_control(
         "Active provider",
         options=["openrouter", "local_ollama"],
         format_func=lambda value: "OpenRouter · hosted" if value == "openrouter" else "Local Ollama · private",
-        key="llm_provider",
+        key="llm_provider_editor",
+        on_change=_sync_config_llm_provider,
         help="Changing provider does not erase the model saved for the other provider.",
     ) or st.session_state["llm_provider"]
     st.caption(provider_help.get(provider, ""))
@@ -16420,7 +16690,7 @@ def _render_scenario_page() -> None:
     # Scenario A = Low-stakes (effort/quality); B = High-stakes (full detection set per table).
     SCENARIO_PRESETS_AB = {
         "A": {"title": "Scenario A: Low-Stakes", "description": "Identifies non-substantive noise to ensure high-quality data utility.\n\n Examples: Course evaluations; Pilot surveys; Classroom quizzes", "icon": "🧹", "selects": ["detect_rg", "detect_pm"], "image": "https://placehold.co/320x160/1e3a5f/94a3b8?text=Low-stakes"},
-        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, tampering, and preknowledge detection.\n Examples: Medical licensing; Answer copying; Brain-dump", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
+        "B": {"title": "Scenario B: High-Stakes", "description": "Protects high-stakes credentials: response-based, similarity, temporal, tampering, and preknowledge detection.\n Examples: Medical licensing; Answer copying; Brain-dump", "icon": "🛡️", "selects": ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_cp", "detect_tt"], "image": "https://placehold.co/320x160/3d1f1f/94a3b8?text=High-stakes"},
         "C": {"title": "Scenario C: Demo", "description": "Load the Appendix C simulated tutorial data and supported demo agents.", "icon": "▶", "selects": DEMO_AGENT_PRESET, "image": "https://placehold.co/320x160/2d2d4a/94a3b8?text=Demo"},
     }
     # CSS: card container (relative, left-aligned), overlay button on top, image left-aligned, equal height
@@ -17031,7 +17301,7 @@ elif run_mode == "Preparation":
         )
 
     # Simple checkbox list of all agents on Preparation
-    # Ordered to match index categories: nm, pm, as, pk, (cp implicit), rg.
+    # Ordered to match index categories: nm, pm, as, pk, cp, rg.
     prep_agent_labels = [
         ("detect_nm", "Nonparametric Misfit (detect_nm) — Guttman/HT person-fit without IRT."),
         ("detect_pm", "Model Misfit (detect_pm) — parametric person-fit under IRT."),
@@ -17039,6 +17309,7 @@ elif run_mode == "Preparation":
         ("detect_ac", "Answer Copying (detect_ac) — source–copier pairs."),
         ("detect_pk", "Preknowledge (detect_pk) — success on compromised items."),
         ("detect_tt", "Test Tampering (detect_tt) — answer-change / erasure patterns."),
+        ("detect_cp", "Change Pattern (detect_cp) — contextual localization of score or timing shifts."),
         ("detect_rg", "Rapid Guessing (detect_rg) — unusually fast, low-effort responding."),
     ]
     prep_ab_fns = [fn for fn, _ in prep_agent_labels if st.session_state.get(f"ab_only_cb_{fn}")]
@@ -17052,7 +17323,7 @@ elif run_mode == "Preparation":
     need_comp = "detect_pk" in prep_ab_fns  # compromised items needed for Preknowledge
     need_tt = "detect_tt" in prep_ab_fns  # answer-change data needed for Test Tampering
     need_model = any(
-        fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as"]
+        fn in prep_ab_fns for fn in ["detect_pm", "detect_pk", "detect_ac", "detect_as", "detect_cp"]
     )  # IRT model needed when psi-based agents are selected
     def _input_spec_card(file_name: str, label: str, status: str, status_class: str, fmt: str) -> str:
         return (
@@ -17436,7 +17707,6 @@ elif run_mode == "Preparation":
         st.session_state["last_detect_agents"] = prep_ab_fns
         _responses = st.session_state.get("last_uploaded_responses") or []
         _comp = st.session_state.get("prep_compromised_items") or []
-        # Leave empty to let backend default to items 1..n-1 (R requires ≥1 secure item)
         raw_payload = {
             "responses": _responses,
             "rt_data": st.session_state.get("last_uploaded_rt_data") or [],

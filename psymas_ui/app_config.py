@@ -28,7 +28,7 @@ PSYMAS_VIZ = {
     "range": "#F5E9C8",
 }
 
-ABERRANCE_FUNCTIONS = ["detect_rg", "detect_pm", "detect_ac", "detect_pk", "detect_as", "detect_nm", "detect_tt"]
+ABERRANCE_FUNCTIONS = ["detect_rg", "detect_cp", "detect_pm", "detect_ac", "detect_pk", "detect_as", "detect_nm", "detect_tt"]
 ABERRANCE_FN_TO_AGENT = {
     "detect_nm": "nm_agent",
     "detect_pm": "pm_agent",
@@ -44,7 +44,16 @@ _source_root = Path(__file__).resolve().parent.parent
 _runtime_root = Path(os.environ.get("PSYMAS_HOME", sys.prefix)).expanduser()
 DEMO_DATA_DIR = (_source_root if (_source_root / "data").is_dir() else _runtime_root) / "data"
 DEMO_EVALUATED_SNAPSHOT_PATH = DEMO_DATA_DIR / "psymas_demo_evaluated_snapshot_v0.7.7.zip"
-DEMO_AGENT_PRESET = ["detect_nm", "detect_pm", "detect_ac", "detect_as", "detect_pk", "detect_rg", "detect_tt"]
+DEMO_AGENT_PRESET = [
+    "detect_nm",
+    "detect_pm",
+    "detect_ac",
+    "detect_as",
+    "detect_pk",
+    "detect_rg",
+    "detect_cp",
+    "detect_tt",
+]
 
 DOMAIN_ORDER = ["MF", "RT", "PK", "TP", "SIM", "CP", "CTX"]
 DOMAIN_LABELS = {
