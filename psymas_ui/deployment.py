@@ -6,6 +6,8 @@ import os
 
 
 def deployment_profile() -> str:
+    if os.getenv("RAILWAY_PROJECT_ID", "").strip():
+        return "railway"
     return os.getenv("PSYMAS_DEPLOYMENT_PROFILE", "desktop").strip().lower() or "desktop"
 
 
@@ -17,11 +19,15 @@ def locked_llm_configuration() -> bool:
 
 def managed_llm_provider() -> str:
     """Return the provider allowed by a locked deployment."""
+    if deployment_profile() == "railway":
+        return "openrouter"
     provider = os.getenv("PSYMAS_LLM_PROVIDER", "openrouter").strip().lower()
     return provider if provider in {"openrouter", "local_ollama"} else "openrouter"
 
 
 def managed_llm_model() -> str:
+    if deployment_profile() == "railway":
+        return "deepseek/deepseek-v4-flash-0731"
     return os.getenv("PSYMAS_OPENROUTER_MODEL_ID", "").strip()
 
 

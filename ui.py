@@ -14461,10 +14461,14 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
     llm_support_key = f"case_llm_support_{selected_id}"
     llm_status_key = f"case_llm_status_{selected_id}"
     with st.container(border=True, key=f"case_llm_panel_{selected_id}"):
-        step_col, provider_col, model_col, prompt_col, refresh_col = st.columns(
-            [0.27, 0.17, 0.29, 0.11, 0.16],
-            vertical_alignment="bottom",
-        )
+        if _locked_llm_configuration():
+            step_col, prompt_col, refresh_col = st.columns(
+                [0.65, 0.15, 0.20], vertical_alignment="bottom",
+            )
+        else:
+            step_col, provider_col, model_col, prompt_col, refresh_col = st.columns(
+                [0.27, 0.17, 0.29, 0.11, 0.16], vertical_alignment="bottom",
+            )
         with step_col:
             st.markdown(
                 '<div class="psymas-review-step-title"><span class="step-badge">3</span><span class="step-text">LLM support</span></div>',
@@ -14472,48 +14476,52 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
             )
 
         # Case editors update the same shared selection used by Configuration.
-        case_provider_key = f"case_llm_provider_{selected_id}"
-        case_provider_options = [_managed_llm_provider()] if _locked_llm_configuration() else ["openrouter", "local_ollama"]
         case_provider_labels = {"openrouter": "Hosted API", "local_ollama": "Local Ollama"}
-        st.session_state[case_provider_key] = _llm_provider()
-        with provider_col:
-            selected_case_provider = st.selectbox(
-                "Provider",
-                options=case_provider_options,
-                format_func=lambda value: case_provider_labels[value],
-                key=case_provider_key,
-                disabled=_locked_llm_configuration(),
-                on_change=_sync_case_llm_provider,
-                args=(case_provider_key,),
-                help="Changing provider updates the shared selection across PsyMAS.",
-            )
-
-        if selected_case_provider == "openrouter":
-            case_model_ids = _current_model_ids()
-            case_model_labels = {str(model_id): str(label) for label, model_id in OPENROUTER_FREE_MODELS}
+        if _locked_llm_configuration():
+            selected_case_provider = _managed_llm_provider()
+            selected_case_model = _effective_llm_model()
         else:
-            case_model_ids = _current_model_ids()
-            case_model_labels = {str(model_id): str(label) for label, model_id in LOCAL_OLLAMA_MODELS}
-        case_model_ids = [model_id for model_id in case_model_ids if model_id.strip()]
-        active_case_model = str(_effective_llm_model()).strip()
-        if active_case_model and active_case_model not in case_model_ids:
-            case_model_ids.insert(0, active_case_model)
-        case_model_key = f"case_llm_model_{selected_id}"
-        st.session_state[case_model_key] = active_case_model
-        with model_col:
-            selected_case_model = st.selectbox(
-                "Model",
-                options=case_model_ids,
-                format_func=lambda model_id: case_model_labels.get(
-                    str(model_id),
-                    f"{case_provider_labels[selected_case_provider]} · {str(model_id).split('/')[-1]}",
-                ),
-                key=case_model_key,
-                disabled=_locked_llm_configuration(),
-                on_change=_sync_case_llm_model,
-                args=(case_model_key,),
-                help="Changing model updates the shared selection across PsyMAS.",
-            ) if case_model_ids else ""
+            case_provider_key = f"case_llm_provider_{selected_id}"
+            case_provider_options = ["openrouter", "local_ollama"]
+            st.session_state[case_provider_key] = _llm_provider()
+            with provider_col:
+                selected_case_provider = st.selectbox(
+                    "Provider",
+                    options=case_provider_options,
+                    format_func=lambda value: case_provider_labels[value],
+                    key=case_provider_key,
+                    disabled=_locked_llm_configuration(),
+                    on_change=_sync_case_llm_provider,
+                    args=(case_provider_key,),
+                    help="Changing provider updates the shared selection across PsyMAS.",
+                )
+
+            if selected_case_provider == "openrouter":
+                case_model_ids = _current_model_ids()
+                case_model_labels = {str(model_id): str(label) for label, model_id in OPENROUTER_FREE_MODELS}
+            else:
+                case_model_ids = _current_model_ids()
+                case_model_labels = {str(model_id): str(label) for label, model_id in LOCAL_OLLAMA_MODELS}
+            case_model_ids = [model_id for model_id in case_model_ids if model_id.strip()]
+            active_case_model = str(_effective_llm_model()).strip()
+            if active_case_model and active_case_model not in case_model_ids:
+                case_model_ids.insert(0, active_case_model)
+            case_model_key = f"case_llm_model_{selected_id}"
+            st.session_state[case_model_key] = active_case_model
+            with model_col:
+                selected_case_model = st.selectbox(
+                    "Model",
+                    options=case_model_ids,
+                    format_func=lambda model_id: case_model_labels.get(
+                        str(model_id),
+                        f"{case_provider_labels[selected_case_provider]} · {str(model_id).split('/')[-1]}",
+                    ),
+                    key=case_model_key,
+                    disabled=_locked_llm_configuration(),
+                    on_change=_sync_case_llm_model,
+                    args=(case_model_key,),
+                    help="Changing model updates the shared selection across PsyMAS.",
+                ) if case_model_ids else ""
         # Initialize/migrate the persisted prompt state before applying the
         # model-specific default; otherwise the legacy prompt-version reset
         # could overwrite the newly selected model profile on this rerun.
@@ -14525,7 +14533,10 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
         with refresh_col:
             refresh_suggestion = st.button("Generate", key=f"generate_case_explanation_{selected_id}", use_container_width=True, type="primary")
 
-        st.caption(f"{case_provider_labels[selected_case_provider]} · shared Configuration settings · prompt remains editable")
+        if _locked_llm_configuration():
+            st.caption(f"{selected_case_model.split('/')[-1]} · prompt remains editable")
+        else:
+            st.caption(f"{case_provider_labels[selected_case_provider]} · shared Configuration settings · prompt remains editable")
         if not _llm_connection_is_current(model_id=selected_case_model, provider=selected_case_provider):
             st.warning("The selected model is not connected.")
             if st.button("Connect selected model", key=f"connect_case_llm_{selected_id}"):
