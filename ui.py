@@ -14666,6 +14666,8 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     )
                 except Exception as exc:
                     explanation = f"LLM generation failed: {type(exc).__name__}: {exc}"
+                if _deployment_profile() in {"railway", "public"}:
+                    st.session_state[f"case_llm_metrics_{selected_id}"] = dict(st.session_state.get("last_openrouter_metrics") or {})
                 error_prefixes = (
                     "LLM generation failed:",
                     "OpenRouter:",
@@ -14697,6 +14699,15 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
                     reviewer_note=str(st.session_state.get(reviewer_note_key, "")),
                     llm_explanation=str(explanation or ""),
                 )
+        metrics = st.session_state.get(f"case_llm_metrics_{selected_id}") or {}
+        if metrics:
+            st.caption(
+                f"API response: {metrics.get('elapsed_seconds', '?')}s · "
+                f"provider: {metrics.get('provider') or 'OpenRouter'} · "
+                f"input tokens: {metrics.get('prompt_tokens', '?')} · "
+                f"output tokens: {metrics.get('completion_tokens', '?')} · "
+                f"reasoning tokens: {metrics.get('reasoning_tokens', '?')}"
+            )
         explanation_text = st.session_state.get(explanation_key)
         if not explanation_text:
             explanation_text = _evidence_bound_case_summary(

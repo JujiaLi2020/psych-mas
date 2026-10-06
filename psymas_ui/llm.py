@@ -20,6 +20,7 @@ from mmls import (
     OPENROUTER_FREE_MODELS,
 )
 from psymas_ui.deployment import (
+    deployment_profile,
     locked_llm_configuration,
     managed_llm_model,
     managed_llm_provider,
@@ -175,13 +176,32 @@ def call_openrouter(api_key: str, model_id: str, messages: list[dict], timeout: 
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     try:
         body = {"model": model_id, "messages": messages}
+        hosted = deployment_profile() in {"railway", "public"}
+        if hosted and model_id == "deepseek/deepseek-v4-flash-0731":
+            health_check = messages == [{"role": "user", "content": "Hi"}]
+            body["reasoning"] = {"enabled": False} if health_check else {"effort": "low"}
+            body["max_tokens"] = 64 if health_check else 4096
+            body["provider"] = {"sort": "throughput", "require_parameters": True}
+            st.session_state.pop("last_openrouter_metrics", None)
         if report_schema is not None:
             body['response_format'] = {'type':'json_schema','json_schema':{
                 'name':'psymas_case_report','strict':True,'schema':report_schema}}
+        started = time.perf_counter()
         resp = requests.post(OPENROUTER_API_URL, headers=headers, json=body, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
         choice = (data.get("choices") or [{}])[0]
+        if hosted:
+            usage = data.get("usage") or {}
+            st.session_state["last_openrouter_metrics"] = {
+                "elapsed_seconds": round(time.perf_counter() - started, 2),
+                "provider": data.get("provider", ""),
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+                "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+            }
+        if choice.get("finish_reason") == "length":
+            return None, "The model reached its output token limit; the incomplete report was not accepted."
         msg = choice.get("message", {})
         text = msg.get("content") or ""
         return (text.strip() or "No response from model.", None)
