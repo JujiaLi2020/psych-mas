@@ -12034,7 +12034,7 @@ def _validated_case_report(
             validated = _llm_report_fallback(case_row, case_domains, case_trace, case_auxiliary)
     st.session_state[f"case_llm_fallback_{case_id}"] = bool(violations)
     if violations:
-        reason = 'Evidence audit: ' + '; '.join(violations)
+        reason = 'LLM draft rejected by evidence audit: ' + '; '.join(violations) + '. The rejected draft is not displayed; the evidence-bound system summary is shown instead.'
         st.session_state[f"case_llm_validation_{case_id}"] = reason
         st.session_state[f"case_llm_status_{case_id}"] = ('fallback', reason)
     else:
@@ -14771,6 +14771,16 @@ def _render_single_case_review_page(selected_override: str | None = None) -> Non
             if is_llm_generated
             else "Generated deterministically from governed evidence records. Select Generate to request LLM-assisted review support."
         )
+        if (
+            isinstance(current_llm_status, tuple)
+            and len(current_llm_status) == 2
+            and current_llm_status[0] == "fallback"
+        ):
+            suggestion_note = (
+                "The LLM draft did not pass the evidence audit and was not used. "
+                "This summary was generated deterministically from governed evidence records. "
+                "The audit reason below refers to the rejected LLM draft, not this system summary."
+            )
         st.markdown(
             f"""
 <div class="psymas-ai-suggestion">
