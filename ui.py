@@ -16748,6 +16748,20 @@ def _render_workbench_page(stage: str) -> None:
         _render_configuration_page()
 
 
+# Old review URLs and expired sessions cannot open an empty hosted workspace.
+if (
+    _deployment_profile() in {"railway", "public"}
+    and run_mode in {"_Workbench Evidence Review", "_Workbench Audit"}
+    and active_workflow_stage in {"AI-Assisted Review", "Human Review", "Review Record"}
+    and _final_flag_review_df().empty
+):
+    st.session_state["run_mode"] = "Scenario"
+    st.session_state["sidebar_nav"] = "Scenario"
+    st.session_state.pop("_case_review_modal_id", None)
+    st.session_state.pop("_nav_request", None)
+    st.query_params["view"] = "scenario"
+    st.rerun()
+
 with st.container(key="mobile_navigation"):
     with st.popover("Menu"):
         for mobile_page in ("Scenario", "Review Workspace", "Configuration"):
