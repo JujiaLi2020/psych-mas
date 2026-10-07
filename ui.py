@@ -6635,6 +6635,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Phone navigation uses a compact menu; the desktop sidebar is unchanged.
+st.markdown("""
+<style>
+.st-key-mobile_navigation { display: none; }
+@media (max-width: 760px) {
+    section[data-testid="stSidebar"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stExpandSidebarButton"] { display: none !important; }
+    .st-key-mobile_navigation { display: block; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 # Narrow-screen overflow is scoped to the individual lineage container.
 # Desktop chart dimensions, fonts, and figure data remain unchanged.
 st.markdown("""
@@ -6841,12 +6854,11 @@ if (
     and not st.query_params.get("view")
     and not st.query_params.get("scenario_select")
 ):
-    st.session_state["_hosted_home_requested"] = True
     st.session_state["run_mode"] = "Scenario"
     st.session_state["sidebar_nav"] = "Scenario"
     st.session_state.pop("_nav_request", None)
     st.session_state.pop("_case_review_modal_id", None)
-    st.query_params["view"] = "demo"
+    st.query_params["view"] = "scenario"
 
 run_mode = st.session_state.get("run_mode", "Scenario")
 active_workflow_stage = _STAGE_ALIASES.get(st.session_state.get("workflow_stage", "Assessment Data"), st.session_state.get("workflow_stage", "Assessment Data"))
@@ -16736,6 +16748,13 @@ def _render_workbench_page(stage: str) -> None:
         _render_configuration_page()
 
 
+with st.container(key="mobile_navigation"):
+    with st.popover("Menu"):
+        for mobile_page in ("Scenario", "Review Workspace", "Configuration"):
+            if st.button(mobile_page, key=f"mobile_nav_{mobile_page}", use_container_width=True):
+                st.session_state["_nav_request"] = mobile_page
+                st.rerun()
+
 if _deployment_profile() in {"railway", "public"}:
     st.query_params["view"] = (
         "scenario" if run_mode == "Scenario"
@@ -16889,21 +16908,6 @@ def _render_scenario_page() -> None:
     scenario_link = st.query_params.get("scenario_select", None)
     if isinstance(scenario_link, list):
         scenario_link = scenario_link[0] if scenario_link else None
-    auto_demo = (
-        _deployment_profile() in {"railway", "public"}
-        and not scenario_link
-        and (
-            st.session_state.pop("_hosted_home_requested", False)
-            or (
-                not st.session_state.get("_hosted_demo_entry_seen")
-                and not st.session_state.get("ab_only_scenario_select")
-                and not st.session_state.get("last_uploaded_responses")
-            )
-        )
-    )
-    st.session_state["_hosted_demo_entry_seen"] = True
-    if auto_demo:
-        scenario_link = "C"
     if scenario_link in SCENARIO_PRESETS_AB:
         _apply_ab_only_scenario(str(scenario_link))
         st.session_state["prep_compromised_items"] = st.session_state.get("ab_only_compromised_items") or []
@@ -16931,7 +16935,7 @@ def _render_scenario_page() -> None:
             st.query_params.clear()
         except Exception:
             pass
-        st.session_state.workflow_stage = "AI-Assisted Review" if auto_demo and snap_ok else "Assessment Data"
+        st.session_state.workflow_stage = "Assessment Data"
         st.session_state.run_mode = _WORKFLOW_TARGETS[st.session_state.workflow_stage]
         st.session_state["sidebar_nav"] = st.session_state.workflow_stage
         if _deployment_profile() in {"railway", "public"}:
